@@ -507,3 +507,16 @@ assert('a T&& parameter moves from a copy of the Ruby value') do
   assert_equal(3, i.n)
   assert_equal(2, t.take_number(1))
 end
+
+# A bitfield has no address. C++ reads it and assigns it, and a value
+# too wide for it is cut to its width, as C++ converts it.
+assert('a bitfield reads and assigns like any field') do
+  f = Flags.new
+  assert_equal(0, f.ready)
+  assert_equal(5, f.count)
+  f.ready = 1
+  f.count = 9
+  assert_equal(1, f.ready)
+  assert_equal(1, f.count)
+  assert_equal(9, f.wide)
+end

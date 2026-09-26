@@ -411,7 +411,7 @@ consteval auto reflect_fields_computed()
     std::vector<std::meta::info> fields;
     if (!std::meta::is_class_type(std::meta::dealias(Type))) return std::define_static_array(fields);
     for (const std::meta::info m : std::meta::nonstatic_data_members_of(std::meta::dealias(Type), std::meta::access_context::current()))
-        if (std::meta::has_identifier(m) && !std::meta::is_bit_field(m) && reflect_result_supported(std::meta::type_of(m)))
+        if (std::meta::has_identifier(m) && reflect_result_supported(std::meta::type_of(m)))
             fields.push_back(m);
     return std::define_static_array(fields);
 }

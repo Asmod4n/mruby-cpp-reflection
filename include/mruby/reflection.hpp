@@ -1114,6 +1114,7 @@ void reflect_define_field(mrb_state *const mrb, RClass *const klass)
         using F = [:reflect_bare(std::meta::type_of(Field)):];
         if constexpr (std::is_class_v<F> && (reflect_guard_class<T>() == ^^void) && !std::same_as<F, std::string_view>)
             return reflect_lend(mrb, self, &object->[:Field:], std::meta::is_const_type(std::meta::type_of(Field)) || mrb_frozen_p(mrb_obj_ptr(self)));
+        else if constexpr (std::meta::is_bit_field(Field)) return reflect_result(mrb, self, static_cast<F>(object->[:Field:]));
         else return reflect_result(mrb, self, object->[:Field:]);
     }, MRB_ARGS_NONE());
     if constexpr (!std::meta::is_const_type(std::meta::type_of(Field)) && std::is_copy_assignable_v<typename [:reflect_bare(std::meta::type_of(Field)):]>) {
