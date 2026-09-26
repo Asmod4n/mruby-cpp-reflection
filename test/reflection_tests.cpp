@@ -33,7 +33,35 @@ struct Plain {
     mrb_int n = 1;
 };
 
-constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected>();
+/* The names follow the example of multiple inheritance in [class.mi].
+ * Each constructor appends its class to constructed, so the order C++
+ * builds D in can be compared from Ruby with the order mruby looks
+ * methods up in. f in D hides f in A, as [class.member.lookup] says,
+ * and b sits at an offset inside D, so reading it converts the pointer. */
+static std::vector<std::string_view> &constructed()
+{
+    static std::vector<std::string_view> log;
+    return log;
+}
+struct A {
+    mrb_int a = 1;
+    A() { constructed().push_back("A"); }
+    mrb_int f() const { return 1; }
+};
+struct B {
+    mrb_int b = 2;
+    B() { constructed().push_back("B"); }
+};
+struct C {
+    mrb_int c = 3;
+    C() { constructed().push_back("C"); }
+};
+struct D : A, B, C {
+    D() { constructed().push_back("D"); }
+    mrb_int f() const { return 4; }
+    mrb_int b_of(const B &other) const { return other.b; }
+};
+constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D>();
 constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();
 
 static_assert(std::string_view(mrb_cpp_reflector::reflect_get_args_format<std::meta::members_of(^^Reflected, std::meta::access_context::current())[2]>().data()) == "si");
@@ -46,8 +74,17 @@ static mrb_value presym_ok_q(mrb_state *mrb, mrb_value)
                           mrb_cpp_reflector::reflect_presym("Reflected") == mrb_intern_lit(mrb, "Reflected"));
 }
 
+static mrb_value constructed_m(mrb_state *mrb, mrb_value)
+{
+    const mrb_value names = mrb_ary_new(mrb);
+    for (const std::string_view name : constructed()) mrb_ary_push(mrb, names, mrb_str_new(mrb, name.data(), static_cast<mrb_int>(name.size())));
+    constructed().clear();
+    return names;
+}
+
 extern "C" void mrb_mruby_cpp_reflection_gem_test(mrb_state *mrb)
 {
+    mrb_define_module_function(mrb, mrb->kernel_module, "constructed", constructed_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "reflect_presym_ok?", presym_ok_q, MRB_ARGS_NONE());
     mrb_cpp_reflector::reflect_define<classes>(mrb);
     mrb_cpp_reflector::reflect_define<under>(mrb, mrb_define_module(mrb, "Under"));

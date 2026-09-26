@@ -61,7 +61,7 @@ mrb_sym reflect_intern(mrb_state *const mrb)
     else return mrb_intern_static(mrb, name.data(), name.size());
 }
 
-inline constexpr std::string_view kOwner = "owner", kInitialize = "initialize", kReplace = "replace", kToS = "to_s",
+inline constexpr std::string_view kInstanceMethods = "InstanceMethods", kOwner = "owner", kInitialize = "initialize", kReplace = "replace", kToS = "to_s",
                                   kToA = "to_a", kToH = "to_h", kEach = "each",
                                   kEnumerable = "Enumerable";
 
@@ -102,6 +102,13 @@ RClass *&reflect_class_slot()
     return klass;
 }
 
+template <std::meta::info Bare>
+RClass *&reflect_module_slot()
+{
+    static RClass *module = nullptr;
+    return module;
+}
+
 template <std::meta::info Type>
 RClass *reflect_class(mrb_state *const mrb)
 {
@@ -110,11 +117,28 @@ RClass *reflect_class(mrb_state *const mrb)
     return slot;
 }
 
+struct reflect_upcast {
+    const mrb_data_type *type;
+    void *(*to_base)(void *);
+};
+
+template <class T>
+std::vector<reflect_upcast> &reflect_upcasts()
+{
+    static std::vector<reflect_upcast> upcasts;
+    return upcasts;
+}
+
 template <class T>
 T *reflect_ptr(mrb_state *const mrb, const mrb_value v)
 {
     void *const owned = mrb_data_check_get_ptr(mrb, v, &reflect_data_type_owned<T>());
-    return static_cast<T *>(owned != nullptr ? owned : mrb_data_check_get_ptr(mrb, v, &reflect_data_type_borrowed<T>()));
+    if (owned != nullptr) return static_cast<T *>(owned);
+    void *const borrowed = mrb_data_check_get_ptr(mrb, v, &reflect_data_type_borrowed<T>());
+    if (borrowed != nullptr || mrb_type(v) != MRB_TT_CDATA || DATA_PTR(v) == nullptr) return static_cast<T *>(borrowed);
+    for (const reflect_upcast &upcast : reflect_upcasts<T>())
+        if (upcast.type == DATA_TYPE(v)) return static_cast<T *>(upcast.to_base(DATA_PTR(v)));
+    return nullptr;
 }
 
 template <class T>
@@ -274,10 +298,10 @@ mrb_value reflect_result(mrb_state *const mrb, const mrb_value self, R &&value)
     else return reflect_object<T>(mrb, std::move(value), frozen);
 }
 
-template <std::meta::info Function, std::size_t Count = std::meta::parameters_of(Function).size()>
+template <std::meta::info Type, std::meta::info Function, std::size_t Count = std::meta::parameters_of(Function).size()>
 mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
 {
-    using T = [:std::meta::parent_of(Function):];
+    using T = [:std::meta::dealias(Type):];
     if constexpr (!std::meta::is_const(Function)) mrb_check_frozen(mrb, mrb_obj_ptr(self));
     T *const object = reflect_ptr<T>(mrb, self);
     if (object == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
@@ -323,23 +347,23 @@ bool reflect_get_args_match(mrb_state *const mrb, const std::span<const mrb_valu
     return fits;
 }
 
-template <std::meta::info Function>
+template <std::meta::info Type, std::meta::info Function>
 mrb_value reflect_call_given(mrb_state *const mrb, const mrb_value self)
 {
     constexpr std::size_t total = std::meta::parameters_of(Function).size();
-    if constexpr (reflect_rest(Function)) return reflect_call<Function, total>(mrb, self);
+    if constexpr (reflect_rest(Function)) return reflect_call<Type, Function, total>(mrb, self);
     else {
         const std::size_t given = static_cast<std::size_t>(mrb_get_argc(mrb));
         mrb_value answer = mrb_undef_value();
         template for (constexpr std::size_t count : std::views::iota(reflect_required(Function), total + 1)) {
-            if (mrb_undef_p(answer) && given == count) answer = reflect_call<Function, count>(mrb, self);
+            if (mrb_undef_p(answer) && given == count) answer = reflect_call<Type, Function, count>(mrb, self);
         }
         if (mrb_undef_p(answer)) mrb_argnum_error(mrb, static_cast<mrb_int>(given), static_cast<int>(reflect_required(Function)), static_cast<int>(total));
         return answer;
     }
 }
 
-template <std::meta::info... Overloads>
+template <std::meta::info Type, std::meta::info... Overloads>
 void reflect_define_method(mrb_state *const mrb, RClass *const klass)
 {
     constexpr std::meta::info first = std::array{Overloads...}[0];
@@ -348,7 +372,7 @@ void reflect_define_method(mrb_state *const mrb, RClass *const klass)
         constexpr mrb_aspec aspec = reflect_rest(first) ? (MRB_ARGS_REQ(total - 1) | MRB_ARGS_REST())
                                                         : (MRB_ARGS_REQ(reflect_required(first)) | MRB_ARGS_OPT(total - reflect_required(first)));
         ::mrb_define_method_id(mrb, klass, reflect_intern<first>(mrb),
-                               [](mrb_state *const mrb, const mrb_value self) { return reflect_call_given<first>(mrb, self); }, aspec);
+                               [](mrb_state *const mrb, const mrb_value self) { return reflect_call_given<Type, first>(mrb, self); }, aspec);
     } else {
         ::mrb_define_method_id(mrb, klass, reflect_intern<first>(mrb),
                                [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
@@ -357,7 +381,7 @@ void reflect_define_method(mrb_state *const mrb, RClass *const klass)
             template for (constexpr std::meta::info Function : std::array{Overloads...}) {
                 if (mrb_undef_p(answer) && (std::meta::is_const(Function) || !mrb_frozen_p(mrb_obj_ptr(self))) &&
                     reflect_get_args_match<Function>(mrb, argv))
-                    answer = reflect_call_given<Function>(mrb, self);
+                    answer = reflect_call_given<Type, Function>(mrb, self);
             }
             if (mrb_undef_p(answer) && mrb_frozen_p(mrb_obj_ptr(self))) {
                 template for (constexpr std::meta::info Function : std::array{Overloads...}) {
@@ -474,10 +498,28 @@ RClass *reflect_define_class(mrb_state *const mrb, RClass *const under)
     const mrb_sym name = reflect_intern<Type>(mrb);
     if (mrb_const_defined_at(mrb, mrb_obj_value(outer), name))
         mrb_raisef(mrb, E_NAME_ERROR, "%n is already defined in %C", name, outer);
-    RClass *const klass = ::mrb_define_class_under_id(mrb, outer, name, mrb->object_class);
+    static constexpr auto direct = std::define_static_array(reflect_direct_bases(Type));
+    RClass *superclass = mrb->object_class;
+    if constexpr (direct.size() > 0) superclass = reflect_class<direct[0]>(mrb);
+    RClass *const klass = ::mrb_define_class_under_id(mrb, outer, name, superclass);
     MRB_SET_INSTANCE_TT(klass, MRB_TT_CDATA);
     reflect_class_slot<std::meta::dealias(std::meta::remove_cvref(Type))>() = klass;
-    if constexpr (std::is_default_constructible_v<T>) {
+    RClass *const methods = ::mrb_define_module_under_id(mrb, klass, reflect_sym<kInstanceMethods>(mrb));
+    reflect_module_slot<std::meta::dealias(std::meta::remove_cvref(Type))>() = methods;
+    template for (constexpr std::meta::info base : direct) {
+        reflect_class<base>(mrb);
+        mrb_include_module(mrb, methods, reflect_module_slot<base>());
+    }
+    template for (constexpr std::meta::info base : std::define_static_array(reflect_bases(Type))) {
+        using B = [:base:];
+        if constexpr (requires(T *p) { static_cast<B *>(p); }) {
+            constexpr auto to_base = [](void *const p) -> void * { return static_cast<B *>(static_cast<T *>(p)); };
+            reflect_upcasts<B>().push_back({&reflect_data_type_owned<T>(), to_base});
+            reflect_upcasts<B>().push_back({&reflect_data_type_borrowed<T>(), to_base});
+        }
+    }
+    if constexpr (std::is_default_constructible_v<T> && !std::is_abstract_v<T>) {
+        MRB_DEFINE_ALLOCATOR(klass);
         ::mrb_define_method_id(mrb, klass, reflect_sym<kInitialize>(mrb),
                                [](mrb_state *const mrb, const mrb_value self) {
                                    T *const kept = static_cast<T *>(mrb_malloc(mrb, sizeof(T)));
@@ -485,6 +527,8 @@ RClass *reflect_define_class(mrb_state *const mrb, RClass *const under)
                                    mrb_data_init(self, kept, &reflect_data_type_owned<T>());
                                    return self;
                                }, MRB_ARGS_NONE());
+    } else {
+        MRB_UNDEF_ALLOCATOR(klass);
     }
     template for (constexpr std::meta::info member : reflect_members<Type>()) {
         constexpr bool first_of_its_name = [] consteval {
@@ -496,12 +540,13 @@ RClass *reflect_define_class(mrb_state *const mrb, RClass *const under)
         }();
         if constexpr (first_of_its_name) {
             [&]<std::size_t... I>(std::index_sequence<I...>) {
-                reflect_define_method<reflect_overloads<Type, member>()[I]...>(mrb, klass);
+                reflect_define_method<Type, reflect_overloads<Type, member>()[I]...>(mrb, methods);
             }(std::make_index_sequence<reflect_overloads<Type, member>().size()>{});
         }
     }
     template for (constexpr std::meta::info field : reflect_fields<Type>())
-        reflect_define_field<field>(mrb, klass);
+        reflect_define_field<field>(mrb, methods);
+    mrb_include_module(mrb, klass, methods);
     reflect_define_conversions<T>(mrb, klass);
     if constexpr (std::is_copy_assignable_v<T>) reflect_define_replace<T>(mrb, klass);
     return klass;
@@ -511,7 +556,7 @@ template <auto Classes>
 void reflect_define(mrb_state *const mrb, RClass *const under = nullptr)
 {
     template for (constexpr std::meta::info type : Classes)
-        reflect_define_class<type>(mrb, under != nullptr ? under : mrb->object_class);
+        if (reflect_class_slot<std::meta::dealias(std::meta::remove_cvref(type))>() == nullptr) reflect_define_class<type>(mrb, under != nullptr ? under : mrb->object_class);
 }
 
 }

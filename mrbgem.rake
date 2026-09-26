@@ -34,5 +34,6 @@ MRuby::Gem::Specification.new('mruby-cpp-reflection') do |spec|
   spec.version = '0.1.0'
   spec.summary = 'A C++ class is a Ruby class: C++26 reflection defines it, methods, attributes, overloads and all'
   spec.add_dependency 'mruby-c-ext-helpers', github: 'Asmod4n/mruby-c-ext-helpers', branch: 'mrb-value-to'
+  spec.add_test_dependency 'mruby-string-ext', core: 'mruby-string-ext'
   reflect_presyms(spec, "#{spec.dir}/test/reflect_presyms/main.cpp")
 end

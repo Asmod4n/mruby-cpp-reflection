@@ -161,6 +161,24 @@ consteval bool reflect_call_supported(const std::meta::info function)
     return reflect_result_supported(std::meta::return_type_of(function));
 }
 
+consteval std::vector<std::meta::info> reflect_direct_bases(const std::meta::info type)
+{
+    std::vector<std::meta::info> bases;
+    for (const std::meta::info b : std::meta::bases_of(std::meta::dealias(type), std::meta::access_context::current()))
+        if (std::meta::is_public(b) && !std::meta::is_virtual(b)) bases.push_back(std::meta::dealias(std::meta::type_of(b)));
+    return bases;
+}
+
+consteval std::vector<std::meta::info> reflect_bases(const std::meta::info type)
+{
+    std::vector<std::meta::info> bases;
+    for (const std::meta::info b : reflect_direct_bases(type)) {
+        bases.push_back(b);
+        for (const std::meta::info a : reflect_bases(b)) bases.push_back(a);
+    }
+    return bases;
+}
+
 template <std::meta::info Type>
 consteval auto reflect_members_computed()
 {

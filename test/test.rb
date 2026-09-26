@@ -54,3 +54,36 @@ if Object.const_defined?(:Reflected)
     assert_true(reflect_presym_ok?)
   end
 end
+
+# C++ builds D from its bases in the order they are declared, then D
+# itself. mruby looks methods up the other way round. Read from the
+# class back to Object, the classes behind D::InstanceMethods and the
+# modules it includes must name the same order C++ constructed in.
+assert('the ancestors of a reflected class are the order C++ constructs it in') do
+  constructed
+  D.new
+  built = constructed
+  looked_up = D.ancestors.map { |m| m.to_s.delete_suffix('::InstanceMethods') }.select { |n| built.include?(n) }.uniq
+  assert_equal(%w[A B C D], built)
+  assert_equal(built.reverse, looked_up)
+end
+
+assert('a reflected class answers is_a? for every C++ base') do
+  d = D.new
+  assert_equal(A, D.superclass)
+  %w[A B C].each { |n| assert_true(d.is_a?(Object.const_get(n)::InstanceMethods)) }
+  assert_true(d.is_a?(A))
+end
+
+assert('a method belongs to the class C++ declares it in') do
+  d = D.new
+  assert_equal(4, d.f)
+  assert_equal(1, d.a)
+  assert_equal(2, d.b)
+  assert_equal(3, d.c)
+  assert_equal(2, d.b_of(d))
+  d.b = 5
+  assert_equal(5, d.b_of(d))
+  assert_raise(TypeError) { d.b_of(A.new) }
+end
+
