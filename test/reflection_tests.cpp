@@ -267,7 +267,38 @@ struct SelfSharer {
     SelfShare &ref() const { return *held; }
     void drop() { held.reset(); }
 };
-constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Sharer, ^^SelfSharer>();
+/* Watched is made and deleted by C++ alone. Like QPointer, a WatchGuard
+ * turns to null when what it watches is deleted, and
+ * reflect_ownership_traits names it as the guard, so the Ruby object of
+ * a Watched raises once C++ deleted it instead of reaching freed memory. */
+struct WatchGuard;
+struct Watched {
+    mrb_int v = 3;
+    std::vector<WatchGuard *> guards;
+    ~Watched();
+};
+struct WatchGuard {
+    Watched *watched;
+    explicit WatchGuard(Watched *w) : watched(w) { w->guards.push_back(this); }
+    WatchGuard(const WatchGuard &) = delete;
+    WatchGuard &operator=(const WatchGuard &) = delete;
+    ~WatchGuard() { if (watched != nullptr) std::erase(watched->guards, this); }
+    Watched *get() const { return watched; }
+};
+Watched::~Watched()
+{
+    for (WatchGuard *g : guards) g->watched = nullptr;
+}
+template <>
+struct mrb_cpp_reflector::reflect_ownership_traits<Watched> {
+    using guard = WatchGuard;
+};
+struct WatchedHolder {
+    std::unique_ptr<Watched> held = std::make_unique<Watched>();
+    Watched *get() const { return held.get(); }
+    void reset() { held.reset(); }
+};
+constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Sharer, ^^SelfSharer, ^^WatchedHolder>();
 constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();
 
 static_assert(std::string_view(mrb_cpp_reflector::reflect_get_args_format<std::meta::members_of(^^Reflected, std::meta::access_context::current())[2]>().data()) == "si");

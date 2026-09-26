@@ -95,6 +95,7 @@ struct reflect_upcast {
 struct reflect_data_type : mrb_data_type {
     std::span<const reflect_upcast> upcasts;
     const mrb_data_type *owned_by_cpp;
+    void *(*object_of)(void *data) = nullptr;
 };
 
 template <class T>
@@ -103,6 +104,19 @@ struct reflect_ownership_traits {
 
 template <class T>
 constexpr bool reflect_has_parent = requires(const T &t) { reflect_ownership_traits<T>::parent(t); };
+
+template <class T>
+constexpr bool reflect_has_guard = requires { typename reflect_ownership_traits<T>::guard; };
+
+template <class T>
+consteval std::meta::info reflect_guard_class()
+{
+    if (!std::meta::is_class_type(^^T)) return ^^void;
+    if (reflect_has_guard<T>) return ^^T;
+    for (const std::meta::info b : reflect_bases(^^T))
+        if (std::meta::extract<bool>(std::meta::substitute(^^reflect_has_guard, {b}))) return b;
+    return ^^void;
+}
 
 template <class T>
 consteval std::meta::info reflect_ownership_class()
@@ -188,6 +202,9 @@ struct reflect_tracked final : T {
 
 template <class T>
 const reflect_data_type &reflect_data_type_tracked();
+
+template <class T>
+const reflect_data_type &reflect_data_type_guarded();
 
 template <class T>
 const reflect_data_type &reflect_data_type_owned();
@@ -278,6 +295,20 @@ const reflect_data_type &reflect_data_type_borrowed()
     }
 }
 
+template <class T>
+const reflect_data_type &reflect_data_type_guarded()
+{
+    using O = [:reflect_guard_class<T>():];
+    using G = typename reflect_ownership_traits<O>::guard;
+    static constexpr auto name = std::define_static_string(reflect_class_name(^^T));
+    static const reflect_data_type type{{name, [](mrb_state *, void *const g) { delete static_cast<G *>(g); }},
+                                        reflect_upcasts<T>(), nullptr, [](void *const g) -> void * {
+                                            O *const watched = static_cast<G *>(g)->get();
+                                            return watched == nullptr ? nullptr : static_cast<T *>(watched);
+                                        }};
+    return type;
+}
+
 template <std::meta::info Type>
 RClass *reflect_define_class(mrb_state *mrb, RClass *super);
 
@@ -320,12 +351,19 @@ T *reflect_ptr(mrb_state *const mrb, const mrb_value v)
         void *const tracked = mrb_data_check_get_ptr(mrb, v, &reflect_data_type_tracked<T>());
         if (tracked != nullptr) return static_cast<T *>(tracked);
     }
+    if constexpr (reflect_guard_class<T>() != ^^void) {
+        void *const guard = mrb_data_check_get_ptr(mrb, v, &reflect_data_type_guarded<T>());
+        if (guard != nullptr) return static_cast<T *>(reflect_data_type_guarded<T>().object_of(guard));
+    }
     void *const borrowed = mrb_data_check_get_ptr(mrb, v, &reflect_data_type_borrowed<T>());
     if (borrowed != nullptr || mrb_type(v) != MRB_TT_CDATA || DATA_PTR(v) == nullptr || DATA_TYPE(v) == nullptr) return static_cast<T *>(borrowed);
     RClass *const methods = reflect_module<^^T>(mrb);
     if (methods == nullptr || !mrb_obj_is_kind_of(mrb, v, methods)) return nullptr;
-    for (const reflect_upcast &upcast : static_cast<const reflect_data_type *>(DATA_TYPE(v))->upcasts)
-        if (upcast.base == &reflect_data_type_owned<T>()) return static_cast<T *>(upcast.to_base(DATA_PTR(v)));
+    const reflect_data_type *const type = static_cast<const reflect_data_type *>(DATA_TYPE(v));
+    void *const object = type->object_of != nullptr ? type->object_of(DATA_PTR(v)) : DATA_PTR(v);
+    if (object == nullptr) return nullptr;
+    for (const reflect_upcast &upcast : type->upcasts)
+        if (upcast.base == &reflect_data_type_owned<T>()) return static_cast<T *>(upcast.to_base(object));
     return nullptr;
 }
 
@@ -429,7 +467,14 @@ mrb_value reflect_borrowed(mrb_state *const mrb, T *const ref, const mrb_value o
     if constexpr (reflect_ownership_class<T>() != ^^void) {
         if (RObject *const known = reflect_identity(mrb, reflect_identity_of(ref)); known != nullptr) return mrb_obj_value(known);
     }
-    RData *const data = mrb_data_object_alloc(mrb, reflect_class<^^T>(mrb), ref, &reflect_data_type_borrowed<T>());
+    RData *data;
+    if constexpr (reflect_guard_class<T>() != ^^void) {
+        using O = [:reflect_guard_class<T>():];
+        data = mrb_data_object_alloc(mrb, reflect_class<^^T>(mrb), new typename reflect_ownership_traits<O>::guard(static_cast<O *>(ref)),
+                                     &reflect_data_type_guarded<T>());
+    } else {
+        data = mrb_data_object_alloc(mrb, reflect_class<^^T>(mrb), ref, &reflect_data_type_borrowed<T>());
+    }
     const mrb_value object = mrb_obj_value(data);
     mrb_iv_set(mrb, object, reflect_sym<kOwner>(mrb), owner);
     if constexpr (reflect_ownership_class<T>() != ^^void) {

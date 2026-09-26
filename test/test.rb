@@ -308,3 +308,11 @@ assert('a pointer to an object that shares from itself keeps a share') do
   sharer = nil
 end
 
+assert('an object C++ deleted raises through its guard') do
+  holder = WatchedHolder.new
+  watched = holder.get
+  assert_equal(3, watched.v)
+  holder.reset
+  assert_raise(TypeError) { watched.v }
+end
+
