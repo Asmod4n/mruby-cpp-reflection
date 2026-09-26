@@ -195,6 +195,7 @@ consteval bool reflect_call_supported(const std::meta::info function)
 consteval std::vector<std::meta::info> reflect_direct_bases(const std::meta::info type)
 {
     std::vector<std::meta::info> bases;
+    if (!std::meta::is_class_type(std::meta::dealias(type)) || !std::meta::is_complete_type(std::meta::dealias(type))) return bases;
     for (const std::meta::info b : std::meta::bases_of(std::meta::dealias(type), std::meta::access_context::current()))
         if (std::meta::is_public(b) && !std::meta::is_virtual(b)) bases.push_back(std::meta::dealias(std::meta::type_of(b)));
     return bases;

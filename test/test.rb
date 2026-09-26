@@ -169,3 +169,12 @@ assert('a C++ exception is the Ruby exception for it') do
   assert_raise(Object.const_defined?(:IOError) ? Object.const_get(:IOError) : Errno::ENOENT) { t.filesystem }
 end
 
+assert('a second mrb_state gets its own classes') do
+  assert_equal("[4, 2, 7, #{D.ancestors.size}, 6]", second_state)
+  assert_equal(4, D.new.f)
+end
+
+assert('a thread cancelled inside a reflected call ends as cancelled') do
+  assert_true(cancelled_through_a_call?)
+end
+

@@ -11,7 +11,9 @@
 #include <mruby.h>
 #if defined(__cpp_impl_reflection)
 #include <mruby/reflection.hpp>
+#include <mruby/compile.h>
 #include <compare>
+#include <pthread.h>
 #include <stdexcept>
 #include <new>
 #include <system_error>
@@ -156,6 +158,7 @@ struct Thrower {
     void overflow() const { throw std::overflow_error("too big"); }
     void runtime() const { throw std::runtime_error("broken"); }
     void number() const { throw 42; }
+    void cancel() const { pthread_cancel(pthread_self()); pthread_testcancel(); }
     void memory() const { throw std::bad_alloc(); }
     void domain() const { throw std::domain_error("domain"); }
     void length() const { throw std::length_error("length"); }
@@ -184,8 +187,47 @@ static mrb_value constructed_m(mrb_state *mrb, mrb_value)
     return names;
 }
 
+/* Each mrb_state has its own classes: a second state in the same
+ * process defines them again and answers the same, and closing it
+ * leaves the first untouched. */
+static mrb_value second_state_m(mrb_state *mrb, mrb_value)
+{
+    mrb_state *const other = mrb_open();
+    mrb_cpp_reflector::reflect_define<classes>(other);
+    const mrb_value answer = mrb_load_string(other, "[D.new.f, D.new.b, S.new(7).v, D.ancestors.size, Static.twice(3)]");
+    const mrb_value inspected = other->exc ? mrb_obj_value(other->exc) : answer;
+    const mrb_value text = mrb_inspect(other, inspected);
+    const mrb_value copied = mrb_str_new(mrb, RSTRING_PTR(text), RSTRING_LEN(text));
+    mrb_close(other);
+    return copied;
+}
+
+/* glibc cancels a thread by unwinding it with abi::__forced_unwind, and
+ * whoever catches that must throw it on. A thread with its own state
+ * cancels itself inside a reflected call; it ends as cancelled only if
+ * the call let the unwind through. The state is left open, since its
+ * frames were unwound under it. */
+static void *cancel_in_state(void *)
+{
+    mrb_state *const other = mrb_open();
+    mrb_cpp_reflector::reflect_define<classes>(other);
+    mrb_load_string(other, "Thrower.new.cancel");
+    return nullptr;
+}
+
+static mrb_value cancelled_m(mrb_state *mrb, mrb_value)
+{
+    pthread_t thread;
+    pthread_create(&thread, nullptr, cancel_in_state, nullptr);
+    void *result = nullptr;
+    pthread_join(thread, &result);
+    return mrb_bool_value(result == PTHREAD_CANCELED);
+}
+
 extern "C" void mrb_mruby_cpp_reflection_gem_test(mrb_state *mrb)
 {
+    mrb_define_module_function(mrb, mrb->kernel_module, "cancelled_through_a_call?", cancelled_m, MRB_ARGS_NONE());
+    mrb_define_module_function(mrb, mrb->kernel_module, "second_state", second_state_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "constructed", constructed_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "reflect_presym_ok?", presym_ok_q, MRB_ARGS_NONE());
     mrb_cpp_reflector::reflect_define<classes>(mrb);

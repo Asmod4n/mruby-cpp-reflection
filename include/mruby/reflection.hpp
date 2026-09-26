@@ -84,22 +84,53 @@ mrb_sym reflect_sym(mrb_state *const mrb)
     else return mrb_intern_static(mrb, Name.data(), Name.size());
 }
 
+struct reflect_upcast {
+    const mrb_data_type *base;
+    void *(*to_base)(void *);
+};
+
+struct reflect_data_type : mrb_data_type {
+    std::span<const reflect_upcast> upcasts;
+};
+
 template <class T>
-const mrb_data_type &reflect_data_type_owned()
+const reflect_data_type &reflect_data_type_owned();
+
+template <class T>
+std::span<const reflect_upcast> reflect_upcasts()
+{
+    static constexpr auto bases = std::define_static_array(reflect_bases(^^T));
+    static const auto upcasts = [] {
+        std::array<reflect_upcast, bases.size()> table{};
+        std::size_t at = 0;
+        template for (constexpr std::meta::info base : bases) {
+            using B = [:base:];
+            if constexpr (requires(T *p) { static_cast<B *>(p); })
+                table[at] = {&reflect_data_type_owned<B>(), [](void *const p) -> void * { return static_cast<B *>(static_cast<T *>(p)); }};
+            at++;
+        }
+        return table;
+    }();
+    return upcasts;
+}
+
+template <class T>
+const reflect_data_type &reflect_data_type_owned()
 {
     static constexpr auto name = std::define_static_string(reflect_class_name(^^T));
-    static const mrb_data_type type{name, [](mrb_state *const mrb, void *const p) {
-                                        static_cast<T *>(p)->~T();
-                                        mrb_free(mrb, p);
-                                    }};
+    static const reflect_data_type type{{name, [](mrb_state *const mrb, void *const p) {
+                                             static_cast<T *>(p)->~T();
+                                             mrb_free(mrb, p);
+                                         }},
+                                        reflect_upcasts<T>()};
     return type;
 }
 
 template <class T>
-const mrb_data_type &reflect_data_type_borrowed()
+const reflect_data_type &reflect_data_type_borrowed()
 {
     static constexpr auto name = std::define_static_string(reflect_class_name(^^T));
-    static const mrb_data_type type{name, nullptr};
+    static const reflect_data_type type{{name, nullptr}, reflect_upcasts<T>()};
     return type;
 }
 
@@ -107,37 +138,33 @@ template <std::meta::info Type>
 RClass *reflect_define_class(mrb_state *mrb, RClass *super);
 
 template <std::meta::info Bare>
-RClass *&reflect_class_slot()
+mrb_sym reflect_class_key(mrb_state *const mrb)
 {
-    static RClass *klass = nullptr;
-    return klass;
+    static constexpr std::string_view key = std::define_static_string("reflected class " + std::string(std::meta::display_string_of(Bare)));
+    return mrb_intern_static(mrb, key.data(), key.size());
 }
 
 template <std::meta::info Bare>
-RClass *&reflect_module_slot()
+mrb_sym reflect_module_key(mrb_state *const mrb)
 {
-    static RClass *module = nullptr;
-    return module;
+    static constexpr std::string_view key = std::define_static_string("reflected module " + std::string(std::meta::display_string_of(Bare)));
+    return mrb_intern_static(mrb, key.data(), key.size());
+}
+
+template <std::meta::info Type>
+RClass *reflect_module(mrb_state *const mrb)
+{
+    const mrb_value found = mrb_iv_get(mrb, mrb_obj_value(mrb->object_class), reflect_module_key<std::meta::dealias(std::meta::remove_cvref(Type))>(mrb));
+    return mrb_nil_p(found) ? nullptr : mrb_class_ptr(found);
 }
 
 template <std::meta::info Type>
 RClass *reflect_class(mrb_state *const mrb)
 {
-    RClass *&slot = reflect_class_slot<std::meta::dealias(std::meta::remove_cvref(Type))>();
-    if (slot == nullptr) reflect_define_class<std::meta::dealias(std::meta::remove_cvref(Type))>(mrb, mrb->object_class);
-    return slot;
-}
-
-struct reflect_upcast {
-    const mrb_data_type *type;
-    void *(*to_base)(void *);
-};
-
-template <class T>
-std::vector<reflect_upcast> &reflect_upcasts()
-{
-    static std::vector<reflect_upcast> upcasts;
-    return upcasts;
+    constexpr std::meta::info bare = std::meta::dealias(std::meta::remove_cvref(Type));
+    const mrb_sym key = reflect_class_key<bare>(mrb);
+    if (!mrb_iv_defined(mrb, mrb_obj_value(mrb->object_class), key)) reflect_define_class<bare>(mrb, mrb->object_class);
+    return mrb_class_ptr(mrb_iv_get(mrb, mrb_obj_value(mrb->object_class), key));
 }
 
 template <class T>
@@ -146,9 +173,11 @@ T *reflect_ptr(mrb_state *const mrb, const mrb_value v)
     void *const owned = mrb_data_check_get_ptr(mrb, v, &reflect_data_type_owned<T>());
     if (owned != nullptr) return static_cast<T *>(owned);
     void *const borrowed = mrb_data_check_get_ptr(mrb, v, &reflect_data_type_borrowed<T>());
-    if (borrowed != nullptr || mrb_type(v) != MRB_TT_CDATA || DATA_PTR(v) == nullptr) return static_cast<T *>(borrowed);
-    for (const reflect_upcast &upcast : reflect_upcasts<T>())
-        if (upcast.type == DATA_TYPE(v)) return static_cast<T *>(upcast.to_base(DATA_PTR(v)));
+    if (borrowed != nullptr || mrb_type(v) != MRB_TT_CDATA || DATA_PTR(v) == nullptr || DATA_TYPE(v) == nullptr) return static_cast<T *>(borrowed);
+    RClass *const methods = reflect_module<^^T>(mrb);
+    if (methods == nullptr || !mrb_obj_is_kind_of(mrb, v, methods)) return nullptr;
+    for (const reflect_upcast &upcast : static_cast<const reflect_data_type *>(DATA_TYPE(v))->upcasts)
+        if (upcast.base == &reflect_data_type_owned<T>()) return static_cast<T *>(upcast.to_base(DATA_PTR(v)));
     return nullptr;
 }
 
@@ -695,20 +724,12 @@ RClass *reflect_define_class(mrb_state *const mrb, RClass *const under)
     if constexpr (direct.size() > 0) superclass = reflect_class<direct[0]>(mrb);
     RClass *const klass = ::mrb_define_class_under_id(mrb, outer, name, superclass);
     MRB_SET_INSTANCE_TT(klass, MRB_TT_CDATA);
-    reflect_class_slot<std::meta::dealias(std::meta::remove_cvref(Type))>() = klass;
+    mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), reflect_class_key<std::meta::dealias(std::meta::remove_cvref(Type))>(mrb), mrb_obj_value(klass));
     RClass *const methods = ::mrb_define_module_under_id(mrb, klass, reflect_sym<kInstanceMethods>(mrb));
-    reflect_module_slot<std::meta::dealias(std::meta::remove_cvref(Type))>() = methods;
+    mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), reflect_module_key<std::meta::dealias(std::meta::remove_cvref(Type))>(mrb), mrb_obj_value(methods));
     template for (constexpr std::meta::info base : direct) {
         reflect_class<base>(mrb);
-        mrb_include_module(mrb, methods, reflect_module_slot<base>());
-    }
-    template for (constexpr std::meta::info base : std::define_static_array(reflect_bases(Type))) {
-        using B = [:base:];
-        if constexpr (requires(T *p) { static_cast<B *>(p); }) {
-            constexpr auto to_base = [](void *const p) -> void * { return static_cast<B *>(static_cast<T *>(p)); };
-            reflect_upcasts<B>().push_back({&reflect_data_type_owned<T>(), to_base});
-            reflect_upcasts<B>().push_back({&reflect_data_type_borrowed<T>(), to_base});
-        }
+        mrb_include_module(mrb, methods, reflect_module<base>(mrb));
     }
     if constexpr (!std::is_abstract_v<T> && reflect_constructors<Type>().size() > 0) {
         MRB_DEFINE_ALLOCATOR(klass);
@@ -777,7 +798,7 @@ template <auto Classes>
 void reflect_define(mrb_state *const mrb, RClass *const under = nullptr)
 {
     template for (constexpr std::meta::info type : Classes)
-        if (reflect_class_slot<std::meta::dealias(std::meta::remove_cvref(type))>() == nullptr) reflect_define_class<type>(mrb, under != nullptr ? under : mrb->object_class);
+        if (!mrb_iv_defined(mrb, mrb_obj_value(mrb->object_class), reflect_class_key<std::meta::dealias(std::meta::remove_cvref(type))>(mrb))) reflect_define_class<type>(mrb, under != nullptr ? under : mrb->object_class);
 }
 
 }
