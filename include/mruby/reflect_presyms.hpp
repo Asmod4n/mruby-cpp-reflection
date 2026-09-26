@@ -126,9 +126,13 @@ consteval bool reflect_parameter_supported(const std::meta::info type)
 {
     if (reflect_get_args_letter(type) == '\0') return false;
     if (reflect_mutates(type) && !reflect_is_object(type)) return false;
+    if (std::meta::is_pointer_type(reflect_bare(type))) {
+        const std::meta::info to = std::meta::dealias(std::meta::remove_cv(std::meta::remove_pointer(reflect_bare(type))));
+        if (std::meta::is_class_type(to) && !std::meta::is_complete_type(to)) return false;
+    }
     if (reflect_is_object(type)) {
         const std::meta::info bare = reflect_bare(type);
-        if (reflect_is_iterator(bare) || std::meta::is_abstract_type(bare)) return false;
+        if (!std::meta::is_complete_type(bare) || reflect_is_iterator(bare) || std::meta::is_abstract_type(bare)) return false;
         if (!std::meta::is_lvalue_reference_type(type) && !std::meta::is_pointer_type(std::meta::dealias(type)) && !std::meta::is_copy_constructible_type(bare)) return false;
     }
     return true;
@@ -140,9 +144,9 @@ consteval bool reflect_result_supported(const std::meta::info type)
     if (bare == ^^void || bare == std::meta::dealias(^^mrb_value) || bare == ^^bool || std::meta::is_arithmetic_type(bare)) return true;
     if (std::meta::is_pointer_type(bare)) {
         const std::meta::info to = std::meta::dealias(std::meta::remove_cv(std::meta::remove_pointer(bare)));
-        return to == ^^char || std::meta::is_class_type(to);
+        return to == ^^char || (std::meta::is_class_type(to) && std::meta::is_complete_type(to));
     }
-    if (!std::meta::is_class_type(bare) || std::meta::is_abstract_type(bare) || reflect_is_iterator(bare)) return false;
+    if (!std::meta::is_class_type(bare) || !std::meta::is_complete_type(bare) || std::meta::is_abstract_type(bare) || reflect_is_iterator(bare)) return false;
     if (std::meta::has_template_arguments(bare) && std::meta::template_of(bare) == ^^std::pair) return true;
     return std::meta::is_reference_type(type) || std::meta::is_move_constructible_type(bare);
 }
