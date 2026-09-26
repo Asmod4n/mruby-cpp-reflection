@@ -162,7 +162,7 @@ consteval bool reflect_call_supported(const std::meta::info function)
 }
 
 template <std::meta::info Type>
-consteval auto reflect_members()
+consteval auto reflect_members_computed()
 {
     std::vector<std::meta::info> methods;
     for (const std::meta::info m : std::meta::members_of(std::meta::dealias(Type), std::meta::access_context::current()))
@@ -174,13 +174,31 @@ consteval auto reflect_members()
 }
 
 template <std::meta::info Type>
-consteval auto reflect_fields()
+inline constexpr auto reflect_members_once = reflect_members_computed<Type>();
+
+template <std::meta::info Type>
+consteval auto reflect_members()
+{
+    return reflect_members_once<Type>;
+}
+
+template <std::meta::info Type>
+consteval auto reflect_fields_computed()
 {
     std::vector<std::meta::info> fields;
     for (const std::meta::info m : std::meta::nonstatic_data_members_of(std::meta::dealias(Type), std::meta::access_context::current()))
         if (std::meta::has_identifier(m) && !std::meta::is_bit_field(m) && reflect_result_supported(std::meta::type_of(m)))
             fields.push_back(m);
     return std::define_static_array(fields);
+}
+
+template <std::meta::info Type>
+inline constexpr auto reflect_fields_once = reflect_fields_computed<Type>();
+
+template <std::meta::info Type>
+consteval auto reflect_fields()
+{
+    return reflect_fields_once<Type>;
 }
 
 template <std::meta::info... Types>
