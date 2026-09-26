@@ -432,6 +432,85 @@ consteval std::array<std::meta::info, sizeof...(Types)> reflect()
     return {Types...};
 }
 
+consteval std::meta::info reflect_enclosing_namespace(const std::meta::info scope)
+{
+    std::meta::info n = scope;
+    while (!std::meta::is_namespace(n)) n = std::meta::parent_of(n);
+    return n;
+}
+
+consteval std::vector<std::meta::info> reflect_template_candidates(const std::meta::info scope)
+{
+    std::vector<std::meta::info> candidates;
+    for (const std::meta::info m : std::meta::members_of(reflect_enclosing_namespace(scope), std::meta::access_context::current()))
+        if (std::meta::is_type(m) && !std::meta::is_type_alias(m) && (std::meta::is_class_type(m) || std::meta::is_enum_type(m)) &&
+            std::meta::has_identifier(m) && std::meta::is_complete_type(m) && !reflect_reserved(m))
+            candidates.push_back(m);
+    return candidates;
+}
+
+consteval std::vector<std::meta::info> reflect_instances_computed(const std::meta::info scope, const std::span<const std::meta::info> classes, const bool templates)
+{
+    std::vector<std::meta::info> instances;
+    for (const std::meta::info c : classes)
+        if (std::meta::is_function(c) && std::meta::parent_of(c) == scope && reflect_call_supported(c)) instances.push_back(c);
+    if (!templates || !(std::meta::is_namespace(scope) || std::meta::is_class_type(scope))) return instances;
+    const std::vector<std::meta::info> candidates = reflect_template_candidates(scope);
+    for (const std::meta::info m : std::meta::members_of(scope, std::meta::access_context::current())) {
+        if (!std::meta::is_function_template(m) || !std::meta::has_identifier(m) || std::meta::identifier_of(m).starts_with("_")) continue;
+        for (const std::meta::info t : candidates) {
+            if (!std::meta::can_substitute(m, {t})) continue;
+            const std::meta::info instance = std::meta::substitute(m, {t});
+            if (reflect_call_supported(instance) && std::ranges::find(instances, instance) == instances.end()) instances.push_back(instance);
+        }
+    }
+    return instances;
+}
+
+template <std::meta::info Scope, auto Classes, bool Templates>
+consteval auto reflect_instances()
+{
+    constexpr auto list = std::define_static_array(reflect_instances_computed(Scope, Classes, Templates));
+    std::array<std::meta::info, list.size()> out{};
+    std::ranges::copy(list, out.begin());
+    return out;
+}
+
+consteval std::vector<std::meta::info> reflect_scopes(const std::span<const std::meta::info> classes)
+{
+    std::vector<std::meta::info> scopes;
+    for (const std::meta::info c : classes) {
+        const std::meta::info scope = std::meta::is_function(c) ? std::meta::parent_of(c) : c;
+        if (std::ranges::find(scopes, scope) == scopes.end()) scopes.push_back(scope);
+    }
+    return scopes;
+}
+
+consteval std::vector<std::meta::info> reflect_merged(const std::span<const std::meta::info> functions, const std::span<const std::meta::info> instances, const bool statics)
+{
+    std::vector<std::meta::info> merged(functions.begin(), functions.end());
+    for (const std::meta::info i : instances)
+        if (std::meta::is_static_member(i) == statics) merged.push_back(i);
+    return merged;
+}
+
+consteval std::vector<std::meta::info> reflect_overloads_in(const std::span<const std::meta::info> functions, const std::meta::info member)
+{
+    std::vector<std::meta::info> same;
+    for (const std::meta::info m : functions)
+        if (reflect_identifier(m) == reflect_identifier(member)) same.push_back(m);
+    return same;
+}
+
+consteval bool reflect_first_of_its_name(const std::span<const std::meta::info> functions, const std::meta::info member)
+{
+    for (const std::meta::info m : functions) {
+        if (m == member) return true;
+        if (reflect_identifier(m) == reflect_identifier(member)) return false;
+    }
+    return true;
+}
+
 consteval std::vector<std::meta::info> reflect_nested_types(const std::meta::info type)
 {
     std::vector<std::meta::info> nested;

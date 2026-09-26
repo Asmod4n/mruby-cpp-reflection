@@ -346,7 +346,7 @@ struct reflect_options {
     bool nested_types = false;
 };
 
-template <std::meta::info Type, reflect_options Options = reflect_options{}>
+template <std::meta::info Type, reflect_options Options = reflect_options{}, auto Instances = std::array<std::meta::info, 0>{}>
 RClass *reflect_define_class(reflect_definition &definition, RClass *super);
 
 template <std::meta::info Type>
@@ -1422,7 +1422,7 @@ mrb_value reflect_enumerator(mrb_state *const mrb, const E value)
     return reflect_object(mrb, value, true);
 }
 
-template <std::meta::info Type, reflect_options Options>
+template <std::meta::info Type, reflect_options Options, auto Instances>
 RClass *reflect_define_class(reflect_definition &definition, RClass *const under)
 {
     mrb_state *const mrb = definition.mrb;
@@ -1484,18 +1484,13 @@ RClass *reflect_define_class(reflect_definition &definition, RClass *const under
             std::unreachable();
         }, MRB_ARGS_REQ(1));
     }
-    template for (constexpr std::meta::info member : reflect_members<Type>()) {
-        constexpr bool first_of_its_name = [] consteval {
-            for (const std::meta::info m : reflect_members<Type>()) {
-                if (m == member) return true;
-                if (reflect_identifier(m) == reflect_identifier(member)) return false;
-            }
-            return true;
-        }();
-        if constexpr (first_of_its_name) {
+    static constexpr auto instance_methods = std::define_static_array(reflect_merged(reflect_members<Type>(), Instances, false));
+    template for (constexpr std::meta::info member : instance_methods) {
+        if constexpr (reflect_first_of_its_name(instance_methods, member)) {
+            static constexpr auto overloads = std::define_static_array(reflect_overloads_in(instance_methods, member));
             [&]<std::size_t... I>(std::index_sequence<I...>) {
-                reflect_define_method<Type, reflect_overloads<Type, member>()[I]...>(mrb, methods, reflect_intern<member>(mrb));
-            }(std::make_index_sequence<reflect_overloads<Type, member>().size()>{});
+                reflect_define_method<Type, overloads[I]...>(mrb, methods, reflect_intern<member>(mrb));
+            }(std::make_index_sequence<overloads.size()>{});
         }
     }
     template for (constexpr std::meta::info member : reflect_members<Type>()) {
@@ -1510,18 +1505,13 @@ RClass *reflect_define_class(reflect_definition &definition, RClass *const under
     template for (constexpr std::meta::info function : reflect_conversion_functions<Type>())
         reflect_define_conversion_function<Type, function>(mrb, methods);
     RClass *const singleton = mrb_class_ptr(mrb_singleton_class(mrb, mrb_obj_value(klass)));
-    template for (constexpr std::meta::info function : reflect_static_functions<Type>()) {
-        constexpr bool first_of_its_name = [] consteval {
-            for (const std::meta::info m : reflect_static_functions<Type>()) {
-                if (m == function) return true;
-                if (reflect_identifier(m) == reflect_identifier(function)) return false;
-            }
-            return true;
-        }();
-        if constexpr (first_of_its_name) {
+    static constexpr auto class_methods = std::define_static_array(reflect_merged(reflect_static_functions<Type>(), Instances, true));
+    template for (constexpr std::meta::info function : class_methods) {
+        if constexpr (reflect_first_of_its_name(class_methods, function)) {
+            static constexpr auto overloads = std::define_static_array(reflect_overloads_in(class_methods, function));
             [&]<std::size_t... I>(std::index_sequence<I...>) {
-                reflect_define_method<Type, reflect_overloads<Type, function>()[I]...>(mrb, singleton, reflect_intern<function>(mrb));
-            }(std::make_index_sequence<reflect_overloads<Type, function>().size()>{});
+                reflect_define_method<Type, overloads[I]...>(mrb, singleton, reflect_intern<function>(mrb));
+            }(std::make_index_sequence<overloads.size()>{});
         }
     }
     template for (constexpr std::meta::info member : reflect_static_data_members<Type>())
@@ -1553,7 +1543,7 @@ RClass *reflect_define_class(reflect_definition &definition, RClass *const under
     return klass;
 }
 
-template <std::meta::info Namespace>
+template <std::meta::info Namespace, auto Instances = std::array<std::meta::info, 0>{}>
 RClass *reflect_define_namespace(reflect_definition &definition, RClass *const under)
 {
     mrb_state *const mrb = definition.mrb;
@@ -1562,18 +1552,13 @@ RClass *reflect_define_namespace(reflect_definition &definition, RClass *const u
         outer = ::mrb_define_module_under_id(mrb, outer, reflect_intern<scope>(mrb));
     RClass *const module = ::mrb_define_module_under_id(mrb, outer, reflect_intern<Namespace>(mrb));
     RClass *const singleton = mrb_class_ptr(mrb_singleton_class(mrb, mrb_obj_value(module)));
-    template for (constexpr std::meta::info function : reflect_members<Namespace>()) {
-        constexpr bool first_of_its_name = [] consteval {
-            for (const std::meta::info m : reflect_members<Namespace>()) {
-                if (m == function) return true;
-                if (reflect_identifier(m) == reflect_identifier(function)) return false;
-            }
-            return true;
-        }();
-        if constexpr (first_of_its_name) {
+    static constexpr auto functions = std::define_static_array(reflect_merged(reflect_members<Namespace>(), Instances, false));
+    template for (constexpr std::meta::info function : functions) {
+        if constexpr (reflect_first_of_its_name(functions, function)) {
+            static constexpr auto overloads = std::define_static_array(reflect_overloads_in(functions, function));
             [&]<std::size_t... I>(std::index_sequence<I...>) {
-                reflect_define_method<Namespace, reflect_overloads<Namespace, function>()[I]...>(mrb, singleton, reflect_intern<function>(mrb));
-            }(std::make_index_sequence<reflect_overloads<Namespace, function>().size()>{});
+                reflect_define_method<Namespace, overloads[I]...>(mrb, singleton, reflect_intern<function>(mrb));
+            }(std::make_index_sequence<overloads.size()>{});
         }
     }
     return module;
@@ -1583,12 +1568,13 @@ template <auto Classes, reflect_options Options = reflect_options{}>
 void reflect_define(mrb_state *const mrb, RClass *const under = nullptr)
 {
     reflect_definition definition(mrb);
-    template for (constexpr std::meta::info type : Classes) {
-        if constexpr (std::meta::is_namespace(type)) reflect_define_namespace<type>(definition, under != nullptr ? under : mrb->object_class);
+    template for (constexpr std::meta::info type : std::define_static_array(reflect_scopes(Classes))) {
+        constexpr auto instances = reflect_instances<type, Classes, Options.templates>();
+        if constexpr (std::meta::is_namespace(type)) reflect_define_namespace<type, instances>(definition, under != nullptr ? under : mrb->object_class);
         else if (!mrb_iv_defined(mrb, mrb_obj_value(mrb->object_class), reflect_class_key<std::meta::dealias(std::meta::remove_cvref(type))>(mrb)))
         {
             if constexpr (std::meta::is_enum_type(std::meta::dealias(type))) reflect_define_enum<type>(definition, under != nullptr ? under : mrb->object_class);
-            else reflect_define_class<type, Options>(definition, under != nullptr ? under : mrb->object_class);
+            else reflect_define_class<type, Options, instances>(definition, under != nullptr ? under : mrb->object_class);
         }
     }
     definition.finish();

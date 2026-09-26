@@ -94,7 +94,14 @@ type is defined with its class only where a member uses it.
 - A `const` object raises `FrozenError` on a method that is not `const`.
 - A member function with no Ruby form is not defined: iterators, allocators,
   a non-const reference to a type without a reflected class, rvalue-qualified
-  members, member templates.
+  members.
+- A function template has no instance at runtime unless the program
+  compiles one. An instance named in `reflect<>`, such as
+  `^^ns::Scale::measure<ns::Apple>`, is an overload under the name of its
+  template. `reflect_define<classes, {.templates = true}>(mrb)` also
+  instantiates each function template of a listed class or namespace for
+  the classes and enums of its namespace that its declaration accepts. A
+  template whose body does not compile for such a type stops the build.
 
 ## Build
 

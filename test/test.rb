@@ -550,3 +550,25 @@ assert('a nested type is defined with its class') do
   assert_equal(5, Holder::Unused::Deeper.new.d)
   assert_equal(1, Holder::Level::High.to_i)
 end
+
+# An instance of a function template exists only where the program
+# compiled it. One that reflect<> names is an overload under the name of
+# its template, and no other instance of that template is.
+assert('a function template instance named in reflect<> is an overload') do
+  b = Fruit::Basket.new
+  assert_equal(1, b.count(Fruit::Apple.new))
+  assert_raise(TypeError) { b.count(Fruit::Pear.new) }
+end
+
+# With templates, each function template of a listed class or namespace
+# is instantiated for the classes and enums of its own namespace that
+# its declaration accepts, next to the functions of the same name.
+assert('templates instantiates a function template for the types of its namespace') do
+  s = Fruit::Scale.new
+  assert_equal(10, s.measure(Fruit::Apple.new))
+  assert_equal(20, s.measure(Fruit::Pear.new))
+  assert_equal(0, s.measure)
+  assert_raise(ArgumentError) { s.measure(Fruit::Kind::Sweet) }
+  assert_equal(2, Fruit.weight(Fruit::Pear.new))
+  assert_equal(250, Fruit.weight(250))
+end

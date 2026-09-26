@@ -436,6 +436,38 @@ struct Keeper {
     };
     int n = 1;
 };
+namespace fruit {
+struct Apple {
+    int n = 1;
+};
+struct Pear {
+    int n = 2;
+};
+enum class Kind { sweet };
+template <class T>
+    requires requires(const T &t) { t.n; }
+int weight(const T &t)
+{
+    return t.n;
+}
+inline int weight(int grams) { return grams; }
+struct Scale {
+    template <class T>
+        requires requires(const T &t) { t.n; }
+    int measure(const T &t) const
+    {
+        return t.n * 10;
+    }
+    int measure() const { return 0; }
+};
+struct Basket {
+    template <class T>
+    int count(const T &t) const
+    {
+        return t.n;
+    }
+};
+}
 struct Converts {
     operator int() const { return 7; }
     operator double() const { return 2.5; }
@@ -466,6 +498,8 @@ Plain made(mrb_int n) { return Plain{n}; }
 constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Sharer, ^^SelfSharer, ^^WatchedHolder, ^^Lender, ^^free_functions, ^^Odd, ^^Converts, ^^Outer, ^^Diamond, ^^TakesRvalues, ^^Flags, ^^Declared, ^^Color, ^^Flag, ^^Palette, ^^Keeper, ^^ConvertsExplicitly, ^^std::pair<const std::string, int>, ^^std::pair<std::string, int>>();
 constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();
 constexpr auto nested = mrb_cpp_reflector::reflect<^^Holder>();
+constexpr auto named = mrb_cpp_reflector::reflect<^^fruit::Basket::count<fruit::Apple>>();
+constexpr auto instantiated = mrb_cpp_reflector::reflect<^^fruit, ^^fruit::Apple, ^^fruit::Pear, ^^fruit::Kind, ^^fruit::Scale>();
 
 static_assert(std::string_view(mrb_cpp_reflector::reflect_get_args_format<std::meta::members_of(^^Reflected, std::meta::access_context::current())[2]>().data()) == "si");
 static_assert(mrb_cpp_reflector::reflect_presym("same") != 0);
@@ -551,6 +585,8 @@ extern "C" void mrb_mruby_cpp_reflection_gem_test(mrb_state *mrb)
     mrb_cpp_reflector::reflect_define<classes>(mrb);
     mrb_cpp_reflector::reflect_define<under>(mrb, mrb_define_module(mrb, "Under"));
     mrb_cpp_reflector::reflect_define<nested, {.nested_types = true}>(mrb);
+    mrb_cpp_reflector::reflect_define<named>(mrb);
+    mrb_cpp_reflector::reflect_define<instantiated, {.templates = true}>(mrb);
 }
 #else
 extern "C" void mrb_mruby_cpp_reflection_gem_test(mrb_state *) {}
