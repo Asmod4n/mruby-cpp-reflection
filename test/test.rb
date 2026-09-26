@@ -363,6 +363,9 @@ assert('a template is a module and its specializations are classes') do
   assert_same(Std::Vector[:long], longs.class)
   assert_same(Std::Vector[:long], Std::Vector[:long, Std::Allocator[:long]])
   assert_same(Std::String, r.label.class)
+  assert_same(Std::String, Std::BasicString[:char])
+  assert_true(Std::String <= Std::BasicString)
+  assert_true(r.label.is_a?(Std::BasicString[:char]))
   words = r.words.class
   assert_same(Std::Vector[Std::String], words)
   assert_equal('Std::Vector[Std::String]', words.name)
