@@ -911,10 +911,29 @@ mrb_value reflect_translate_exceptions(mrb_state *const mrb, const Call &call)
     std::unreachable();
 }
 
-template <std::meta::info Type, std::meta::info Function, std::size_t Count = std::meta::parameters_of(Function).size()>
+template <std::meta::info Type, std::meta::info Function, std::size_t Count = std::meta::parameters_of(Function).size() - reflect_skip(Function)>
 mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
 {
-    if constexpr (!std::meta::is_class_member(Function)) {
+    if constexpr (reflect_skip(Function) == 1) {
+        constexpr std::meta::info operand = std::meta::type_of(std::meta::parameters_of(Function)[0]);
+        using O = [:reflect_bare(operand):];
+        if constexpr (reflect_mutates(operand)) mrb_check_frozen(mrb, mrb_obj_ptr(self));
+        O *const object = reflect_ptr<O>(mrb, self);
+        if (object == nullptr) [[unlikely]] mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
+        auto args = reflect_get_args<Function, 1, Count>(mrb);
+        return reflect_translate_exceptions(mrb, [&] {
+            if constexpr (std::meta::return_type_of(Function) == ^^void) {
+                std::apply([&](auto &...held) { [:Function:](*object, reflect_pass(held)...); }, args);
+                return mrb_nil_value();
+            } else if constexpr (std::meta::is_reference_type(std::meta::return_type_of(Function)) &&
+                                 reflect_bare(std::meta::return_type_of(Function)) == std::meta::dealias(^^O)) {
+                std::apply([&](auto &...held) { [:Function:](*object, reflect_pass(held)...); }, args);
+                return self;
+            } else {
+                return std::apply([&](auto &...held) -> mrb_value { return reflect_result(mrb, self, [:Function:](*object, reflect_pass(held)...)); }, args);
+            }
+        });
+    } else if constexpr (!std::meta::is_class_member(Function)) {
         auto args = reflect_get_args<Function, 0, Count>(mrb);
         return reflect_translate_exceptions(mrb, [&] {
             if constexpr (std::meta::return_type_of(Function) == ^^void) {
@@ -976,14 +995,13 @@ mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
 template <std::meta::info Function, bool Converting>
 bool reflect_get_args_match(mrb_state *const mrb, const std::span<const mrb_value> argv)
 {
-    [[maybe_unused]] constexpr auto format = reflect_get_args_format<Function>();
-    constexpr std::size_t letters = std::meta::parameters_of(Function).size();
+    constexpr std::size_t letters = std::meta::parameters_of(Function).size() - reflect_skip(Function);
     constexpr bool rest = reflect_rest(Function);
     constexpr std::size_t required = rest ? letters - 1 : reflect_required(Function);
     if (argv.size() < required || (!rest && argv.size() > letters)) return false;
     bool fits = true;
     std::size_t at = 0;
-    template for (constexpr std::meta::info P : std::define_static_array(std::meta::parameters_of(Function))) {
+    template for (constexpr std::meta::info P : std::define_static_array(reflect_given_parameters(Function))) {
         if (fits && at < argv.size() && !(rest && at == letters - 1)) {
             const mrb_value v = argv[at];
             constexpr char letter = reflect_get_args_letter(std::meta::type_of(P));
@@ -1041,7 +1059,7 @@ std::unique_ptr<T> reflect_implicit_conversion(mrb_state *const mrb, const mrb_v
 template <std::meta::info Type, std::meta::info Function>
 mrb_value reflect_call_given(mrb_state *const mrb, const mrb_value self)
 {
-    constexpr std::size_t total = std::meta::parameters_of(Function).size();
+    constexpr std::size_t total = std::meta::parameters_of(Function).size() - reflect_skip(Function);
     if constexpr (reflect_rest(Function)) return reflect_call<Type, Function, total>(mrb, self);
     else {
         const std::size_t given = static_cast<std::size_t>(mrb_get_argc(mrb));
@@ -1076,7 +1094,7 @@ mrb_value reflect_dispatch(mrb_state *const mrb, const mrb_value self)
                 std::size_t fewest = SIZE_MAX, most = 0;
                 bool unbounded = false;
                 for (const std::meta::info f : {Overloads...}) {
-                    const std::size_t total = std::meta::parameters_of(f).size() - (reflect_takes_block(f) ? 1 : 0);
+                    const std::size_t total = std::meta::parameters_of(f).size() - reflect_skip(f) - (reflect_takes_block(f) ? 1 : 0);
                     fewest = std::min(fewest, reflect_rest(f) ? total - 1 : reflect_required(f));
                     most = std::max(most, total);
                     unbounded = unbounded || reflect_rest(f);
@@ -1085,7 +1103,7 @@ mrb_value reflect_dispatch(mrb_state *const mrb, const mrb_value self)
             }();
             bool fits = false;
             template for (constexpr std::meta::info Function : std::array{Overloads...}) {
-                constexpr std::size_t total = std::meta::parameters_of(Function).size() - (reflect_takes_block(Function) ? 1 : 0);
+                constexpr std::size_t total = std::meta::parameters_of(Function).size() - reflect_skip(Function) - (reflect_takes_block(Function) ? 1 : 0);
                 constexpr std::size_t required = reflect_rest(Function) ? total - 1 : reflect_required(Function);
                 fits = fits || (argv.size() >= required && (reflect_rest(Function) || argv.size() <= total));
             }
@@ -1115,7 +1133,7 @@ void reflect_define_method(mrb_state *const mrb, RClass *const klass, const mrb_
             return reflect_dispatch<Type, Overloads...>(mrb, self);
         }, MRB_ARGS_ANY() | MRB_ARGS_BLOCK());
     } else if constexpr (sizeof...(Overloads) == 1) {
-        constexpr std::size_t total = std::meta::parameters_of(first).size();
+        constexpr std::size_t total = std::meta::parameters_of(first).size() - reflect_skip(first);
         constexpr mrb_aspec aspec = reflect_rest(first) ? (MRB_ARGS_REQ(total - 1) | MRB_ARGS_REST())
                                                         : (MRB_ARGS_REQ(reflect_required(first)) | MRB_ARGS_OPT(total - reflect_required(first)));
         ::mrb_define_method_id(mrb, klass, name,
@@ -1504,7 +1522,12 @@ RClass *reflect_define_class(reflect_definition &definition, RClass *const under
             std::unreachable();
         }, MRB_ARGS_REQ(1));
     }
-    static constexpr auto instance_methods = std::define_static_array(reflect_merged(reflect_members<Type>(), Instances, false));
+    static constexpr auto instance_methods = std::define_static_array([] consteval {
+        std::vector<std::meta::info> all = reflect_merged(reflect_members<Type>(), Instances, false);
+        for (const std::meta::info f : reflect_operators_for<Type>())
+            if (std::ranges::find(all, f) == all.end()) all.push_back(f);
+        return all;
+    }());
     template for (constexpr std::meta::info member : instance_methods) {
         if constexpr (reflect_first_of_its_name(instance_methods, member)) {
             static constexpr auto overloads = std::define_static_array(reflect_overloads_in(instance_methods, member));
@@ -1563,6 +1586,35 @@ RClass *reflect_define_class(reflect_definition &definition, RClass *const under
     return klass;
 }
 
+template <std::meta::info Operand, std::meta::info Namespace, auto Instances>
+void reflect_define_operators(reflect_definition &definition)
+{
+    mrb_state *const mrb = definition.mrb;
+    reflect_class<Operand>(definition);
+    RClass *const methods = reflect_module<Operand>(mrb);
+    static constexpr auto added = std::define_static_array([] consteval {
+        std::vector<std::meta::info> found;
+        for (const std::meta::info f : reflect_free_operators(Namespace, Instances))
+            if (reflect_operand_class(f) == Operand) found.push_back(f);
+        return found;
+    }());
+    static constexpr auto own = std::define_static_array([] consteval {
+        std::vector<std::meta::info> all(reflect_members<Operand>().begin(), reflect_members<Operand>().end());
+        for (const std::meta::info f : reflect_operators_for<Operand>()) all.push_back(f);
+        for (const std::meta::info f : added)
+            if (std::ranges::find(all, f) == all.end()) all.push_back(f);
+        return all;
+    }());
+    template for (constexpr std::meta::info function : added) {
+        if constexpr (reflect_first_of_its_name(added, function)) {
+            static constexpr auto overloads = std::define_static_array(reflect_overloads_in(own, function));
+            [&]<std::size_t... I>(std::index_sequence<I...>) {
+                reflect_define_method<Operand, overloads[I]...>(mrb, methods, reflect_intern<function>(mrb));
+            }(std::make_index_sequence<overloads.size()>{});
+        }
+    }
+}
+
 template <std::meta::info Namespace, auto Instances = std::array<std::meta::info, 0>{}>
 RClass *reflect_define_namespace(reflect_definition &definition, RClass *const under)
 {
@@ -1572,7 +1624,12 @@ RClass *reflect_define_namespace(reflect_definition &definition, RClass *const u
         outer = ::mrb_define_module_under_id(mrb, outer, reflect_intern<scope>(mrb));
     RClass *const module = ::mrb_define_module_under_id(mrb, outer, reflect_intern<Namespace>(mrb));
     RClass *const singleton = mrb_class_ptr(mrb_singleton_class(mrb, mrb_obj_value(module)));
-    static constexpr auto functions = std::define_static_array(reflect_merged(reflect_members<Namespace>(), Instances, false));
+    static constexpr auto functions = std::define_static_array([] consteval {
+        std::vector<std::meta::info> all;
+        for (const std::meta::info f : reflect_merged(reflect_members<Namespace>(), Instances, false))
+            if (reflect_skip(f) == 0) all.push_back(f);
+        return all;
+    }());
     template for (constexpr std::meta::info function : functions) {
         if constexpr (reflect_first_of_its_name(functions, function)) {
             static constexpr auto overloads = std::define_static_array(reflect_overloads_in(functions, function));
@@ -1581,6 +1638,8 @@ RClass *reflect_define_namespace(reflect_definition &definition, RClass *const u
             }(std::make_index_sequence<overloads.size()>{});
         }
     }
+    template for (constexpr std::meta::info operand : std::define_static_array(reflect_operand_classes(reflect_free_operators(Namespace, Instances))))
+        reflect_define_operators<operand, Namespace, Instances>(definition);
     return module;
 }
 

@@ -573,3 +573,23 @@ assert('templates instantiates a function template for the types of its namespac
   assert_equal(2, Fruit.weight(Fruit::Pear.new))
   assert_equal(250, Fruit.weight(250))
 end
+
+# C++ finds an operator outside the class by the types of its operands.
+# In Ruby it is a method of the class of its first operand, next to the
+# operators the class declares, and the module of its namespace does not
+# answer it.
+assert('a free operator is a method of the class of its first operand') do
+  a = Ops::Vec.new
+  a.x = 2
+  b = Ops::Vec.new
+  b.x = 3
+  assert_equal(5, (a + b).x)
+  assert_equal(-2, (-a).x)
+  assert_true(a == a.dup)
+  assert_false(a == b)
+  log = Ops::Log.new
+  assert_same(log, log << 1 << a << 7)
+  assert_equal('1v27', log.text.to_s)
+  assert_raise(TypeError) { log << 'x' }
+  assert_false(Ops.respond_to?(:+))
+end

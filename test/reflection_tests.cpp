@@ -468,6 +468,27 @@ struct Basket {
     }
 };
 }
+namespace ops {
+struct Vec {
+    int x = 0;
+};
+inline bool operator==(const Vec &a, const Vec &b) { return a.x == b.x; }
+inline Vec operator+(const Vec &a, const Vec &b) { return {a.x + b.x}; }
+inline Vec operator-(const Vec &a) { return {-a.x}; }
+struct Log {
+    std::string text;
+    Log &operator<<(int n)
+    {
+        text += std::to_string(n);
+        return *this;
+    }
+};
+inline Log &operator<<(Log &log, const Vec &v)
+{
+    log.text += "v" + std::to_string(v.x);
+    return log;
+}
+}
 struct Converts {
     operator int() const { return 7; }
     operator double() const { return 2.5; }
@@ -499,6 +520,7 @@ constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, 
 constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();
 constexpr auto nested = mrb_cpp_reflector::reflect<^^Holder>();
 constexpr auto named = mrb_cpp_reflector::reflect<^^fruit::Basket::count<fruit::Apple>>();
+constexpr auto operators = mrb_cpp_reflector::reflect<^^ops, ^^ops::Vec, ^^ops::Log>();
 constexpr auto instantiated = mrb_cpp_reflector::reflect<^^fruit, ^^fruit::Apple, ^^fruit::Pear, ^^fruit::Kind, ^^fruit::Scale>();
 
 static_assert(std::string_view(mrb_cpp_reflector::reflect_get_args_format<std::meta::members_of(^^Reflected, std::meta::access_context::current())[2]>().data()) == "si");
@@ -586,6 +608,7 @@ extern "C" void mrb_mruby_cpp_reflection_gem_test(mrb_state *mrb)
     mrb_cpp_reflector::reflect_define<under>(mrb, mrb_define_module(mrb, "Under"));
     mrb_cpp_reflector::reflect_define<nested, {.nested_types = true}>(mrb);
     mrb_cpp_reflector::reflect_define<named>(mrb);
+    mrb_cpp_reflector::reflect_define<operators>(mrb);
     mrb_cpp_reflector::reflect_define<instantiated, {.templates = true}>(mrb);
 }
 #else

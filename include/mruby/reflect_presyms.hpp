@@ -23,10 +23,15 @@ struct RClass;
 namespace mrb_cpp_reflector
 {
 
+consteval std::size_t reflect_skip(const std::meta::info function)
+{
+    return !std::meta::is_class_member(function) && std::meta::is_operator_function(function) ? 1 : 0;
+}
+
 consteval std::string_view reflect_operator_method(const std::meta::info function)
 {
     using enum std::meta::operators;
-    const bool unary = std::meta::parameters_of(function).empty();
+    const bool unary = std::meta::parameters_of(function).size() == reflect_skip(function);
     switch (std::meta::operator_of(function)) {
     case op_plus: return unary ? "+@" : "+";
     case op_minus: return unary ? "-@" : "-";
@@ -157,7 +162,9 @@ consteval bool reflect_takes_block(const std::meta::info function)
 consteval std::size_t reflect_required(const std::meta::info function)
 {
     std::size_t required = 0;
+    std::size_t at = 0;
     for (const std::meta::info p : std::meta::parameters_of(function)) {
+        if (at++ < reflect_skip(function)) continue;
         if (std::meta::has_default_argument(p)) break;
         required++;
     }
@@ -282,7 +289,7 @@ consteval auto reflect_members_computed()
 {
     std::vector<std::meta::info> methods;
     for (const std::meta::info m : std::meta::members_of(std::meta::dealias(Type), std::meta::access_context::current()))
-        if (std::meta::is_function(m) && !std::meta::is_static_member(m) &&
+        if (std::meta::is_function(m) && !std::meta::is_static_member(m) && reflect_skip(m) == 0 &&
             !std::meta::is_special_member_function(m) &&
             (std::meta::is_operator_function(m) ? !reflect_operator_method(m).empty() : std::meta::has_identifier(m)) &&
             (!std::meta::has_identifier(m) || std::meta::identifier_of(m) != "swap" || std::meta::extract<bool>(std::meta::substitute(^^std::swappable, {std::meta::dealias(Type)}))) &&
@@ -432,6 +439,40 @@ consteval std::array<std::meta::info, sizeof...(Types)> reflect()
     return {Types...};
 }
 
+consteval std::vector<std::meta::info> reflect_given_parameters(const std::meta::info function)
+{
+    const std::vector<std::meta::info> parameters = std::meta::parameters_of(function);
+    return {parameters.begin() + static_cast<std::ptrdiff_t>(reflect_skip(function)), parameters.end()};
+}
+
+consteval std::meta::info reflect_operand_class(const std::meta::info function)
+{
+    return reflect_bare(std::meta::type_of(std::meta::parameters_of(function)[0]));
+}
+
+consteval std::vector<std::meta::info> reflect_free_operators(const std::meta::info scope, const std::span<const std::meta::info> classes)
+{
+    std::vector<std::meta::info> operators;
+    for (const std::meta::info m : std::meta::members_of(scope, std::meta::access_context::current()))
+        if (std::meta::is_function(m) && reflect_skip(m) == 1 && !reflect_operator_method(m).empty() &&
+            std::meta::is_class_type(reflect_operand_class(m)) && reflect_call_supported(m))
+            operators.push_back(m);
+    for (const std::meta::info c : classes)
+        if (std::meta::is_function(c) && std::meta::parent_of(c) == scope && reflect_skip(c) == 1 && !reflect_operator_method(c).empty() &&
+            std::meta::is_class_type(reflect_operand_class(c)) && reflect_call_supported(c) && std::ranges::find(operators, c) == operators.end())
+            operators.push_back(c);
+    return operators;
+}
+
+
+consteval std::vector<std::meta::info> reflect_operand_classes(const std::span<const std::meta::info> operators)
+{
+    std::vector<std::meta::info> classes;
+    for (const std::meta::info f : operators)
+        if (std::ranges::find(classes, reflect_operand_class(f)) == classes.end()) classes.push_back(reflect_operand_class(f));
+    return classes;
+}
+
 consteval std::meta::info reflect_enclosing_namespace(const std::meta::info scope)
 {
     std::meta::info n = scope;
@@ -465,6 +506,18 @@ consteval std::vector<std::meta::info> reflect_instances_computed(const std::met
         }
     }
     return instances;
+}
+
+template <std::meta::info Scope>
+inline constexpr auto reflect_free_operators_cached = std::define_static_array(reflect_free_operators(Scope, {}));
+
+template <std::meta::info Type>
+consteval std::vector<std::meta::info> reflect_operators_for()
+{
+    std::vector<std::meta::info> found;
+    for (const std::meta::info f : reflect_free_operators_cached<reflect_enclosing_namespace(std::meta::parent_of(std::meta::dealias(Type)))>)
+        if (reflect_operand_class(f) == std::meta::dealias(Type)) found.push_back(f);
+    return found;
 }
 
 template <std::meta::info Scope, auto Classes, bool Templates>

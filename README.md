@@ -95,6 +95,13 @@ type is defined with its class only where a member uses it.
 - A member function with no Ruby form is not defined: iterators, allocators,
   a non-const reference to a type without a reflected class, rvalue-qualified
   members.
+- An operator declared outside a class is a method of the class of its
+  first operand, next to the operators of that class: `operator+(const
+  Vec &, const Vec &)` is `Vec#+`. The operators of the class's own
+  namespace are found with the class. Those of a listed namespace, and
+  instances named in `reflect<>`, reach the class of their first operand
+  wherever it is declared. An operator declared as a friend inside its
+  class is not found.
 - A function template has no instance at runtime unless the program
   compiles one. An instance named in `reflect<>`, such as
   `^^ns::Scale::measure<ns::Apple>`, is an overload under the name of its
