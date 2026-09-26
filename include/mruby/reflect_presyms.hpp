@@ -158,7 +158,7 @@ consteval bool reflect_call_supported(const std::meta::info function)
     if (std::meta::is_rvalue_reference_qualified(function) || std::meta::is_volatile(function)) return false;
     for (const std::meta::info p : std::meta::parameters_of(function))
         if (!reflect_parameter_supported(std::meta::type_of(p))) return false;
-    return reflect_result_supported(std::meta::return_type_of(function));
+    return std::meta::is_constructor(function) || reflect_result_supported(std::meta::return_type_of(function));
 }
 
 consteval std::vector<std::meta::info> reflect_direct_bases(const std::meta::info type)
@@ -189,6 +189,25 @@ consteval auto reflect_members_computed()
             std::meta::has_identifier(m) && reflect_call_supported(m))
             methods.push_back(m);
     return std::define_static_array(methods);
+}
+
+template <std::meta::info Type>
+consteval auto reflect_constructors_computed()
+{
+    std::vector<std::meta::info> constructors;
+    for (const std::meta::info m : std::meta::members_of(std::meta::dealias(Type), std::meta::access_context::current()))
+        if (std::meta::is_constructor(m) && !std::meta::is_deleted(m) && !std::meta::is_move_constructor(m) && reflect_call_supported(m))
+            constructors.push_back(m);
+    return std::define_static_array(constructors);
+}
+
+template <std::meta::info Type>
+inline constexpr auto reflect_constructors_cached = reflect_constructors_computed<Type>();
+
+template <std::meta::info Type>
+consteval auto reflect_constructors()
+{
+    return reflect_constructors_cached<Type>;
 }
 
 template <std::meta::info Type>

@@ -87,3 +87,14 @@ assert('a method belongs to the class C++ declares it in') do
   assert_raise(TypeError) { d.b_of(A.new) }
 end
 
+assert('initialize takes every public constructor') do
+  assert_equal([0, 'S()'], [S.new.v, S.new.from.to_s])
+  assert_equal([7, 'S(mrb_int)'], [S.new(7).v, S.new(7).from.to_s])
+  assert_equal([16, 'S(mrb_int, mrb_int, mrb_int)'], [S.new(2, 3).v, S.new(2, 3).from.to_s])
+  assert_equal(7, S.new(2, 3, 1).v)
+  assert_equal([3, 'S(std::string_view)'], [S.new('abc').v, S.new('abc').from.to_s])
+  assert_equal(5, X.new(5).v)
+  assert_raise(ArgumentError) { X.new }
+  assert_raise(ArgumentError) { S.new(1, 2, 3, 4) }
+end
+

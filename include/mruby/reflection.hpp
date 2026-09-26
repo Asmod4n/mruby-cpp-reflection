@@ -302,19 +302,27 @@ template <std::meta::info Type, std::meta::info Function, std::size_t Count = st
 mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
 {
     using T = [:std::meta::dealias(Type):];
-    if constexpr (!std::meta::is_const(Function)) mrb_check_frozen(mrb, mrb_obj_ptr(self));
-    T *const object = reflect_ptr<T>(mrb, self);
-    if (object == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
-    auto args = reflect_get_args<Function, 0, Count>(mrb);
-    if constexpr (std::meta::return_type_of(Function) == ^^void) {
-        std::apply([&](auto &...held) { object->[:Function:](reflect_pass(held)...); }, args);
-        return mrb_nil_value();
-    } else if constexpr (std::meta::is_reference_type(std::meta::return_type_of(Function)) &&
-                         reflect_bare(std::meta::return_type_of(Function)) == std::meta::dealias(^^T)) {
-        std::apply([&](auto &...held) { object->[:Function:](reflect_pass(held)...); }, args);
+    if constexpr (std::meta::is_constructor(Function)) {
+        auto args = reflect_get_args<Function, 0, Count>(mrb);
+        T *const kept = static_cast<T *>(mrb_malloc(mrb, sizeof(T)));
+        std::apply([&](auto &...held) { new (kept) T(reflect_pass(held)...); }, args);
+        mrb_data_init(self, kept, &reflect_data_type_owned<T>());
         return self;
     } else {
-        return std::apply([&](auto &...held) -> mrb_value { return reflect_result(mrb, self, object->[:Function:](reflect_pass(held)...)); }, args);
+        if constexpr (!std::meta::is_const(Function)) mrb_check_frozen(mrb, mrb_obj_ptr(self));
+        T *const object = reflect_ptr<T>(mrb, self);
+        if (object == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
+        auto args = reflect_get_args<Function, 0, Count>(mrb);
+        if constexpr (std::meta::return_type_of(Function) == ^^void) {
+            std::apply([&](auto &...held) { object->[:Function:](reflect_pass(held)...); }, args);
+            return mrb_nil_value();
+        } else if constexpr (std::meta::is_reference_type(std::meta::return_type_of(Function)) &&
+                             reflect_bare(std::meta::return_type_of(Function)) == std::meta::dealias(^^T)) {
+            std::apply([&](auto &...held) { object->[:Function:](reflect_pass(held)...); }, args);
+            return self;
+        } else {
+            return std::apply([&](auto &...held) -> mrb_value { return reflect_result(mrb, self, object->[:Function:](reflect_pass(held)...)); }, args);
+        }
     }
 }
 
@@ -364,17 +372,17 @@ mrb_value reflect_call_given(mrb_state *const mrb, const mrb_value self)
 }
 
 template <std::meta::info Type, std::meta::info... Overloads>
-void reflect_define_method(mrb_state *const mrb, RClass *const klass)
+void reflect_define_method(mrb_state *const mrb, RClass *const klass, const mrb_sym name)
 {
     constexpr std::meta::info first = std::array{Overloads...}[0];
     if constexpr (sizeof...(Overloads) == 1) {
         constexpr std::size_t total = std::meta::parameters_of(first).size();
         constexpr mrb_aspec aspec = reflect_rest(first) ? (MRB_ARGS_REQ(total - 1) | MRB_ARGS_REST())
                                                         : (MRB_ARGS_REQ(reflect_required(first)) | MRB_ARGS_OPT(total - reflect_required(first)));
-        ::mrb_define_method_id(mrb, klass, reflect_intern<first>(mrb),
+        ::mrb_define_method_id(mrb, klass, name,
                                [](mrb_state *const mrb, const mrb_value self) { return reflect_call_given<Type, first>(mrb, self); }, aspec);
     } else {
-        ::mrb_define_method_id(mrb, klass, reflect_intern<first>(mrb),
+        ::mrb_define_method_id(mrb, klass, name,
                                [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
             const std::span<const mrb_value> argv(mrb_get_argv(mrb), static_cast<std::size_t>(mrb_get_argc(mrb)));
             mrb_value answer = mrb_undef_value();
@@ -518,7 +526,12 @@ RClass *reflect_define_class(mrb_state *const mrb, RClass *const under)
             reflect_upcasts<B>().push_back({&reflect_data_type_borrowed<T>(), to_base});
         }
     }
-    if constexpr (std::is_default_constructible_v<T> && !std::is_abstract_v<T>) {
+    if constexpr (!std::is_abstract_v<T> && reflect_constructors<Type>().size() > 0) {
+        MRB_DEFINE_ALLOCATOR(klass);
+        [&]<std::size_t... I>(std::index_sequence<I...>) {
+            reflect_define_method<Type, reflect_constructors<Type>()[I]...>(mrb, klass, reflect_sym<kInitialize>(mrb));
+        }(std::make_index_sequence<reflect_constructors<Type>().size()>{});
+    } else if constexpr (std::is_default_constructible_v<T> && !std::is_abstract_v<T>) {
         MRB_DEFINE_ALLOCATOR(klass);
         ::mrb_define_method_id(mrb, klass, reflect_sym<kInitialize>(mrb),
                                [](mrb_state *const mrb, const mrb_value self) {
@@ -540,7 +553,7 @@ RClass *reflect_define_class(mrb_state *const mrb, RClass *const under)
         }();
         if constexpr (first_of_its_name) {
             [&]<std::size_t... I>(std::index_sequence<I...>) {
-                reflect_define_method<Type, reflect_overloads<Type, member>()[I]...>(mrb, methods);
+                reflect_define_method<Type, reflect_overloads<Type, member>()[I]...>(mrb, methods, reflect_intern<member>(mrb));
             }(std::make_index_sequence<reflect_overloads<Type, member>().size()>{});
         }
     }

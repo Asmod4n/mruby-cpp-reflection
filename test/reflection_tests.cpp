@@ -61,7 +61,24 @@ struct D : A, B, C {
     mrb_int f() const { return 4; }
     mrb_int b_of(const B &other) const { return other.b; }
 };
-constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D>();
+/* Every public constructor of S is an overload of initialize, chosen
+ * like the overloads of a method: by the number of arguments, then by
+ * their types, with default arguments honoured. */
+struct S {
+    mrb_int v = 0;
+    std::string_view from = "S()";
+    S() = default;
+    S(mrb_int n) : v(n), from("S(mrb_int)") {}
+    S(mrb_int n, mrb_int m, mrb_int k = 10) : v(n * m + k), from("S(mrb_int, mrb_int, mrb_int)") {}
+    S(std::string_view text) : v(static_cast<mrb_int>(text.size())), from("S(std::string_view)") {}
+};
+/* X has no default constructor, so X.new without arguments is refused
+ * as C++ refuses X x; */
+struct X {
+    mrb_int v;
+    explicit X(mrb_int n) : v(n) {}
+};
+constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^X>();
 constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();
 
 static_assert(std::string_view(mrb_cpp_reflector::reflect_get_args_format<std::meta::members_of(^^Reflected, std::meta::access_context::current())[2]>().data()) == "si");
