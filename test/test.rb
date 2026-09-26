@@ -160,5 +160,6 @@ assert('a C++ exception is the Ruby exception for it') do
   assert_equal('broken', assert_raise(RuntimeError) { t.runtime }.message)
   assert_equal('negative', assert_raise(ArgumentError) { Thrower.new(-1) }.message)
   assert_equal(2, Thrower.new(1).at(1))
+  assert_raise(RuntimeError) { t.number }
 end
 

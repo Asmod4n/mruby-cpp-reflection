@@ -149,6 +149,7 @@ struct Thrower {
     mrb_int at(mrb_int i) const { return seen.at(static_cast<std::size_t>(i)); }
     void overflow() const { throw std::overflow_error("too big"); }
     void runtime() const { throw std::runtime_error("broken"); }
+    void number() const { throw 42; }
 };
 constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower>();
 constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();

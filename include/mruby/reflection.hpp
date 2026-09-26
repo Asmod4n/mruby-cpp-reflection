@@ -9,6 +9,7 @@
 #include <mruby/hash.h>
 #include <mruby/proc.h>
 #include <mruby/string.h>
+#include <mruby/throw.h>
 #include <mruby/variable.h>
 
 #include <mruby/cpp_helpers.hpp>
@@ -340,6 +341,11 @@ mrb_value reflect_translate_exceptions(mrb_state *const mrb, const Call &call)
     } catch (const std::exception &e) {
         kind = E_RUNTIME_ERROR;
         what = e.what();
+    } catch (mrb_jmpbuf *) {
+        throw;
+    } catch (...) {
+        kind = E_RUNTIME_ERROR;
+        what = "a C++ exception that is not a std::exception";
     }
     mrb_exc_raise(mrb, mrb_exc_new(mrb, kind, what.data(), static_cast<mrb_int>(what.size())));
 }
