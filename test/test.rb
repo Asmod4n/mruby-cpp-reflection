@@ -270,3 +270,25 @@ assert('a Ruby object whose C++ object C++ deleted raises when used') do
   assert_raise(TypeError) { orphan.child_count }
 end
 
+def share_made_and_dropped(sharer)
+  sharer.make(1)
+  nil
+end
+
+assert('an object in a std::shared_ptr lives as long as Ruby holds it') do
+  full_gc
+  base = Share.alive rescue 0
+  sharer = Sharer.new
+  kept = sharer.keep(7)
+  assert_true(sharer.same(kept))
+  sharer.drop
+  full_gc
+  assert_equal(7, kept.v)
+  assert_equal(base + 1, Share.alive)
+  assert_equal(2, sharer.count(kept))
+  kept = nil
+  share_made_and_dropped(sharer)
+  full_gc
+  assert_equal(base, Share.alive)
+end
+

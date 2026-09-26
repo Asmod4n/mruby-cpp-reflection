@@ -326,6 +326,35 @@ T *reflect_ptr(mrb_state *const mrb, const mrb_value v)
     return nullptr;
 }
 
+inline const mrb_data_type &reflect_data_type_share()
+{
+    static const mrb_data_type type{"shared", [](mrb_state *, void *const p) { delete static_cast<std::shared_ptr<void> *>(p); }};
+    return type;
+}
+
+inline mrb_sym reflect_share_key(mrb_state *const mrb)
+{
+    return mrb_intern_lit(mrb, "reflected share");
+}
+
+template <class E>
+std::shared_ptr<E> reflect_share_of(mrb_state *const mrb, const mrb_value v)
+{
+    if (mrb_type(v) != MRB_TT_CDATA) return nullptr;
+    const mrb_value keeper = mrb_iv_get(mrb, v, reflect_share_key(mrb));
+    if (mrb_nil_p(keeper)) return nullptr;
+    E *const p = reflect_ptr<E>(mrb, v);
+    if (p == nullptr) return nullptr;
+    return std::shared_ptr<E>(*static_cast<std::shared_ptr<void> *>(DATA_PTR(keeper)), p);
+}
+
+template <class T>
+bool reflect_shares(mrb_state *const mrb, const mrb_value v)
+{
+    if constexpr (reflect_is_shared_ptr(^^T)) return mrb_nil_p(v) || reflect_share_of<typename T::element_type>(mrb, v) != nullptr;
+    else return false;
+}
+
 template <class T>
 void reflect_attach(mrb_state *const mrb, const mrb_value object)
 {
@@ -506,7 +535,10 @@ auto reflect_argument(mrb_state *const mrb, const mrb_value v)
             held.temporary = std::make_unique<T>(mrb_value_to<T>(mrb, v));
             held.ptr = held.temporary.get();
         } else {
-            if constexpr (reflect_is_function(type) && !reflect_mutates(type)) held.temporary = reflect_function_from<T>(mrb, v);
+            if constexpr (reflect_is_shared_ptr(type) && !reflect_mutates(type)) {
+                if (mrb_nil_p(v)) held.temporary = std::make_unique<T>();
+                else if (T share = reflect_share_of<typename T::element_type>(mrb, v); share != nullptr) held.temporary = std::make_unique<T>(std::move(share));
+            } else if constexpr (reflect_is_function(type) && !reflect_mutates(type)) held.temporary = reflect_function_from<T>(mrb, v);
             else if constexpr (Converting && !reflect_mutates(type)) held.temporary = reflect_implicit_conversion<T>(mrb, v);
             if (held.temporary == nullptr) mrb_raisef(mrb, E_TYPE_ERROR, "%s wanted", std::define_static_string(reflect_class_name(std::meta::dealias(^^T))));
             held.ptr = held.temporary.get();
@@ -519,7 +551,10 @@ auto reflect_argument(mrb_state *const mrb, const mrb_value v)
         } else if constexpr (reflect_from_mrb<T>) {
             held.temporary = std::make_unique<T>(mrb_value_to<T>(mrb, v));
         } else {
-            if constexpr (reflect_is_function(type)) held.temporary = reflect_function_from<T>(mrb, v);
+            if constexpr (reflect_is_shared_ptr(type)) {
+                if (mrb_nil_p(v)) held.temporary = std::make_unique<T>();
+                else if (T share = reflect_share_of<typename T::element_type>(mrb, v); share != nullptr) held.temporary = std::make_unique<T>(std::move(share));
+            } else if constexpr (reflect_is_function(type)) held.temporary = reflect_function_from<T>(mrb, v);
             else if constexpr (Converting) held.temporary = reflect_implicit_conversion<T>(mrb, v);
             if (held.temporary == nullptr) mrb_raisef(mrb, E_TYPE_ERROR, "%s wanted", std::define_static_string(reflect_class_name(std::meta::dealias(^^T))));
         }
@@ -593,6 +628,16 @@ mrb_value reflect_result(mrb_state *const mrb, const mrb_value self, R &&value)
 {
     using T = std::remove_cvref_t<R>;
     constexpr bool frozen = std::is_const_v<std::remove_reference_t<R>>;
+    if constexpr (reflect_is_shared_ptr(^^T)) {
+        using E = typename T::element_type;
+        if (value == nullptr) return mrb_nil_value();
+        const mrb_value object = reflect_borrowed<E>(mrb, value.get(), mrb_nil_value(), std::is_const_v<E>);
+        if (mrb_nil_p(mrb_iv_get(mrb, object, reflect_share_key(mrb)))) {
+            RData *const keeper = mrb_data_object_alloc(mrb, mrb->object_class, new std::shared_ptr<void>(value), &reflect_data_type_share());
+            mrb_iv_set(mrb, object, reflect_share_key(mrb), mrb_obj_value(keeper));
+        }
+        return object;
+    }
     if constexpr (reflect_is_function(^^T)) {
         using Signature = [:std::meta::template_arguments_of(std::meta::dealias(^^T))[0]:];
         if (const reflect_callable<Signature> *const made = value.template target<reflect_callable<Signature>>(); made != nullptr) return made->root->object;
@@ -756,7 +801,8 @@ bool reflect_get_args_match(mrb_state *const mrb, const std::span<const mrb_valu
                 using T = [:reflect_bare(std::meta::type_of(P)):];
                 fits = reflect_ptr<T>(mrb, v) != nullptr || (!reflect_mutates(std::meta::type_of(P)) && reflect_from_mrb<T> ||
                                                         (Converting && !reflect_mutates(std::meta::type_of(P)) && reflect_implicitly_converts<T>(mrb, v)) ||
-                                                        (reflect_is_function(std::meta::type_of(P)) && mrb_respond_to(mrb, v, mrb_intern_lit(mrb, "call"))));
+                                                        (reflect_is_function(std::meta::type_of(P)) && mrb_respond_to(mrb, v, mrb_intern_lit(mrb, "call"))) ||
+                                                        reflect_shares<T>(mrb, v));
                 if (fits && reflect_mutates(std::meta::type_of(P))) fits = !mrb_frozen_p(mrb_obj_ptr(v));
             }
         }

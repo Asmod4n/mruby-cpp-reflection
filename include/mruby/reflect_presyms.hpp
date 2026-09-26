@@ -135,6 +135,12 @@ consteval bool reflect_is_function(const std::meta::info type)
     return std::meta::has_template_arguments(t) && std::meta::template_of(t) == ^^std::function;
 }
 
+consteval bool reflect_is_shared_ptr(const std::meta::info type)
+{
+    const std::meta::info t = std::meta::dealias(std::meta::remove_cvref(type));
+    return std::meta::has_template_arguments(t) && std::meta::template_of(t) == ^^std::shared_ptr;
+}
+
 consteval bool reflect_takes_block(const std::meta::info function)
 {
     const auto parameters = std::meta::parameters_of(function);

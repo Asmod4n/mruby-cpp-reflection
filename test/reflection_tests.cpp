@@ -227,7 +227,31 @@ template <>
 struct mrb_cpp_reflector::reflect_ownership_traits<Node> {
     static Node *parent(const Node &n) { return n.parent; }
 };
-constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node>();
+/* An object C++ hands over in a std::shared_ptr lives as long as the
+ * Ruby object that holds it, even after C++ lets go of its own share;
+ * handed back, it is the same std::shared_ptr with the same count. */
+static mrb_int &shares_alive()
+{
+    static mrb_int n = 0;
+    return n;
+}
+struct Share {
+    mrb_int v;
+    explicit Share(mrb_int n) : v(n) { ++shares_alive(); }
+    Share(const Share &) = delete;
+    Share &operator=(const Share &) = delete;
+    ~Share() { --shares_alive(); }
+    static mrb_int alive() { return shares_alive(); }
+};
+struct Sharer {
+    std::shared_ptr<Share> held;
+    std::shared_ptr<Share> make(mrb_int n) const { return std::make_shared<Share>(n); }
+    std::shared_ptr<Share> keep(mrb_int n) { held = std::make_shared<Share>(n); return held; }
+    void drop() { held.reset(); }
+    mrb_int count(const std::shared_ptr<Share> &s) const { return s.use_count(); }
+    bool same(const std::shared_ptr<Share> &s) const { return s == held; }
+};
+constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Sharer>();
 constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();
 
 static_assert(std::string_view(mrb_cpp_reflector::reflect_get_args_format<std::meta::members_of(^^Reflected, std::meta::access_context::current())[2]>().data()) == "si");
