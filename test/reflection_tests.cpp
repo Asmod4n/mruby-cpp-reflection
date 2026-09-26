@@ -187,6 +187,13 @@ struct Callback {
     const std::function<number(number)> &given() const { return kept; }
     std::function<number(number)> times(mrb_int k) const { return [k](mrb_int n) { return n * k; }; }
     auto plus(mrb_int k) const { return [k](mrb_int n) { return n + k; }; }
+    bool compare(const std::function<bool(const void *, void *)> &f) const { return f(this, const_cast<Callback *>(this)); }
+    std::function<void *(void *)> address() const { return [](void *p) { return p; }; }
+    bool same(const void *const a, const void *b) const { return a == b; }
+    const void *const fixed() const { return this; }
+    void *place = nullptr;
+    static inline void *anywhere = nullptr;
+    const void *const where = this;
 };
 /* Node deletes the nodes it owns in its destructor, as a tree of
  * objects in a GUI library does. reflect_ownership_traits names the

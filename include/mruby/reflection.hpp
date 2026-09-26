@@ -5,6 +5,7 @@
 #include <mruby/array.h>
 #include <mruby/class.h>
 #include <mruby/data.h>
+#include <mruby/void_pointer.h>
 #include <mruby/error.h>
 #include <mruby/hash.h>
 #include <mruby/proc.h>
@@ -567,6 +568,18 @@ struct reflect_gc_root {
 template <class R>
 mrb_value reflect_result(mrb_state *mrb, mrb_value self, R &&value);
 
+template <class Q>
+Q *reflect_void_ptr(mrb_state *const mrb, const mrb_value v)
+{
+    if (mrb_nil_p(v)) return nullptr;
+    if (void *const p = mrb_data_check_get_ptr(mrb, v, &mrb_void_pointer_type); p != nullptr) return p;
+    if constexpr (std::is_const_v<Q>) {
+        if (void *const p = mrb_data_check_get_ptr(mrb, v, &mrb_const_void_pointer_type); p != nullptr) [[likely]] return p;
+        mrb_raise(mrb, E_TYPE_ERROR, "VoidPointer or ConstVoidPointer wanted");
+    } else mrb_raise(mrb, E_TYPE_ERROR, "VoidPointer wanted");
+    std::unreachable();
+}
+
 template <class Signature>
 struct reflect_callable;
 
@@ -579,6 +592,7 @@ struct reflect_callable<R(A...)> {
         const std::array<mrb_value, sizeof...(A)> argv{reflect_result(mrb, mrb_nil_value(), std::forward<A>(args))...};
         const mrb_value answer = mrb_funcall_argv(mrb, root->object, mrb_intern_lit(mrb, "call"), static_cast<mrb_int>(argv.size()), argv.data());
         if constexpr (std::is_void_v<R>) return;
+        else if constexpr (std::is_pointer_v<R> && std::is_void_v<std::remove_pointer_t<R>>) return reflect_void_ptr<std::remove_pointer_t<R>>(mrb, answer);
         else if constexpr (std::is_class_v<std::remove_cvref_t<R>> && !reflect_from_mrb<std::remove_cvref_t<R>>) {
             std::remove_cvref_t<R> *const p = reflect_ptr<std::remove_cvref_t<R>>(mrb, answer);
             if (p == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "call answered the wrong type");
@@ -611,11 +625,14 @@ auto reflect_argument(mrb_state *const mrb, const mrb_value v)
     using T = [:reflect_bare(type):];
     if constexpr (std::meta::is_pointer_type(std::meta::dealias(type))) {
         using P = [:std::meta::dealias(std::meta::remove_cv(std::meta::remove_pointer(std::meta::dealias(type)))):];
+        if constexpr (std::is_void_v<P>) return reflect_void_ptr<typename [:std::meta::remove_pointer(std::meta::dealias(type)):]>(mrb, v);
+        else {
         if (mrb_nil_p(v)) return static_cast<P *>(nullptr);
         P *const p = reflect_ptr<P>(mrb, v);
         if (p == nullptr) mrb_raisef(mrb, E_TYPE_ERROR, "%s wanted", std::define_static_string(reflect_class_name(std::meta::dealias(^^P))));
         if constexpr (reflect_mutates(type)) mrb_check_frozen(mrb, mrb_obj_ptr(v));
         return p;
+        }
     } else if constexpr (std::meta::is_lvalue_reference_type(type)) {
         reflect_holder<T> held;
         held.ptr = reflect_ptr<T>(mrb, v);
@@ -789,7 +806,13 @@ mrb_value reflect_result(mrb_state *const mrb, const mrb_value self, R &&value)
         return value < 0 ? mrb_fixnum_value(-1) : value > 0 ? mrb_fixnum_value(1) : value == 0 ? mrb_fixnum_value(0) : mrb_nil_value();
     else if constexpr (std::is_pointer_v<T>) {
         using P = std::remove_cv_t<std::remove_pointer_t<T>>;
-        if constexpr (std::same_as<P, char>) return value == nullptr ? mrb_nil_value() : mrb_str_new_cstr(mrb, value);
+        if constexpr (std::is_void_v<P>) {
+            if (value == nullptr) return mrb_nil_value();
+            constexpr bool constant = std::is_const_v<std::remove_pointer_t<T>>;
+            RClass *const klass = mrb_class_get(mrb, constant ? "ConstVoidPointer" : "VoidPointer");
+            return mrb_obj_value(mrb_data_object_alloc(mrb, klass, const_cast<void *>(static_cast<const void *>(value)),
+                                                       constant ? &mrb_const_void_pointer_type : &mrb_void_pointer_type));
+        } else if constexpr (std::same_as<P, char>) return value == nullptr ? mrb_nil_value() : mrb_str_new_cstr(mrb, value);
         else if constexpr (mrbcpp::value_converter::is_std_pair<P>::value) return value == nullptr ? mrb_nil_value() : reflect_result(mrb, self, *value);
         else return value == nullptr ? mrb_nil_value() : reflect_reference(mrb, value);
     } else if constexpr (mrbcpp::value_converter::is_std_pair<T>::value) {
@@ -954,7 +977,11 @@ bool reflect_get_args_match(mrb_state *const mrb, const std::span<const mrb_valu
             else if constexpr (letter == 's' || letter == 'z') fits = mrb_string_p(v);
             else if constexpr (letter == 'n') fits = mrb_symbol_p(v) || mrb_string_p(v);
             else if constexpr (letter == 'c') fits = mrb_class_p(v) || mrb_module_p(v);
-            else if constexpr (letter == 'o' && reflect_is_object(std::meta::type_of(P))) {
+            else if constexpr (letter == 'o' && reflect_is_void_pointer(std::meta::type_of(P))) {
+                fits = mrb_nil_p(v) || mrb_data_check_get_ptr(mrb, v, &mrb_void_pointer_type) != nullptr;
+                if constexpr (std::meta::is_const_type(std::meta::remove_pointer(reflect_bare(std::meta::type_of(P)))))
+                    fits = fits || mrb_data_check_get_ptr(mrb, v, &mrb_const_void_pointer_type) != nullptr;
+            } else if constexpr (letter == 'o' && reflect_is_object(std::meta::type_of(P))) {
                 using T = [:reflect_bare(std::meta::type_of(P)):];
                 fits = reflect_ptr<T>(mrb, v) != nullptr || ((!reflect_mutates(std::meta::type_of(P)) && reflect_from_mrb<T>) ||
                                                         (Converting && !reflect_mutates(std::meta::type_of(P)) && reflect_implicitly_converts<T>(mrb, v)) ||
@@ -1089,7 +1116,8 @@ void reflect_define_field(mrb_state *const mrb, RClass *const klass)
             mrb_value v;
             mrb_get_args(mrb, "o", &v);
             using F = [:reflect_bare(std::meta::type_of(Field)):];
-            if (F *const p = reflect_ptr<F>(mrb, v); p != nullptr) object->[:Field:] = *p;
+            if constexpr (std::is_pointer_v<F> && std::is_void_v<std::remove_pointer_t<F>>) object->[:Field:] = reflect_void_ptr<std::remove_pointer_t<F>>(mrb, v);
+            else if (F *const p = reflect_ptr<F>(mrb, v); p != nullptr) object->[:Field:] = *p;
             else if constexpr (reflect_from_mrb<F>) object->[:Field:] = mrb_value_to<F>(mrb, v);
             else mrb_raise(mrb, E_TYPE_ERROR, "wrong type");
             return v;
@@ -1181,7 +1209,8 @@ void reflect_define_static_data_member(mrb_state *const mrb, RClass *const singl
             using F = [:reflect_bare(std::meta::type_of(Member)):];
             mrb_value v;
             mrb_get_args(mrb, "o", &v);
-            if (F *const p = reflect_ptr<F>(mrb, v); p != nullptr) [:Member:] = *p;
+            if constexpr (std::is_pointer_v<F> && std::is_void_v<std::remove_pointer_t<F>>) [:Member:] = reflect_void_ptr<std::remove_pointer_t<F>>(mrb, v);
+            else if (F *const p = reflect_ptr<F>(mrb, v); p != nullptr) [:Member:] = *p;
             else if constexpr (reflect_from_mrb<F>) [:Member:] = mrb_value_to<F>(mrb, v);
             else mrb_raise(mrb, E_TYPE_ERROR, "wrong type");
             return v;
@@ -1213,7 +1242,8 @@ void reflect_define_element_assignment(mrb_state *const mrb, RClass *const metho
         mrb_get_args(mrb, "oo", &index, &v);
         auto held = reflect_argument<std::meta::parameters_of(Subscript)[0]>(mrb, index);
         E &element = object->[:Subscript:](reflect_pass(held));
-        if (E *const p = reflect_ptr<E>(mrb, v); p != nullptr) element = *p;
+        if constexpr (std::is_pointer_v<E> && std::is_void_v<std::remove_pointer_t<E>>) element = reflect_void_ptr<std::remove_pointer_t<E>>(mrb, v);
+            else if (E *const p = reflect_ptr<E>(mrb, v); p != nullptr) element = *p;
         else if constexpr (reflect_from_mrb<E>) element = mrb_value_to<E>(mrb, v);
         else mrb_raise(mrb, E_TYPE_ERROR, "wrong type");
         return v;

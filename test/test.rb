@@ -197,6 +197,43 @@ assert('a std::function parameter takes anything that answers call') do
   assert_raise(TypeError) { c.apply(5, 3) }
 end
 
+# A void pointer has no type that Ruby can check, so Ruby gets an object
+# that holds the address and nothing that reads the memory behind it. A
+# const void pointer is a class of its own, so a C++ function that takes
+# a void pointer cannot be given one that C++ made const.
+# A const on the pointer itself makes a field read only and changes
+# nothing else.
+assert('a void pointer crosses as VoidPointer or ConstVoidPointer') do
+  c = Callback.new
+  seen = []
+  assert_true(c.compare(->(left, right) { seen << left << right; true }))
+  left, right = seen
+  assert_equal(ConstVoidPointer, left.class)
+  assert_equal(VoidPointer, right.class)
+  assert_equal(left.address, right.address)
+  assert_equal(left.address, left.to_i)
+  assert_true(left == right)
+  assert_true(right.dup == right)
+  assert_true(c.same(left, right))
+  assert_true(c.same(right, c.address.call(right)))
+  assert_nil(c.address.call(nil))
+  assert_raise(TypeError) { c.address.call(left) }
+  assert_raise(TypeError) { c.same(1, left) }
+  assert_equal(ConstVoidPointer, c.fixed.class)
+  assert_true(c.same(c.fixed, c.where))
+  assert_nil(c.place)
+  c.place = right
+  assert_true(c.same(c.place, right))
+  assert_raise(TypeError) { c.place = left }
+  assert_false(c.respond_to?(:where=))
+  Callback.anywhere = right
+  assert_true(c.same(Callback.anywhere, right))
+  Callback.anywhere = nil
+  assert_nil(Callback.anywhere)
+  assert_raise(NoMethodError) { VoidPointer.new }
+  assert_raise(NoMethodError) { ConstVoidPointer.new }
+end
+
 assert('a callback C++ keeps survives a full collection') do
   c = Callback.new
   c.keep(->(n) { n * 10 })

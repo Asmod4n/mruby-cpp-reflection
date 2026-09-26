@@ -108,6 +108,7 @@ consteval char reflect_get_args_letter(const std::meta::info type)
     if (std::meta::is_pointer_type(t)) {
         const std::meta::info to = std::meta::dealias(std::meta::remove_cv(std::meta::remove_pointer(t)));
         if (to == ^^char) return 'z';
+        if (to == ^^void) return 'o';
         return std::meta::is_class_type(to) ? 'o' : '\0';
     }
     if (t == std::meta::dealias(^^mrb_value)) return 'o';
@@ -120,6 +121,12 @@ consteval char reflect_get_args_letter(const std::meta::info type)
     if (std::meta::is_floating_point_type(t)) return 'f';
     if (std::meta::is_class_type(t)) return 'o';
     return '\0';
+}
+
+consteval bool reflect_is_void_pointer(const std::meta::info type)
+{
+    const std::meta::info t = reflect_bare(type);
+    return std::meta::is_pointer_type(t) && std::meta::dealias(std::meta::remove_cv(std::meta::remove_pointer(t))) == ^^void;
 }
 
 consteval bool reflect_mutates(const std::meta::info type)
@@ -191,7 +198,7 @@ consteval bool reflect_parameter_supported(const std::meta::info type)
     if (reflect_get_args_letter(type) == '\0') return false;
     const bool class_pointer = std::meta::is_pointer_type(reflect_bare(type)) &&
                                std::meta::is_class_type(std::meta::dealias(std::meta::remove_cv(std::meta::remove_pointer(reflect_bare(type)))));
-    if (reflect_mutates(type) && !reflect_is_object(type) && !class_pointer) return false;
+    if (reflect_mutates(type) && !reflect_is_object(type) && !class_pointer && !reflect_is_void_pointer(type)) return false;
     if (std::meta::is_pointer_type(reflect_bare(type))) {
         const std::meta::info to = std::meta::dealias(std::meta::remove_cv(std::meta::remove_pointer(reflect_bare(type))));
         if (std::meta::is_class_type(to) && !std::meta::is_complete_type(to)) return false;
@@ -211,7 +218,7 @@ consteval bool reflect_result_supported(const std::meta::info type)
     if (bare == ^^void || bare == std::meta::dealias(^^mrb_value) || bare == ^^bool || std::meta::is_arithmetic_type(bare)) return true;
     if (std::meta::is_pointer_type(bare)) {
         const std::meta::info to = std::meta::dealias(std::meta::remove_cv(std::meta::remove_pointer(bare)));
-        return to == ^^char || (std::meta::is_class_type(to) && std::meta::is_complete_type(to));
+        return to == ^^char || to == ^^void || (std::meta::is_class_type(to) && std::meta::is_complete_type(to));
     }
     if (!std::meta::is_class_type(bare) || !std::meta::is_complete_type(bare) || std::meta::is_abstract_type(bare) || reflect_is_iterator(bare)) return false;
     if (std::meta::has_template_arguments(bare) && std::meta::template_of(bare) == ^^std::pair) return true;
