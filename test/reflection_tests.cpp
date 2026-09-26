@@ -385,8 +385,21 @@ static mrb_value full_gc_m(mrb_state *mrb, mrb_value)
     return mrb_nil_value();
 }
 
+/* reflect_undefined raises in the state whose call reached it, even
+ * when a callback ran code in another state on the same thread in the
+ * meantime. */
+static mrb_value undefined_after_other_state_m(mrb_state *mrb, mrb_value)
+{
+    mrb_state *const other = mrb_open();
+    mrb_cpp_reflector::reflect_define<classes>(other);
+    mrb_load_string(other, "Callback.new.apply(->(n) { n }, 1)");
+    mrb_close(other);
+    return mrb_load_string(mrb, "begin; Reflected.new.label; Std::Allocator[:char].new.allocate_at_least(1); rescue NotImplementedError; :raised_here; end");
+}
+
 extern "C" void mrb_mruby_cpp_reflection_gem_test(mrb_state *mrb)
 {
+    mrb_define_module_function(mrb, mrb->kernel_module, "undefined_after_other_state", undefined_after_other_state_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "full_gc", full_gc_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "cancelled_through_a_call?", cancelled_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "second_state", second_state_m, MRB_ARGS_NONE());

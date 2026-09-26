@@ -387,3 +387,8 @@ assert('a function no linked library defines raises NotImplementedError') do
   Reflected.new.label
   assert_raise(NotImplementedError) { Std::Allocator[:char].new.allocate_at_least(1) }
 end
+
+assert('a function no library defines raises in the state that called it') do
+  assert_equal(:raised_here, undefined_after_other_state)
+end
+

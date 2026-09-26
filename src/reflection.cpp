@@ -4,13 +4,12 @@
 #include <mruby/reflection.hpp>
 #endif
 
-extern "C" thread_local mrb_state *reflect_calling = nullptr;
-
+#if defined(__cpp_impl_reflection)
 extern "C" [[noreturn]] void reflect_undefined()
 {
-    mrb_state *const mrb = reflect_calling;
-    mrb_raise(mrb, E_NOTIMP_ERROR, "no linked library defines this function");
+    throw mrb_cpp_reflector::reflect_undefined_call();
 }
+#endif
 
 extern "C" void mrb_mruby_cpp_reflection_gem_init(mrb_state *) {}
 

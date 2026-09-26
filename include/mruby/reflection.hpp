@@ -51,8 +51,6 @@
 inline constexpr std::array<std::pair<std::string_view, mrb_sym>, 0> reflect_presyms{};
 #endif
 
-extern "C" thread_local mrb_state *reflect_calling;
-
 namespace mrb_cpp_reflector
 {
 
@@ -328,8 +326,29 @@ const reflect_data_type &reflect_data_type_guarded()
     return type;
 }
 
+struct reflect_undefined_call : std::exception {
+    const char *what() const noexcept override { return "no linked library defines this function"; }
+};
+
+struct reflect_definition {
+    using registration = void (*)(reflect_definition &, RClass *);
+    mrb_state *mrb;
+    std::vector<std::pair<registration, RClass *>> pending;
+    explicit reflect_definition(mrb_state *const state) : mrb(state) {}
+    reflect_definition(const reflect_definition &) = delete;
+    reflect_definition &operator=(const reflect_definition &) = delete;
+    void finish()
+    {
+        while (!pending.empty()) {
+            const auto [registration, klass] = pending.front();
+            pending.erase(pending.begin());
+            registration(*this, klass);
+        }
+    }
+};
+
 template <std::meta::info Type>
-RClass *reflect_define_class(mrb_state *mrb, RClass *super);
+RClass *reflect_define_class(reflect_definition &definition, RClass *super);
 
 template <std::meta::info Bare>
 mrb_sym reflect_class_key(mrb_state *const mrb)
@@ -360,12 +379,22 @@ RClass *reflect_module(mrb_state *const mrb)
 }
 
 template <std::meta::info Type>
-RClass *reflect_class(mrb_state *const mrb)
+RClass *reflect_class(reflect_definition &definition)
 {
+    mrb_state *const mrb = definition.mrb;
     constexpr std::meta::info bare = std::meta::dealias(std::meta::remove_cvref(Type));
     const mrb_sym key = reflect_class_key<bare>(mrb);
-    if (!mrb_iv_defined(mrb, mrb_obj_value(mrb->object_class), key)) reflect_define_class<bare>(mrb, mrb->object_class);
+    if (!mrb_iv_defined(mrb, mrb_obj_value(mrb->object_class), key)) reflect_define_class<bare>(definition, mrb->object_class);
     return mrb_class_ptr(mrb_iv_get(mrb, mrb_obj_value(mrb->object_class), key));
+}
+
+template <std::meta::info Type>
+RClass *reflect_class(mrb_state *const mrb)
+{
+    reflect_definition definition(mrb);
+    RClass *const klass = reflect_class<Type>(definition);
+    definition.finish();
+    return klass;
 }
 
 template <class T>
@@ -797,6 +826,9 @@ mrb_value reflect_translate_exceptions(mrb_state *const mrb, const Call &call)
     } catch (abi::__forced_unwind &) {
         throw;
 #endif
+    } catch (const reflect_undefined_call &e) {
+        kind = E_NOTIMP_ERROR;
+        what = e.what();
     } catch (const std::bad_alloc &e) {
         kind = mrb_exc_get_id(mrb, MRB_ERROR_SYM(NoMemoryError));
         what = e.what();
@@ -854,7 +886,6 @@ mrb_value reflect_translate_exceptions(mrb_state *const mrb, const Call &call)
 template <std::meta::info Type, std::meta::info Function, std::size_t Count = std::meta::parameters_of(Function).size()>
 mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
 {
-    reflect_calling = mrb;
     using T = [:std::meta::dealias(Type):];
     if constexpr (std::meta::is_constructor(Function)) {
         auto args = reflect_get_args<Function, 0, Count>(mrb);
@@ -1204,13 +1235,14 @@ consteval std::string reflect_symbol_name(const std::meta::info type)
 }
 
 template <std::meta::info Type>
-mrb_value reflect_type_value(mrb_state *const mrb)
+mrb_value reflect_type_value(reflect_definition &definition)
 {
+    mrb_state *const mrb = definition.mrb;
     constexpr std::meta::info t = std::meta::dealias(Type);
-    if constexpr (std::meta::is_class_type(t) && std::meta::is_complete_type(t)) return mrb_obj_value(reflect_class<t>(mrb));
+    if constexpr (std::meta::is_class_type(t) && std::meta::is_complete_type(t)) return mrb_obj_value(reflect_class<t>(definition));
     else if constexpr (std::meta::is_pointer_type(t)) {
         constexpr std::meta::info pointee = std::meta::remove_pointer(t);
-        const mrb_value inner = reflect_type_value<std::meta::dealias(std::meta::remove_cv(pointee))>(mrb);
+        const mrb_value inner = reflect_type_value<std::meta::dealias(std::meta::remove_cv(pointee))>(definition);
         if (mrb_class_p(inner)) {
             RClass *const pointer = mrb_define_class_under(mrb, mrb_class_ptr(inner), std::meta::is_const_type(pointee) ? "ConstPtr" : "Ptr", mrb->object_class);
             MRB_UNDEF_ALLOCATOR(pointer);
@@ -1225,9 +1257,10 @@ mrb_value reflect_type_value(mrb_state *const mrb)
 }
 
 template <std::meta::info Argument>
-mrb_value reflect_template_argument(mrb_state *const mrb)
+mrb_value reflect_template_argument(reflect_definition &definition)
 {
-    if constexpr (std::meta::is_type(Argument)) return reflect_type_value<Argument>(mrb);
+    mrb_state *const mrb = definition.mrb;
+    if constexpr (std::meta::is_type(Argument)) return reflect_type_value<Argument>(definition);
     else if constexpr (std::meta::is_integral_type(std::meta::type_of(Argument)))
     {
         constexpr auto value = std::meta::extract<typename [:std::meta::type_of(Argument):]>(Argument);
@@ -1291,13 +1324,14 @@ inline mrb_value reflect_template_lookup(mrb_state *const mrb, const mrb_value s
 }
 
 template <std::meta::info Type>
-void reflect_register_specialization(mrb_state *const mrb, RClass *const klass)
+void reflect_register_specialization(reflect_definition &definition, RClass *const klass)
 {
+    mrb_state *const mrb = definition.mrb;
     constexpr std::meta::info t = std::meta::dealias(Type);
     RClass *const templ = mrb_class_ptr(mrb_iv_get(mrb, mrb_obj_value(mrb->object_class), reflect_template_key<t>(mrb)));
     static constexpr auto arguments = std::define_static_array(std::meta::template_arguments_of(t));
     const mrb_value values = mrb_ary_new_capa(mrb, static_cast<mrb_int>(arguments.size()));
-    template for (constexpr std::meta::info argument : arguments) mrb_ary_push(mrb, values, reflect_template_argument<argument>(mrb));
+    template for (constexpr std::meta::info argument : arguments) mrb_ary_push(mrb, values, reflect_template_argument<argument>(definition));
     const mrb_sym table_key = mrb_intern_lit(mrb, "reflected specializations");
     mrb_value table = mrb_iv_get(mrb, mrb_obj_value(templ), table_key);
     if (!mrb_hash_p(table)) {
@@ -1338,75 +1372,34 @@ void reflect_register_specialization(mrb_state *const mrb, RClass *const klass)
     }
 }
 
-using reflect_registration = void (*)(mrb_state *, RClass *);
-
-inline mrb_sym reflect_pending_key(mrb_state *const mrb)
-{
-    return mrb_intern_lit(mrb, "reflected pending");
-}
-
-inline mrb_value reflect_pending(mrb_state *const mrb)
-{
-    mrb_value pending = mrb_iv_get(mrb, mrb_obj_value(mrb->object_class), reflect_pending_key(mrb));
-    if (!mrb_array_p(pending)) {
-        pending = mrb_ary_new(mrb);
-        mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), reflect_pending_key(mrb), pending);
-    }
-    return pending;
-}
-
-inline mrb_int &reflect_defining(mrb_state *const mrb, const mrb_int change)
-{
-    static thread_local mrb_int depth = 0;
-    depth += change;
-    return depth;
-}
-
-inline void reflect_register_pending(mrb_state *const mrb)
-{
-    const mrb_value pending = reflect_pending(mrb);
-    while (RARRAY_LEN(pending) > 0) {
-        const mrb_value entry = mrb_ary_shift(mrb, pending);
-        const reflect_registration registration = reinterpret_cast<reflect_registration>(mrb_cptr(RARRAY_PTR(entry)[1]));
-        registration(mrb, mrb_class_ptr(RARRAY_PTR(entry)[0]));
-    }
-}
-
 template <std::meta::info Type>
-RClass *reflect_define_specialization(mrb_state *const mrb, RClass *const outer, RClass *const superclass)
+RClass *reflect_define_specialization(reflect_definition &definition, RClass *const outer, RClass *const superclass)
 {
+    mrb_state *const mrb = definition.mrb;
     constexpr std::meta::info t = std::meta::dealias(Type);
     RClass *const templ = ::mrb_define_module_under_id(mrb, outer, reflect_intern<Type>(mrb));
     ::mrb_define_class_method_id(mrb, templ, mrb_intern_lit(mrb, "[]"), reflect_template_lookup, MRB_ARGS_ANY());
     RClass *const klass = mrb_class_new(mrb, superclass);
     mrb_include_module(mrb, klass, templ);
     mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), reflect_template_key<t>(mrb), mrb_obj_value(templ));
-    const mrb_value entry[2] = {mrb_obj_value(klass), mrb_cptr_value(mrb, reinterpret_cast<void *>(&reflect_register_specialization<t>))};
-    mrb_ary_push(mrb, reflect_pending(mrb), mrb_ary_new_from_values(mrb, 2, entry));
+    definition.pending.emplace_back(&reflect_register_specialization<t>, klass);
     return klass;
 }
 
 template <std::meta::info Type>
-RClass *reflect_define_class(mrb_state *const mrb, RClass *const under)
+RClass *reflect_define_class(reflect_definition &definition, RClass *const under)
 {
-    struct defining {
-        mrb_state *mrb;
-        explicit defining(mrb_state *const state) : mrb(state) { reflect_defining(mrb, 1); }
-        ~defining()
-        {
-            if (reflect_defining(mrb, -1) == 0) reflect_register_pending(mrb);
-        }
-    } const scope(mrb);
+    mrb_state *const mrb = definition.mrb;
     using T = [:std::meta::dealias(Type):];
     RClass *outer = under;
     template for (constexpr std::meta::info scope : std::define_static_array(reflect_namespaces(Type)))
         outer = ::mrb_define_module_under_id(mrb, outer, reflect_intern<scope>(mrb));
     static constexpr auto direct = std::define_static_array(reflect_direct_bases(Type));
     RClass *superclass = mrb->object_class;
-    if constexpr (direct.size() > 0) superclass = reflect_class<direct[0]>(mrb);
+    if constexpr (direct.size() > 0) superclass = reflect_class<direct[0]>(definition);
     RClass *klass;
     if constexpr (std::meta::has_template_arguments(std::meta::dealias(Type))) {
-        klass = reflect_define_specialization<Type>(mrb, outer, superclass);
+        klass = reflect_define_specialization<Type>(definition, outer, superclass);
     } else if constexpr (std::meta::has_identifier(std::meta::dealias(Type))) {
         const mrb_sym name = reflect_intern<Type>(mrb);
         if (mrb_const_defined_at(mrb, mrb_obj_value(outer), name))
@@ -1420,7 +1413,7 @@ RClass *reflect_define_class(mrb_state *const mrb, RClass *const under)
     RClass *const methods = ::mrb_define_module_under_id(mrb, klass, reflect_sym<kInstanceMethods>(mrb));
     mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), reflect_module_key<std::meta::dealias(std::meta::remove_cvref(Type))>(mrb), mrb_obj_value(methods));
     template for (constexpr std::meta::info base : direct) {
-        reflect_class<base>(mrb);
+        reflect_class<base>(definition);
         mrb_include_module(mrb, methods, reflect_module<base>(mrb));
     }
     if constexpr (!std::is_abstract_v<T> && reflect_constructors<Type>().size() > 0) {
@@ -1518,8 +1511,11 @@ RClass *reflect_define_class(mrb_state *const mrb, RClass *const under)
 template <auto Classes>
 void reflect_define(mrb_state *const mrb, RClass *const under = nullptr)
 {
+    reflect_definition definition(mrb);
     template for (constexpr std::meta::info type : Classes)
-        if (!mrb_iv_defined(mrb, mrb_obj_value(mrb->object_class), reflect_class_key<std::meta::dealias(std::meta::remove_cvref(type))>(mrb))) reflect_define_class<type>(mrb, under != nullptr ? under : mrb->object_class);
+        if (!mrb_iv_defined(mrb, mrb_obj_value(mrb->object_class), reflect_class_key<std::meta::dealias(std::meta::remove_cvref(type))>(mrb)))
+            reflect_define_class<type>(definition, under != nullptr ? under : mrb->object_class);
+    definition.finish();
 }
 
 }
