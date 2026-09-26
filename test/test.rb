@@ -161,5 +161,11 @@ assert('a C++ exception is the Ruby exception for it') do
   assert_equal('negative', assert_raise(ArgumentError) { Thrower.new(-1) }.message)
   assert_equal(2, Thrower.new(1).at(1))
   assert_raise(RuntimeError) { t.number }
+  assert_raise(NoMemoryError) { t.memory }
+  assert_equal('domain', assert_raise(FloatDomainError) { t.domain }.message)
+  assert_equal('length', assert_raise(IndexError) { t.length }.message)
+  assert_raise(Errno::ENOENT) { t.system }
+  assert_raise(RegexpError) { t.regex }
+  assert_raise(Object.const_defined?(:IOError) ? Object.const_get(:IOError) : Errno::ENOENT) { t.filesystem }
 end
 

@@ -17,7 +17,11 @@
 #include <mruby/mrb_value_to_cpp.hpp>
 #include <mruby/reflect_presyms.hpp>
 
+#if defined(__GLIBCXX__)
+#include <cxxabi.h>
+#endif
 #include <array>
+#include <cerrno>
 #include <compare>
 #include <concepts>
 #include <cstddef>
@@ -27,6 +31,9 @@
 #include <optional>
 #include <ranges>
 #include <span>
+#include <filesystem>
+#include <regex>
+#include <system_error>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -319,21 +326,53 @@ mrb_value reflect_result(mrb_state *const mrb, const mrb_value self, R &&value)
 template <class Call>
 mrb_value reflect_translate_exceptions(mrb_state *const mrb, const Call &call)
 {
-    RClass *kind;
+    RClass *kind = nullptr;
+    int system_errno = 0;
     std::string what;
     try {
         return call();
+    } catch (mrb_jmpbuf *) {
+        throw;
+#if defined(__GLIBCXX__)
+    } catch (abi::__forced_unwind &) {
+        throw;
+#endif
+    } catch (const std::bad_alloc &e) {
+        kind = mrb_exc_get_id(mrb, MRB_ERROR_SYM(NoMemoryError));
+        what = e.what();
+    } catch (const std::domain_error &e) {
+#if defined(MRB_NO_FLOAT)
+        kind = E_RANGE_ERROR;
+#else
+        kind = E_FLOATDOMAIN_ERROR;
+#endif
+        what = e.what();
     } catch (const std::invalid_argument &e) {
         kind = E_ARGUMENT_ERROR;
+        what = e.what();
+    } catch (const std::filesystem::filesystem_error &e) {
+        if (mrb_class_defined(mrb, "IOError")) kind = mrb_class_get(mrb, "IOError");
+        else if (e.code().category() == std::generic_category() || e.code().category() == std::system_category()) system_errno = e.code().value();
+        else kind = E_RUNTIME_ERROR;
+        what = e.what();
+    } catch (const std::length_error &e) {
+        kind = E_INDEX_ERROR;
         what = e.what();
     } catch (const std::out_of_range &e) {
         kind = E_INDEX_ERROR;
         what = e.what();
+    } catch (const std::overflow_error &e) {
+        kind = E_RANGE_ERROR;
+        what = e.what();
     } catch (const std::range_error &e) {
         kind = E_RANGE_ERROR;
         what = e.what();
-    } catch (const std::overflow_error &e) {
-        kind = E_RANGE_ERROR;
+    } catch (const std::regex_error &e) {
+        kind = E_REGEXP_ERROR;
+        what = e.what();
+    } catch (const std::system_error &e) {
+        if (e.code().category() == std::generic_category() || e.code().category() == std::system_category()) system_errno = e.code().value();
+        else kind = E_RUNTIME_ERROR;
         what = e.what();
     } catch (const std::underflow_error &e) {
         kind = E_RANGE_ERROR;
@@ -341,11 +380,13 @@ mrb_value reflect_translate_exceptions(mrb_state *const mrb, const Call &call)
     } catch (const std::exception &e) {
         kind = E_RUNTIME_ERROR;
         what = e.what();
-    } catch (mrb_jmpbuf *) {
-        throw;
     } catch (...) {
         kind = E_RUNTIME_ERROR;
-        what = "a C++ exception that is not a std::exception";
+        what = "Unknown C++ exception thrown";
+    }
+    if (kind == nullptr) {
+        errno = system_errno;
+        mrb_sys_fail(mrb, what.c_str());
     }
     mrb_exc_raise(mrb, mrb_exc_new(mrb, kind, what.data(), static_cast<mrb_int>(what.size())));
 }

@@ -13,6 +13,10 @@
 #include <mruby/reflection.hpp>
 #include <compare>
 #include <stdexcept>
+#include <new>
+#include <system_error>
+#include <regex>
+#include <filesystem>
 
 struct Reflected {
     mrb_int total = 0;
@@ -139,8 +143,10 @@ struct Static {
 };
 mrb_int Static::count = 1;
 /* What a reflected function throws reaches Ruby as the exception Ruby
- * has for it, with what() as the message; a constructor that throws
- * leaves no object behind. */
+ * has for it, with what() as the message, in the table Rice uses
+ * (rice/detail/cpp_protect.hpp). A class a build does not have gives
+ * way to the class for the C++ base. A constructor that throws leaves no
+ * object behind. */
 struct Thrower {
     std::vector<mrb_int> seen{1, 2};
     Thrower() = default;
@@ -150,6 +156,12 @@ struct Thrower {
     void overflow() const { throw std::overflow_error("too big"); }
     void runtime() const { throw std::runtime_error("broken"); }
     void number() const { throw 42; }
+    void memory() const { throw std::bad_alloc(); }
+    void domain() const { throw std::domain_error("domain"); }
+    void length() const { throw std::length_error("length"); }
+    void system() const { throw std::system_error(std::make_error_code(std::errc::no_such_file_or_directory), "open"); }
+    void regex() const { throw std::regex_error(std::regex_constants::error_paren); }
+    void filesystem() const { throw std::filesystem::filesystem_error("fs", std::make_error_code(std::errc::no_such_file_or_directory)); }
 };
 constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower>();
 constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();
