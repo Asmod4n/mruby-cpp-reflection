@@ -251,7 +251,23 @@ struct Sharer {
     mrb_int count(const std::shared_ptr<Share> &s) const { return s.use_count(); }
     bool same(const std::shared_ptr<Share> &s) const { return s == held; }
 };
-constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Sharer>();
+/* A raw pointer or a reference to an object that derives from
+ * std::enable_shared_from_this and belongs to a std::shared_ptr gives
+ * Ruby a share of it, so the object outlives what C++ drops. */
+struct SelfShare : std::enable_shared_from_this<SelfShare> {
+    mrb_int v;
+    explicit SelfShare(mrb_int n) : v(n) { ++shares_alive(); }
+    SelfShare(const SelfShare &) = delete;
+    SelfShare &operator=(const SelfShare &) = delete;
+    ~SelfShare() { --shares_alive(); }
+};
+struct SelfSharer {
+    std::shared_ptr<SelfShare> held = std::make_shared<SelfShare>(9);
+    SelfShare *raw() const { return held.get(); }
+    SelfShare &ref() const { return *held; }
+    void drop() { held.reset(); }
+};
+constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Sharer, ^^SelfSharer>();
 constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();
 
 static_assert(std::string_view(mrb_cpp_reflector::reflect_get_args_format<std::meta::members_of(^^Reflected, std::meta::access_context::current())[2]>().data()) == "si");

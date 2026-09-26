@@ -217,7 +217,10 @@ template <class T>
 const reflect_data_type &reflect_data_type_owned()
 {
     static constexpr auto name = std::define_static_string(reflect_class_name(^^T));
-    if constexpr (reflect_trackable<T>) {
+    if constexpr (!std::is_destructible_v<T>) {
+        static const reflect_data_type type{{name, nullptr}, reflect_upcasts<T>(), nullptr};
+        return type;
+    } else if constexpr (reflect_trackable<T>) {
         static const reflect_data_type type{{name, [](mrb_state *const mrb, void *const p) {
                                                  if (p == nullptr) return;
                                                  reflect_tracked<T> *const tracked = static_cast<reflect_tracked<T> *>(static_cast<T *>(p));
@@ -623,6 +626,15 @@ auto reflect_get_args(mrb_state *const mrb)
     }(std::make_index_sequence<Count>{});
 }
 
+template <class P>
+mrb_value reflect_shared_from(mrb_state *const mrb, P *const object)
+{
+    if constexpr (requires { object->weak_from_this().lock(); }) {
+        if (auto whole = object->weak_from_this().lock(); whole != nullptr) return reflect_result(mrb, mrb_nil_value(), std::shared_ptr<P>(std::move(whole), object));
+    }
+    return mrb_undef_value();
+}
+
 template <class R>
 mrb_value reflect_result(mrb_state *const mrb, const mrb_value self, R &&value)
 {
@@ -631,9 +643,9 @@ mrb_value reflect_result(mrb_state *const mrb, const mrb_value self, R &&value)
     if constexpr (reflect_is_shared_ptr(^^T)) {
         using E = typename T::element_type;
         if (value == nullptr) return mrb_nil_value();
-        const mrb_value object = reflect_borrowed<E>(mrb, value.get(), mrb_nil_value(), std::is_const_v<E>);
+        const mrb_value object = reflect_borrowed<std::remove_const_t<E>>(mrb, const_cast<std::remove_const_t<E> *>(value.get()), mrb_nil_value(), std::is_const_v<E>);
         if (mrb_nil_p(mrb_iv_get(mrb, object, reflect_share_key(mrb)))) {
-            RData *const keeper = mrb_data_object_alloc(mrb, mrb->object_class, new std::shared_ptr<void>(value), &reflect_data_type_share());
+            RData *const keeper = mrb_data_object_alloc(mrb, mrb->object_class, new std::shared_ptr<void>(std::const_pointer_cast<std::remove_const_t<E>>(value)), &reflect_data_type_share());
             mrb_iv_set(mrb, object, reflect_share_key(mrb), mrb_obj_value(keeper));
         }
         return object;
@@ -650,13 +662,20 @@ mrb_value reflect_result(mrb_state *const mrb, const mrb_value self, R &&value)
         using P = std::remove_cv_t<std::remove_pointer_t<T>>;
         if constexpr (std::same_as<P, char>) return value == nullptr ? mrb_nil_value() : mrb_str_new_cstr(mrb, value);
         else if constexpr (mrbcpp::value_converter::is_std_pair<P>::value) return value == nullptr ? mrb_nil_value() : reflect_result(mrb, self, *value);
-        else return value == nullptr ? mrb_nil_value() : reflect_borrowed<P>(mrb, const_cast<P *>(value), self, std::is_const_v<std::remove_pointer_t<T>>);
+        else {
+            if (value == nullptr) return mrb_nil_value();
+            if (const mrb_value shared = reflect_shared_from(mrb, value); !mrb_undef_p(shared)) return shared;
+            return reflect_borrowed<P>(mrb, const_cast<P *>(value), self, std::is_const_v<std::remove_pointer_t<T>>);
+        }
     } else if constexpr (mrbcpp::value_converter::is_std_pair<T>::value) {
         const mrb_value pair = mrb_ary_new_capa(mrb, 2);
         mrb_ary_push(mrb, pair, reflect_result(mrb, self, value.first));
         mrb_ary_push(mrb, pair, reflect_result(mrb, self, value.second));
         return pair;
-    } else if constexpr (std::is_lvalue_reference_v<R>) return reflect_borrowed<T>(mrb, const_cast<T *>(&value), self, frozen);
+    } else if constexpr (std::is_lvalue_reference_v<R>) {
+        if (const mrb_value shared = reflect_shared_from(mrb, &value); !mrb_undef_p(shared)) return shared;
+        return reflect_borrowed<T>(mrb, const_cast<T *>(&value), self, frozen);
+    }
     else if constexpr (reflect_is_view(^^T)) return reflect_view<T>(mrb, std::move(value), self, frozen);
     else return reflect_object<T>(mrb, std::move(value), frozen);
 }

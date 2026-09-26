@@ -292,3 +292,19 @@ assert('an object in a std::shared_ptr lives as long as Ruby holds it') do
   assert_equal(base, Share.alive)
 end
 
+assert('a pointer to an object that shares from itself keeps a share') do
+  full_gc
+  base = Share.alive
+  sharer = SelfSharer.new
+  raw = sharer.raw
+  ref = sharer.ref
+  sharer.drop
+  full_gc
+  assert_equal(9, raw.v)
+  assert_equal(9, ref.v)
+  assert_equal(base + 1, Share.alive)
+  raw = nil
+  ref = nil
+  sharer = nil
+end
+
