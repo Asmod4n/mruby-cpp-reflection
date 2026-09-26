@@ -341,7 +341,12 @@ struct reflect_definition {
     }
 };
 
-template <std::meta::info Type>
+struct reflect_options {
+    bool templates = false;
+    bool nested_types = false;
+};
+
+template <std::meta::info Type, reflect_options Options = reflect_options{}>
 RClass *reflect_define_class(reflect_definition &definition, RClass *super);
 
 template <std::meta::info Type>
@@ -1417,7 +1422,7 @@ mrb_value reflect_enumerator(mrb_state *const mrb, const E value)
     return reflect_object(mrb, value, true);
 }
 
-template <std::meta::info Type>
+template <std::meta::info Type, reflect_options Options>
 RClass *reflect_define_class(reflect_definition &definition, RClass *const under)
 {
     mrb_state *const mrb = definition.mrb;
@@ -1539,6 +1544,12 @@ RClass *reflect_define_class(reflect_definition &definition, RClass *const under
     }
     reflect_define_conversions<T>(mrb, klass);
     if constexpr (std::is_copy_assignable_v<T>) reflect_define_replace<T>(mrb, klass);
+    template for (constexpr std::meta::info nested : std::define_static_array(Options.nested_types ? reflect_nested_types(Type) : reflect_nested_types_used<Type>())) {
+        if (!mrb_iv_defined(mrb, mrb_obj_value(mrb->object_class), reflect_class_key<nested>(mrb))) {
+            if constexpr (std::meta::is_enum_type(nested)) reflect_define_enum<nested>(definition, mrb->object_class);
+            else reflect_define_class<nested, Options>(definition, mrb->object_class);
+        }
+    }
     return klass;
 }
 
@@ -1568,7 +1579,7 @@ RClass *reflect_define_namespace(reflect_definition &definition, RClass *const u
     return module;
 }
 
-template <auto Classes>
+template <auto Classes, reflect_options Options = reflect_options{}>
 void reflect_define(mrb_state *const mrb, RClass *const under = nullptr)
 {
     reflect_definition definition(mrb);
@@ -1577,7 +1588,7 @@ void reflect_define(mrb_state *const mrb, RClass *const under = nullptr)
         else if (!mrb_iv_defined(mrb, mrb_obj_value(mrb->object_class), reflect_class_key<std::meta::dealias(std::meta::remove_cvref(type))>(mrb)))
         {
             if constexpr (std::meta::is_enum_type(std::meta::dealias(type))) reflect_define_enum<type>(definition, under != nullptr ? under : mrb->object_class);
-            else reflect_define_class<type>(definition, under != nullptr ? under : mrb->object_class);
+            else reflect_define_class<type, Options>(definition, under != nullptr ? under : mrb->object_class);
         }
     }
     definition.finish();

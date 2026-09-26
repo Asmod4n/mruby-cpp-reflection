@@ -432,6 +432,39 @@ consteval std::array<std::meta::info, sizeof...(Types)> reflect()
     return {Types...};
 }
 
+consteval std::vector<std::meta::info> reflect_nested_types(const std::meta::info type)
+{
+    std::vector<std::meta::info> nested;
+    for (const std::meta::info m : std::meta::members_of(std::meta::dealias(type), std::meta::access_context::current()))
+        if (std::meta::is_type(m) && !std::meta::is_type_alias(m) && (std::meta::is_class_type(m) || std::meta::is_enum_type(m)) &&
+            std::meta::has_identifier(m) && std::meta::is_complete_type(m) && !reflect_reserved(m))
+            nested.push_back(m);
+    return nested;
+}
+
+template <std::meta::info Type>
+consteval std::vector<std::meta::info> reflect_nested_types_used()
+{
+    std::vector<std::meta::info> used;
+    const std::vector<std::meta::info> nested = reflect_nested_types(Type);
+    const auto note = [&](const std::meta::info type) {
+        std::meta::info t = reflect_bare(type);
+        while (std::meta::is_pointer_type(t)) t = std::meta::dealias(std::meta::remove_cv(std::meta::remove_pointer(t)));
+        if (std::ranges::find(used, t) == used.end() && std::ranges::find(nested, t) != nested.end()) used.push_back(t);
+    };
+    const auto signature = [&](const std::meta::info function) {
+        if (!std::meta::is_constructor(function)) note(std::meta::return_type_of(function));
+        for (const std::meta::info p : std::meta::parameters_of(function)) note(std::meta::type_of(p));
+    };
+    for (const std::meta::info f : reflect_members<Type>()) signature(f);
+    for (const std::meta::info f : reflect_static_functions<Type>()) signature(f);
+    for (const std::meta::info f : reflect_constructors<Type>()) signature(f);
+    for (const std::meta::info f : reflect_conversion_functions<Type>()) signature(f);
+    for (const std::meta::info f : reflect_fields<Type>()) note(std::meta::type_of(f));
+    for (const std::meta::info f : reflect_static_data_members<Type>()) note(std::meta::type_of(f));
+    return used;
+}
+
 template <std::meta::info Type, std::meta::info Member>
 consteval auto reflect_overloads()
 {

@@ -420,6 +420,22 @@ struct Palette {
     enum class Mode { on, off };
     Mode mode() const { return Mode::off; }
 };
+struct Holder {
+    struct Unused {
+        int k = 4;
+        struct Deeper {
+            int d = 5;
+        };
+    };
+    enum class Level { low, high };
+    int n = 1;
+};
+struct Keeper {
+    struct Unused {
+        int k = 4;
+    };
+    int n = 1;
+};
 struct Converts {
     operator int() const { return 7; }
     operator double() const { return 2.5; }
@@ -447,8 +463,9 @@ mrb_int twice(mrb_int n, mrb_int m) { return n * m * 2; }
 mrb_int scaled(mrb_int n, mrb_int by = 3) { return n * by; }
 Plain made(mrb_int n) { return Plain{n}; }
 }
-constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Sharer, ^^SelfSharer, ^^WatchedHolder, ^^Lender, ^^free_functions, ^^Odd, ^^Converts, ^^Outer, ^^Diamond, ^^TakesRvalues, ^^Flags, ^^Declared, ^^Color, ^^Flag, ^^Palette, ^^ConvertsExplicitly, ^^std::pair<const std::string, int>, ^^std::pair<std::string, int>>();
+constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Sharer, ^^SelfSharer, ^^WatchedHolder, ^^Lender, ^^free_functions, ^^Odd, ^^Converts, ^^Outer, ^^Diamond, ^^TakesRvalues, ^^Flags, ^^Declared, ^^Color, ^^Flag, ^^Palette, ^^Keeper, ^^ConvertsExplicitly, ^^std::pair<const std::string, int>, ^^std::pair<std::string, int>>();
 constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();
+constexpr auto nested = mrb_cpp_reflector::reflect<^^Holder>();
 
 static_assert(std::string_view(mrb_cpp_reflector::reflect_get_args_format<std::meta::members_of(^^Reflected, std::meta::access_context::current())[2]>().data()) == "si");
 static_assert(mrb_cpp_reflector::reflect_presym("same") != 0);
@@ -533,6 +550,7 @@ extern "C" void mrb_mruby_cpp_reflection_gem_test(mrb_state *mrb)
     mrb_define_module_function(mrb, mrb->kernel_module, "reflect_presym_ok?", presym_ok_q, MRB_ARGS_NONE());
     mrb_cpp_reflector::reflect_define<classes>(mrb);
     mrb_cpp_reflector::reflect_define<under>(mrb, mrb_define_module(mrb, "Under"));
+    mrb_cpp_reflector::reflect_define<nested, {.nested_types = true}>(mrb);
 }
 #else
 extern "C" void mrb_mruby_cpp_reflection_gem_test(mrb_state *) {}

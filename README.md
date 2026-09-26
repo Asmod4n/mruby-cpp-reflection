@@ -45,6 +45,9 @@ Two calls. `reflect<^^A, ^^B>()` names the classes, once, at namespace
 scope. `reflect_define<classes>(mrb)` defines them, in `gem_init`.
 `reflect_define<classes>(mrb, outer)` defines them under `outer`, a module
 or a class.
+`reflect_define<classes, {.nested_types = true}>(mrb)` also defines every
+public nested class and enum of the listed classes. Without it, a nested
+type is defined with its class only where a member uses it.
 
 ## What Ruby sees
 

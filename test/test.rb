@@ -536,6 +536,17 @@ assert('an enum is a class with one instance for each enumerator') do
   assert_equal(p.pick(7).hash, p.pick(7).hash)
   p.color = Color::Red
   assert_same(Color::Red, p.color)
-  mode = p.mode
-  assert_same(Palette::Mode::Off, mode)
+  assert_same(Palette::Mode::Off, p.mode)
+end
+
+# A nested type that a member uses is compiled with its class, so it is
+# defined with it. One that no member uses costs compile time, and it is
+# defined only where the definition asks for nested types, with the
+# nested types inside it.
+assert('a nested type is defined with its class') do
+  assert_true(Palette.const_defined?(:Mode))
+  assert_false(Keeper.const_defined?(:Unused))
+  assert_equal(4, Holder::Unused.new.k)
+  assert_equal(5, Holder::Unused::Deeper.new.d)
+  assert_equal(1, Holder::Level::High.to_i)
 end
