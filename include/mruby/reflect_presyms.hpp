@@ -341,6 +341,33 @@ consteval auto reflect_static_functions_computed()
     return std::define_static_array(functions);
 }
 
+consteval bool reflect_conversion_supported(const std::meta::info function)
+{
+    const std::meta::info target = reflect_bare(std::meta::return_type_of(function));
+    const bool text = target == std::meta::dealias(^^std::string) || target == std::meta::dealias(^^std::string_view) || target == ^^const char *;
+    return (std::meta::is_integral_type(target) && target != ^^bool) || std::meta::is_floating_point_type(target) || text;
+}
+
+template <std::meta::info Type>
+consteval auto reflect_conversion_functions_computed()
+{
+    std::vector<std::meta::info> functions;
+    for (const std::meta::info m : std::meta::members_of(std::meta::dealias(Type), std::meta::access_context::current()))
+        if (std::meta::is_conversion_function(m) && !std::meta::is_template(m) && !std::meta::is_deleted(m) && !std::meta::is_volatile(m) &&
+            !std::meta::is_rvalue_reference_qualified(m) && reflect_conversion_supported(m))
+            functions.push_back(m);
+    return std::define_static_array(functions);
+}
+
+template <std::meta::info Type>
+inline constexpr auto reflect_conversion_functions_cached = reflect_conversion_functions_computed<Type>();
+
+template <std::meta::info Type>
+consteval auto reflect_conversion_functions()
+{
+    return reflect_conversion_functions_cached<Type>;
+}
+
 template <std::meta::info Type>
 inline constexpr auto reflect_static_functions_cached = reflect_static_functions_computed<Type>();
 

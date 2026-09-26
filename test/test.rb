@@ -450,3 +450,20 @@ assert('what a GUI library brings is left out or converted as C++ allows it') do
   assert_false(box.class.method_defined?(:contains))
 end
 
+
+# Ruby names an implicit conversion to_int or to_str, and an explicit
+# one to_i or to_s. A C++ conversion function that is explicit answers
+# only the explicit names.
+assert('a conversion function answers the Ruby conversion of its kind') do
+  c = Converts.new
+  assert_equal(7, c.to_int)
+  assert_equal(2.5, c.to_f)
+  assert_equal("seven", c.to_str)
+  assert_equal("seven", c.to_s)
+  assert_equal(7, c.to_i)
+  e = ConvertsExplicitly.new
+  assert_equal("eight", e.to_s)
+  assert_equal(8, e.to_i)
+  assert_false(e.respond_to?(:to_str))
+  assert_false(e.respond_to?(:to_int))
+end

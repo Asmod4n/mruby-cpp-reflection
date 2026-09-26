@@ -1144,6 +1144,34 @@ template <class T>
 concept reflect_map = requires { typename T::key_type; typename T::mapped_type; } && std::ranges::range<T> &&
                       requires { std::tuple_size<std::remove_cvref_t<std::ranges::range_reference_t<T>>>::value; };
 
+template <std::meta::info Type, std::meta::info Function>
+void reflect_define_conversion_function(mrb_state *const mrb, RClass *const klass)
+{
+    using T = [:std::meta::dealias(Type):];
+    using R = [:reflect_bare(std::meta::return_type_of(Function)):];
+    constexpr auto convert = [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+        if constexpr (!std::meta::is_const(Function)) mrb_check_frozen(mrb, mrb_obj_ptr(self));
+        T *const object = reflect_ptr<T>(mrb, self);
+        if (object == nullptr) [[unlikely]] mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
+        return reflect_translate_exceptions(mrb, [&] {
+            const R value = object->[:Function:]();
+            if constexpr (std::same_as<R, const char *>) return value == nullptr ? mrb_nil_value() : mrb_str_new_cstr(mrb, value);
+            else if constexpr (std::is_arithmetic_v<R>) return cpp_to_mrb_value(mrb, value);
+            else return mrb_str_new(mrb, value.data(), static_cast<mrb_int>(value.size()));
+        });
+    };
+    constexpr bool implicit = !std::meta::is_explicit(Function);
+    if constexpr (std::is_integral_v<R>) {
+        ::mrb_define_method(mrb, klass, "to_i", convert, MRB_ARGS_NONE());
+        if constexpr (implicit) ::mrb_define_method(mrb, klass, "to_int", convert, MRB_ARGS_NONE());
+    } else if constexpr (std::is_floating_point_v<R>) {
+        ::mrb_define_method(mrb, klass, "to_f", convert, MRB_ARGS_NONE());
+    } else {
+        ::mrb_define_method(mrb, klass, "to_s", convert, MRB_ARGS_NONE());
+        if constexpr (implicit) ::mrb_define_method(mrb, klass, "to_str", convert, MRB_ARGS_NONE());
+    }
+}
+
 template <class T>
 void reflect_define_conversions(mrb_state *const mrb, RClass *const klass)
 {
@@ -1537,6 +1565,8 @@ RClass *reflect_define_class(reflect_definition &definition, RClass *const under
     }
     template for (constexpr std::meta::info field : reflect_fields<Type>())
         reflect_define_field<field>(mrb, methods);
+    template for (constexpr std::meta::info function : reflect_conversion_functions<Type>())
+        reflect_define_conversion_function<Type, function>(mrb, methods);
     RClass *const singleton = mrb_class_ptr(mrb_singleton_class(mrb, mrb_obj_value(klass)));
     template for (constexpr std::meta::info function : reflect_static_functions<Type>()) {
         constexpr bool first_of_its_name = [] consteval {
