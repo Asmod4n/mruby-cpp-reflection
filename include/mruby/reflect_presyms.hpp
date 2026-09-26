@@ -172,8 +172,22 @@ consteval bool reflect_is_iterator(const std::meta::info bare)
     return false;
 }
 
+consteval bool reflect_complete(const std::meta::info type)
+{
+    if (!std::meta::is_type(type)) return true;
+    const std::meta::info t = std::meta::dealias(std::meta::remove_cvref(type));
+    if (std::meta::is_pointer_type(t)) return reflect_complete(std::meta::remove_pointer(t));
+    if (!std::meta::is_class_type(t)) return true;
+    if (!std::meta::is_complete_type(t)) return false;
+    if (std::meta::has_template_arguments(t))
+        for (const std::meta::info a : std::meta::template_arguments_of(t))
+            if (std::meta::is_type(a) && !reflect_complete(a)) return false;
+    return true;
+}
+
 consteval bool reflect_parameter_supported(const std::meta::info type)
 {
+    if (!reflect_complete(type)) return false;
     if (reflect_get_args_letter(type) == '\0') return false;
     const bool class_pointer = std::meta::is_pointer_type(reflect_bare(type)) &&
                                std::meta::is_class_type(std::meta::dealias(std::meta::remove_cv(std::meta::remove_pointer(reflect_bare(type)))));
@@ -192,6 +206,7 @@ consteval bool reflect_parameter_supported(const std::meta::info type)
 
 consteval bool reflect_result_supported(const std::meta::info type)
 {
+    if (!reflect_complete(type)) return false;
     const std::meta::info bare = reflect_bare(type);
     if (bare == ^^void || bare == std::meta::dealias(^^mrb_value) || bare == ^^bool || std::meta::is_arithmetic_type(bare)) return true;
     if (std::meta::is_pointer_type(bare)) {
@@ -203,8 +218,22 @@ consteval bool reflect_result_supported(const std::meta::info type)
     return std::meta::is_reference_type(type) || std::meta::is_move_constructible_type(bare);
 }
 
+consteval bool reflect_element_compared(const std::meta::info function)
+{
+    const std::meta::info owner = std::meta::parent_of(function);
+    if (!std::meta::is_type(owner) || !std::meta::has_template_arguments(owner)) return true;
+    for (const std::meta::info p : std::meta::parameters_of(function))
+        for (const std::meta::info a : std::meta::template_arguments_of(owner))
+            if (std::meta::is_type(a) && std::meta::is_class_type(std::meta::dealias(a)) &&
+                reflect_bare(std::meta::type_of(p)) == std::meta::dealias(a) &&
+                !std::meta::extract<bool>(std::meta::substitute(^^std::equality_comparable, {a})))
+                return false;
+    return true;
+}
+
 consteval bool reflect_call_supported(const std::meta::info function)
 {
+    if (std::meta::is_deleted(function) || !reflect_element_compared(function)) return false;
     if (std::meta::is_template(function) || std::meta::is_function_template(function)) return false;
     if (std::meta::is_vararg_function(function)) return false;
     if (std::meta::is_rvalue_reference_qualified(function) || std::meta::is_volatile(function)) return false;
@@ -345,6 +374,7 @@ template <std::meta::info Type>
 consteval auto reflect_fields_computed()
 {
     std::vector<std::meta::info> fields;
+    if (!std::meta::is_class_type(std::meta::dealias(Type))) return std::define_static_array(fields);
     for (const std::meta::info m : std::meta::nonstatic_data_members_of(std::meta::dealias(Type), std::meta::access_context::current()))
         if (std::meta::has_identifier(m) && !std::meta::is_bit_field(m) && reflect_result_supported(std::meta::type_of(m)))
             fields.push_back(m);

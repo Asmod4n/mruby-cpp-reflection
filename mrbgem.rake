@@ -63,6 +63,7 @@ MRuby::Gem::Specification.new('mruby-cpp-reflection') do |spec|
   spec.add_test_dependency 'mruby-errno', core: 'mruby-errno'
   spec.add_test_dependency 'mruby-metaprog', core: 'mruby-metaprog'
   spec.add_test_dependency 'mruby-class-ext', core: 'mruby-class-ext'
+  spec.add_test_dependency 'mruby-method', core: 'mruby-method'
   reflect_presyms(spec, "#{spec.dir}/test/reflect_presyms/main.cpp")
   spec.build.linker.extend(ReflectUndefinedLink) unless spec.build.linker.singleton_class.include?(ReflectUndefinedLink)
 end

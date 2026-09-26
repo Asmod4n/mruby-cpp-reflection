@@ -799,7 +799,7 @@ mrb_value reflect_result(mrb_state *const mrb, const mrb_value self, R &&value)
         return pair;
     } else if constexpr (std::is_lvalue_reference_v<R>) return reflect_reference(mrb, &value);
     else if constexpr (reflect_is_view(^^T)) return reflect_view<T>(mrb, std::move(value), self, frozen);
-    else return reflect_object<T>(mrb, std::move(value), frozen);
+    else return reflect_object(mrb, std::move(value), frozen);
 }
 
 template <class Call>
@@ -877,14 +877,7 @@ mrb_value reflect_translate_exceptions(mrb_state *const mrb, const Call &call)
 template <std::meta::info Type, std::meta::info Function, std::size_t Count = std::meta::parameters_of(Function).size()>
 mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
 {
-    using T = [:std::meta::dealias(Type):];
-    if constexpr (std::meta::is_constructor(Function)) {
-        auto args = reflect_get_args<Function, 0, Count>(mrb);
-        return reflect_translate_exceptions(mrb, [&] {
-            reflect_adopt<T>(mrb, self, std::apply([&](auto &...held) { return reflect_new<T>(mrb, reflect_pass(held)...); }, args));
-            return self;
-        });
-    } else if constexpr (std::meta::is_static_member(Function)) {
+    if constexpr (!std::meta::is_class_member(Function)) {
         auto args = reflect_get_args<Function, 0, Count>(mrb);
         return reflect_translate_exceptions(mrb, [&] {
             if constexpr (std::meta::return_type_of(Function) == ^^void) {
@@ -895,32 +888,51 @@ mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
             }
         });
     } else {
-        if constexpr (!std::meta::is_const(Function)) mrb_check_frozen(mrb, mrb_obj_ptr(self));
-        T *const object = reflect_ptr<T>(mrb, self);
-        if (object == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
-        auto args = reflect_get_args<Function, 0, Count>(mrb);
-        const mrb_value answer = reflect_translate_exceptions(mrb, [&] {
-            if constexpr (std::meta::return_type_of(Function) == ^^void) {
-                std::apply([&](auto &...held) { object->[:Function:](reflect_pass(held)...); }, args);
-                return mrb_nil_value();
-            } else if constexpr (std::meta::is_reference_type(std::meta::return_type_of(Function)) &&
-                                 reflect_bare(std::meta::return_type_of(Function)) == std::meta::dealias(^^T)) {
-                std::apply([&](auto &...held) { object->[:Function:](reflect_pass(held)...); }, args);
+        using T = [:std::meta::dealias(Type):];
+        if constexpr (std::meta::is_constructor(Function)) {
+            auto args = reflect_get_args<Function, 0, Count>(mrb);
+            return reflect_translate_exceptions(mrb, [&] {
+                reflect_adopt<T>(mrb, self, std::apply([&](auto &...held) { return reflect_new<T>(mrb, reflect_pass(held)...); }, args));
                 return self;
-            } else {
-                return std::apply([&](auto &...held) -> mrb_value { return reflect_result(mrb, self, object->[:Function:](reflect_pass(held)...)); }, args);
+            });
+        } else if constexpr (std::meta::is_static_member(Function)) {
+            auto args = reflect_get_args<Function, 0, Count>(mrb);
+            return reflect_translate_exceptions(mrb, [&] {
+                if constexpr (std::meta::return_type_of(Function) == ^^void) {
+                    std::apply([&](auto &...held) { [:Function:](reflect_pass(held)...); }, args);
+                    return mrb_nil_value();
+                } else {
+                    return std::apply([&](auto &...held) -> mrb_value { return reflect_result(mrb, self, [:Function:](reflect_pass(held)...)); }, args);
+                }
+            });
+        } else {
+            if constexpr (!std::meta::is_const(Function)) mrb_check_frozen(mrb, mrb_obj_ptr(self));
+            T *const object = reflect_ptr<T>(mrb, self);
+            if (object == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
+            auto args = reflect_get_args<Function, 0, Count>(mrb);
+            const mrb_value answer = reflect_translate_exceptions(mrb, [&] {
+                if constexpr (std::meta::return_type_of(Function) == ^^void) {
+                    std::apply([&](auto &...held) { object->[:Function:](reflect_pass(held)...); }, args);
+                    return mrb_nil_value();
+                } else if constexpr (std::meta::is_reference_type(std::meta::return_type_of(Function)) &&
+                                     reflect_bare(std::meta::return_type_of(Function)) == std::meta::dealias(^^T)) {
+                    std::apply([&](auto &...held) { object->[:Function:](reflect_pass(held)...); }, args);
+                    return self;
+                } else {
+                    return std::apply([&](auto &...held) -> mrb_value { return reflect_result(mrb, self, object->[:Function:](reflect_pass(held)...)); }, args);
+                }
+            });
+            if constexpr (reflect_ownership_class<T>() != ^^void) reflect_attach<T>(mrb, self);
+            const mrb_value *const argv = mrb_get_argv(mrb);
+            template for (constexpr std::size_t I : std::views::iota(std::size_t{0}, Count)) {
+                constexpr std::meta::info bare = reflect_bare(std::meta::type_of(std::meta::parameters_of(Function)[I]));
+                constexpr std::meta::info held = std::meta::is_pointer_type(bare) ? std::meta::dealias(std::meta::remove_cv(std::meta::remove_pointer(bare))) : bare;
+                if constexpr (std::meta::is_class_type(held) && reflect_ownership_class<typename [:held:]>() != ^^void) {
+                    if (mrb_type(argv[I]) == MRB_TT_CDATA) reflect_attach<typename [:held:]>(mrb, argv[I]);
+                }
             }
-        });
-        if constexpr (reflect_ownership_class<T>() != ^^void) reflect_attach<T>(mrb, self);
-        const mrb_value *const argv = mrb_get_argv(mrb);
-        template for (constexpr std::size_t I : std::views::iota(std::size_t{0}, Count)) {
-            constexpr std::meta::info bare = reflect_bare(std::meta::type_of(std::meta::parameters_of(Function)[I]));
-            constexpr std::meta::info held = std::meta::is_pointer_type(bare) ? std::meta::dealias(std::meta::remove_cv(std::meta::remove_pointer(bare))) : bare;
-            if constexpr (std::meta::is_class_type(held) && reflect_ownership_class<typename [:held:]>() != ^^void) {
-                if (mrb_type(argv[I]) == MRB_TT_CDATA) reflect_attach<typename [:held:]>(mrb, argv[I]);
-            }
+            return answer;
         }
-        return answer;
     }
 }
 
@@ -1089,7 +1101,8 @@ template <class T>
 concept reflect_bytes = std::ranges::contiguous_range<T> && std::same_as<std::remove_cv_t<std::ranges::range_value_t<T>>, char>;
 
 template <class T>
-concept reflect_map = requires { typename T::key_type; typename T::mapped_type; } && std::ranges::range<T>;
+concept reflect_map = requires { typename T::key_type; typename T::mapped_type; } && std::ranges::range<T> &&
+                      requires { std::tuple_size<std::remove_cvref_t<std::ranges::range_reference_t<T>>>::value; };
 
 template <class T>
 void reflect_define_conversions(mrb_state *const mrb, RClass *const klass)
@@ -1103,8 +1116,10 @@ void reflect_define_conversions(mrb_state *const mrb, RClass *const klass)
     } else if constexpr (reflect_map<T>) {
         constexpr auto to_h = [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
             T *const object = reflect_ptr<T>(mrb, self);
-            const mrb_value hash = mrb_hash_new_capa(mrb, static_cast<mrb_int>(object->size()));
-            for (auto &[key, mapped] : *object) {
+            mrb_value hash;
+            if constexpr (std::ranges::sized_range<T>) hash = mrb_hash_new_capa(mrb, static_cast<mrb_int>(std::ranges::size(*object)));
+            else hash = mrb_hash_new(mrb);
+            for (auto &&[key, mapped] : *object) {
                 if constexpr (reflect_bytes<std::remove_cvref_t<decltype(key)>>)
                     mrb_hash_set(mrb, hash, mrb_str_new(mrb, std::ranges::data(key), static_cast<mrb_int>(std::ranges::size(key))), reflect_result(mrb, self, mapped));
                 else
@@ -1118,13 +1133,13 @@ void reflect_define_conversions(mrb_state *const mrb, RClass *const klass)
             mrb_value block;
             mrb_get_args(mrb, "&!", &block);
             T *const object = reflect_ptr<T>(mrb, self);
-            for (auto &element : *object) mrb_yield(mrb, block, reflect_result(mrb, self, element));
+            for (auto &&element : *object) mrb_yield(mrb, block, reflect_result(mrb, self, element));
             return self;
         };
         constexpr auto to_a = [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
             T *const object = reflect_ptr<T>(mrb, self);
             const mrb_value array = mrb_ary_new(mrb);
-            for (auto &element : *object) mrb_ary_push(mrb, array, reflect_result(mrb, self, element));
+            for (auto &&element : *object) mrb_ary_push(mrb, array, reflect_result(mrb, self, element));
             return array;
         };
         ::mrb_define_method_id(mrb, klass, reflect_sym<kEach>(mrb), each, MRB_ARGS_BLOCK());
@@ -1501,13 +1516,41 @@ RClass *reflect_define_class(reflect_definition &definition, RClass *const under
     return klass;
 }
 
+template <std::meta::info Namespace>
+RClass *reflect_define_namespace(reflect_definition &definition, RClass *const under)
+{
+    mrb_state *const mrb = definition.mrb;
+    RClass *outer = under;
+    template for (constexpr std::meta::info scope : std::define_static_array(reflect_namespaces(Namespace)))
+        outer = ::mrb_define_module_under_id(mrb, outer, reflect_intern<scope>(mrb));
+    RClass *const module = ::mrb_define_module_under_id(mrb, outer, reflect_intern<Namespace>(mrb));
+    RClass *const singleton = mrb_class_ptr(mrb_singleton_class(mrb, mrb_obj_value(module)));
+    template for (constexpr std::meta::info function : reflect_members<Namespace>()) {
+        constexpr bool first_of_its_name = [] consteval {
+            for (const std::meta::info m : reflect_members<Namespace>()) {
+                if (m == function) return true;
+                if (reflect_identifier(m) == reflect_identifier(function)) return false;
+            }
+            return true;
+        }();
+        if constexpr (first_of_its_name) {
+            [&]<std::size_t... I>(std::index_sequence<I...>) {
+                reflect_define_method<Namespace, reflect_overloads<Namespace, function>()[I]...>(mrb, singleton, reflect_intern<function>(mrb));
+            }(std::make_index_sequence<reflect_overloads<Namespace, function>().size()>{});
+        }
+    }
+    return module;
+}
+
 template <auto Classes>
 void reflect_define(mrb_state *const mrb, RClass *const under = nullptr)
 {
     reflect_definition definition(mrb);
-    template for (constexpr std::meta::info type : Classes)
-        if (!mrb_iv_defined(mrb, mrb_obj_value(mrb->object_class), reflect_class_key<std::meta::dealias(std::meta::remove_cvref(type))>(mrb)))
+    template for (constexpr std::meta::info type : Classes) {
+        if constexpr (std::meta::is_namespace(type)) reflect_define_namespace<type>(definition, under != nullptr ? under : mrb->object_class);
+        else if (!mrb_iv_defined(mrb, mrb_obj_value(mrb->object_class), reflect_class_key<std::meta::dealias(std::meta::remove_cvref(type))>(mrb)))
             reflect_define_class<type>(definition, under != nullptr ? under : mrb->object_class);
+    }
     definition.finish();
 }
 

@@ -321,7 +321,61 @@ struct Lender {
     Lonely &alone() const { return *lonely; }
     void add(mrb_int n) { items.push_back(n); }
 };
-constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Sharer, ^^SelfSharer, ^^WatchedHolder, ^^Lender>();
+/* The cases a GUI library brings, rebuilt without it. A const value
+ * that a method returns is copied. A member that is deleted is left
+ * out, as C++ forbids its call. A member whose type names a template
+ * with an incomplete argument is left out, since its instantiation
+ * would need the missing definition. A range that yields pairs of
+ * references by value, as a key-value view does, still converts to a
+ * Hash. A member of a template that compares elements is left out when
+ * the element has no ==, since C++ only instantiates it when used. */
+struct Opaque;
+struct NoEquality {
+    mrb_int n = 2;
+};
+template <class T>
+struct Box {
+    T item{};
+    bool contains(const T &x) const { return item == x; }
+    const T &get() const { return item; }
+};
+struct KeyValues {
+    std::vector<std::string> keys{"a", "b"};
+    std::vector<mrb_int> values{1, 2};
+    struct iterator {
+        using value_type = std::pair<const std::string &, const mrb_int &>;
+        using difference_type = std::ptrdiff_t;
+        const KeyValues *owner = nullptr;
+        std::size_t at = 0;
+        value_type operator*() const { return {owner->keys[at], owner->values[at]}; }
+        iterator &operator++() { ++at; return *this; }
+        iterator operator++(int) { iterator was = *this; ++at; return was; }
+        bool operator==(const iterator &) const = default;
+    };
+    using key_type = std::string;
+    using mapped_type = mrb_int;
+    iterator begin() const { return {this, 0}; }
+    iterator end() const { return {this, keys.size()}; }
+};
+struct Odd {
+    mrb_int n = 1;
+    const Plain constant() const { return Plain{7}; }
+    void gone() = delete;
+    bool operator==(const Odd &) const = delete;
+    std::vector<Opaque> *opaque() const { return nullptr; }
+    KeyValues pairs() const { return {}; }
+    Box<NoEquality> box() const { return {}; }
+};
+/* A namespace listed like a class is a module, and its free functions
+ * are its module functions, overloads and default arguments as for
+ * methods. */
+namespace free_functions {
+mrb_int twice(mrb_int n) { return n * 2; }
+mrb_int twice(mrb_int n, mrb_int m) { return n * m * 2; }
+mrb_int scaled(mrb_int n, mrb_int by = 3) { return n * by; }
+Plain made(mrb_int n) { return Plain{n}; }
+}
+constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Sharer, ^^SelfSharer, ^^WatchedHolder, ^^Lender, ^^free_functions, ^^Odd>();
 constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();
 
 static_assert(std::string_view(mrb_cpp_reflector::reflect_get_args_format<std::meta::members_of(^^Reflected, std::meta::access_context::current())[2]>().data()) == "si");

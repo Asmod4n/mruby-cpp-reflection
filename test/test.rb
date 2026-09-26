@@ -392,3 +392,24 @@ assert('a function no library defines raises in the state that called it') do
   assert_equal(:raised_here, undefined_after_other_state)
 end
 
+assert('a namespace is a module with its free functions') do
+  assert_false(FreeFunctions.is_a?(Class))
+  assert_equal(6, FreeFunctions.twice(3))
+  assert_equal(12, FreeFunctions.twice(2, 3))
+  assert_equal(6, FreeFunctions.scaled(2))
+  assert_equal(8, FreeFunctions.scaled(2, 4))
+  assert_equal(5, FreeFunctions.made(5).n)
+end
+
+assert('what a GUI library brings is left out or converted as C++ allows it') do
+  odd = Odd.new
+  assert_equal(7, odd.constant.n)
+  assert_false(Odd.method_defined?(:gone))
+  assert_false(Odd.method_defined?(:==) && Odd.instance_method(:==).owner != Kernel && Odd.instance_method(:==).owner != BasicObject)
+  assert_false(Odd.method_defined?(:opaque))
+  assert_equal({'a' => 1, 'b' => 2}, odd.pairs.to_h.to_a.map { |k, v| [k.to_s, v] }.to_h)
+  box = odd.box
+  assert_equal(2, box.get.n)
+  assert_false(box.class.method_defined?(:contains))
+end
+
