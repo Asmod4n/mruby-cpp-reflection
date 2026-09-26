@@ -1487,6 +1487,8 @@ RClass *reflect_define_class(reflect_definition &definition, RClass *const under
     RClass *outer = under;
     template for (constexpr std::meta::info scope : std::define_static_array(reflect_namespaces(Type)))
         outer = ::mrb_define_module_under_id(mrb, outer, reflect_intern<scope>(mrb));
+    constexpr std::meta::info enclosing = std::meta::parent_of(std::meta::dealias(Type));
+    if constexpr (std::meta::is_type(enclosing) && std::meta::is_class_type(enclosing) && !reflect_reserved(enclosing)) outer = reflect_class<enclosing>(definition);
     static constexpr auto direct = std::define_static_array(reflect_direct_bases(Type));
     RClass *superclass = mrb->object_class;
     if constexpr (direct.size() > 0) superclass = reflect_class<direct[0]>(definition);

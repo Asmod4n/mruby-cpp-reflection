@@ -467,3 +467,13 @@ assert('a conversion function answers the Ruby conversion of its kind') do
   assert_false(e.respond_to?(:to_str))
   assert_false(e.respond_to?(:to_int))
 end
+
+# A class declared inside a class is a constant of the outer class, as
+# its C++ name is qualified by the outer class.
+assert('a nested class is a constant of its enclosing class') do
+  i = Outer.new.inner
+  assert_equal(Outer::Inner, i.class)
+  assert_equal("Outer::Inner", i.class.name)
+  assert_equal(3, i.n)
+  assert_false(Object.const_defined?(:Inner))
+end
