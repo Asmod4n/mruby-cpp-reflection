@@ -33,7 +33,7 @@ c.total            # => 4
 c.total = 9
 c.scaled_by(5)     # => 10
 c.scaled_by(5, 3)  # => 15
-c.history          # => a Std::Vector, frozen
+c.history          # => a std::vector<long int>, frozen
 c.history.to_a     # => [4], a copy
 c.label            # => a Std::String
 c.label.to_s       # => "", a copy
@@ -49,8 +49,13 @@ or a class.
 ## What Ruby sees
 
 - A class under the C++ namespace path, in CamelCase: `Counter` is
-  `Counter`, `ns::Thing` is `Ns::Thing`, `std::vector` is `Std::Vector`.
-  A name that is already defined at that place raises `NameError`.
+  `Counter`, `ns::Thing` is `Ns::Thing`. A class declared in a class is a
+  constant of that class. A name that is already defined at that place
+  raises `NameError`.
+- A template has no name at runtime, so Ruby sees none. A specialization
+  is a class. An alias that C++ gives it is its constant: `std::string`
+  is `Std::String`. A specialization without an alias has no constant,
+  and its name is the one C++ spells, such as `std::vector<int>`.
 - A type that is not listed in `reflect<>` and appears as a member, a
   parameter or a result is defined at first use, under its own namespace.
   One Ruby class per C++ type in the process.
