@@ -679,11 +679,11 @@ consteval auto reflect_get_args_format()
 template <std::meta::info Function, std::size_t Skip = 0, std::size_t Count = std::meta::parameters_of(Function).size() - Skip>
 auto reflect_get_args(mrb_state *const mrb)
 {
-    constexpr auto format = reflect_get_args_format<Function, Skip, Count>();
+    [[maybe_unused]] constexpr auto format = reflect_get_args_format<Function, Skip, Count>();
     return [&]<std::size_t... I>(std::index_sequence<I...>) {
         constexpr auto slot = []<std::meta::info P>() consteval {
             using T = [:reflect_bare(std::meta::type_of(P)):];
-            if constexpr (reflect_is_object(std::meta::type_of(P)) || std::meta::is_pointer_type(std::meta::dealias(std::meta::type_of(P))) && !std::same_as<T, const char *>)
+            if constexpr (reflect_is_object(std::meta::type_of(P)) || (std::meta::is_pointer_type(std::meta::dealias(std::meta::type_of(P))) && !std::same_as<T, const char *>))
                 return std::type_identity<mrb_value>{};
             else if constexpr (std::same_as<T, std::string_view> || std::same_as<T, std::string>) return std::type_identity<std::pair<const char *, mrb_int>>{};
             else if constexpr (std::same_as<T, std::span<const mrb_value>>) return std::type_identity<std::pair<const mrb_value *, mrb_int>>{};
@@ -747,7 +747,10 @@ mrb_value reflect_reference(mrb_state *const mrb, P *const object)
             if (RObject *const known = reflect_identity(mrb, reflect_identity_of(object)); known != nullptr) return mrb_obj_value(known);
         }
         if constexpr (std::is_copy_constructible_v<Q> && !std::is_abstract_v<Q>) return reflect_object(mrb, static_cast<const Q &>(*object));
-        else mrb_raisef(mrb, E_TYPE_ERROR, "%s is kept by C++ and cannot be kept alive from Ruby", std::define_static_string(reflect_class_name(^^Q)));
+        else {
+            mrb_raisef(mrb, E_TYPE_ERROR, "%s is kept by C++ and cannot be kept alive from Ruby", std::define_static_string(reflect_class_name(^^Q)));
+            std::unreachable();
+        }
     }
     }
 }
@@ -868,6 +871,7 @@ mrb_value reflect_translate_exceptions(mrb_state *const mrb, const Call &call)
         mrb_sys_fail(mrb, what.c_str());
     }
     mrb_exc_raise(mrb, mrb_exc_new(mrb, kind, what.data(), static_cast<mrb_int>(what.size())));
+    std::unreachable();
 }
 
 template <std::meta::info Type, std::meta::info Function, std::size_t Count = std::meta::parameters_of(Function).size()>
@@ -923,7 +927,7 @@ mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
 template <std::meta::info Function, bool Converting>
 bool reflect_get_args_match(mrb_state *const mrb, const std::span<const mrb_value> argv)
 {
-    constexpr auto format = reflect_get_args_format<Function>();
+    [[maybe_unused]] constexpr auto format = reflect_get_args_format<Function>();
     constexpr std::size_t letters = std::meta::parameters_of(Function).size();
     constexpr bool rest = reflect_rest(Function);
     constexpr std::size_t required = rest ? letters - 1 : reflect_required(Function);
@@ -940,7 +944,7 @@ bool reflect_get_args_match(mrb_state *const mrb, const std::span<const mrb_valu
             else if constexpr (letter == 'c') fits = mrb_class_p(v) || mrb_module_p(v);
             else if constexpr (letter == 'o' && reflect_is_object(std::meta::type_of(P))) {
                 using T = [:reflect_bare(std::meta::type_of(P)):];
-                fits = reflect_ptr<T>(mrb, v) != nullptr || (!reflect_mutates(std::meta::type_of(P)) && reflect_from_mrb<T> ||
+                fits = reflect_ptr<T>(mrb, v) != nullptr || ((!reflect_mutates(std::meta::type_of(P)) && reflect_from_mrb<T>) ||
                                                         (Converting && !reflect_mutates(std::meta::type_of(P)) && reflect_implicitly_converts<T>(mrb, v)) ||
                                                         (reflect_is_function(std::meta::type_of(P)) && mrb_respond_to(mrb, v, mrb_intern_lit(mrb, "call"))) ||
                                                         reflect_shares<T>(mrb, v));
@@ -1433,6 +1437,7 @@ RClass *reflect_define_class(reflect_definition &definition, RClass *const under
     } else {
         ::mrb_define_method_id(mrb, klass, mrb_intern_lit(mrb, "initialize_copy"), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
             mrb_raisef(mrb, E_TYPE_ERROR, "can't copy %s", std::define_static_string(reflect_class_name(^^T)));
+            std::unreachable();
         }, MRB_ARGS_REQ(1));
     }
     template for (constexpr std::meta::info member : reflect_members<Type>()) {
