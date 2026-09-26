@@ -23,6 +23,19 @@ if Object.const_defined?(:CPP) && CPP.const_defined?(:Reflected)
     assert_equal(1, r.count(r.history))
     r.seen.push_back(9)
     assert_equal([4, 9], r.seen.to_a)
+    # A std::string parameter takes a Ruby String as a copy and a
+    # CPP::Std::String as itself. assign is the way back from a Ruby String.
+    assert_equal(3, r.length_of('abc'))
+    assert_equal(1, r.length_of(r.label))
+    assert_raise(TypeError) { r.length_of(1) }
+    assert_equal('q', r.echo('q').to_s)
+    assert_equal('l', r.label.to_s)
+    copy = r.label.to_s
+    copy += 'x'
+    assert_equal('l', r.label.to_s)
+    r.label.assign(copy)
+    assert_equal('lx', r.label.to_s)
+    assert_equal(2, r.length_of(r.label))
     assert_true(reflect_presym_ok?)
   end
 end

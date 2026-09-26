@@ -1,62 +1,79 @@
 # mruby-cpp-reflection
 
-A C++ class becomes a Ruby class through C++26 reflection. The user calls two
-things: `mrb_cpp_reflector::reflect<^^A, ^^B>()` once, outside `gem_init`, to
-name the types, and `mrb_cpp_reflector::reflect_define<classes>(mrb)` in
-`gem_init` to define them. Everything else follows from the declarations.
+A C++ class is a Ruby class. C++26 reflection reads the declaration and
+defines the class, its methods, its attributes and its overloads.
 
-Needs a compiler with `__cpp_impl_reflection` (g++ 16 with `-freflection`) and
-[mruby-c-ext-helpers](https://github.com/Asmod4n/mruby-c-ext-helpers) for the
-value conversions in both directions.
-
-## What it does
-
-`include/mruby/reflection.hpp` (namespace `mrb_cpp_reflector`, active only where the
-compiler defines `__cpp_impl_reflection`, today g++ 16 with `-freflection`):
+## Use
 
 ```cpp
-struct Counter {
-  mrb_int total = 0;
-  void add(mrb_int n) { total += n; }
-  mrb_int sum() { return total; }
-  bool same(std::string_view a, mrb_int n);   // overloads dispatch on
-  mrb_int same(mrb_int n);                     // argument count and type
-};
-MRB_CPP_DEFINE_TYPE(Counter, counter)
+#include <mruby/reflection.hpp>
 
-RClass *klass = mrb_cpp_reflector::reflect_define_class<^^Counter>(mrb, mrb->object_class);
-mrb_cpp_reflector::reflect_define_method(mrb, klass, mrb_intern_lit(mrb, "scaled"),
-    [factor](Counter &c, mrb_int n) { return c.total * factor + n; });
+struct Counter {
+    mrb_int total = 0;
+    std::string label;
+    void add(mrb_int n) { total += n; }
+    mrb_int scaled_by(mrb_int n, mrb_int factor = 2) const { return n * factor; }
+    const std::vector<mrb_int> &history() const { return seen; }
+private:
+    std::vector<mrb_int> seen;
+};
+
+constexpr auto classes = mrb_cpp_reflector::reflect<^^Counter>();
+
+extern "C" void mrb_my_gem_gem_init(mrb_state *mrb)
+{
+    mrb_cpp_reflector::reflect_define<classes>(mrb);
+}
 ```
 
-- `reflect_define_class<^^T>` defines the Ruby class under the C++ name with one
-  method per public non-static member function; `initialize` uses `mrb_cpp_new<T>`.
-- `reflect_define_method<^^T::f...>` defines one method from an overload set.
-- `reflect_define_method(mrb, klass, sym, lambda)` defines a method from a lambda;
-  its first parameter is `self`, as `T &` or `mrb_value`; the closure lives in the
-  proc's env.
-- A parameter with a default argument is optional in Ruby; the call uses as many
-  arguments as Ruby gave. A public member function whose parameter or return type
-  has no Ruby form (iterators, allocators, mutable references, `&&`-qualified
-  members, member templates) is left out, so `std::string` and `std::vector<T>`
-  reflect as far as Ruby can reach them: `BasicString.new.append('ab').find('b')`.
-  A class name goes to CamelCase; a method name stays as it is.
-- `reflect_get_args<^^T::f>(mrb)` returns the arguments as a tuple; the format for
-  the format string for `mrb_get_args` comes from the parameter types (`mrb_value` o, `mrb_int` i,
-  `mrb_float` f, `mrb_bool` b, `mrb_sym` n, `RClass *` c, `std::string_view` s,
-  `std::span<const mrb_value>` *). A type without a letter does not compile.
-- Presyms: `reflect_presyms_header<^^T...>()` returns a header that lists every
-  reflected name as `MRB_SYM(name)` beside a table. Written to
-  `include/mruby/reflect_presyms.h` and included from a gem source, the presym
-  scanner picks the names up and `reflect_presym(name)` yields the symbol at
-  compile time; without the header, names are interned once with
-  `mrb_intern_static` when the class is defined.
+```ruby
+c = CPP::Counter.new
+c.add(4)
+c.total            # => 4
+c.total = 9
+c.scaled_by(5)     # => 10
+c.scaled_by(5, 3)  # => 15
+c.history          # => a CPP::Std::Vector, frozen
+c.history.to_a     # => [4], a copy
+c.label            # => a CPP::Std::String
+c.label.to_s       # => "", a copy
+c.label.assign("x")
+```
 
-## The one rule for Ruby code
+Two calls. `reflect<^^A, ^^B>()` names the classes, once, at namespace
+scope. `reflect_define<classes>(mrb)` defines them, in `gem_init`.
 
-An object of a `CPP::` class stays C++. Ruby reads and changes it through its
-methods and attributes. Where Ruby code needs a Ruby String, Array or Hash,
-call `to_s`, `to_a` or `to_h` once; the result is a snapshot, and changes to it
-do not reach the C++ value. `to_str`, `to_ary`, `to_hash` and `to_int` are not
-defined, because they would claim the object is a String, Array, Hash or
-Integer at heart, and it is not.
+## What Ruby sees
+
+- A class `CPP::Name`, under one module per C++ namespace: `ns::Thing` is
+  `CPP::Ns::Thing`. The name is the C++ name in CamelCase.
+- One method per public member function, under the C++ name. Overloads are
+  one Ruby method; the call picks the overload by argument count and type.
+  A parameter with a default argument is optional.
+- One attribute per public data member: `total` and `total=`.
+- `initialize` where the class has a default constructor.
+- A `std::string`, `std::vector`, `std::array`, `std::map`, `std::set` or
+  `std::pair` member or result is a `CPP::Std::` object over the C++ value.
+  Its methods are the C++ methods. It is frozen where the C++ side is
+  `const`. `to_s`, `to_a` and `to_h` give a Ruby copy.
+- A parameter of such a type takes the `CPP::Std::` object as itself, and
+  a Ruby String, Array or Hash as a copy. `assign` and `insert` take a Ruby
+  value too, so a copy goes back into the C++ value when the caller says so.
+- `std::string_view` and `std::span<const mrb_value>` parameters read the
+  Ruby value in place. `mrb_value` passes through.
+- A `const` object raises `FrozenError` on a method that is not `const`.
+- A member function with no Ruby form is not defined: iterators, allocators,
+  a non-const reference to a type without a `CPP::` class, rvalue-qualified
+  members, member templates.
+
+## Build
+
+A compiler with `__cpp_impl_reflection`, today g++ 16 with `-freflection`,
+and [mruby-c-ext-helpers](https://github.com/Asmod4n/mruby-c-ext-helpers)
+for the value conversions.
+
+Every reflected name is a presym. `mrbgem.rake` builds and runs a small
+program before the presym scan and writes the names to
+`build/<name>/include/mruby/presym/reflect.h`. Nothing of it is in the tree.
+A gem calls `reflect_presyms(spec, "#{spec.dir}/tools/reflect_presyms/main.cpp")`
+with a program that prints `reflect_presyms_header<^^A, ^^B>()`.

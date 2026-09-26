@@ -24,6 +24,9 @@ struct Reflected {
     std::string_view name() const { return "reflected"; }
     const std::vector<mrb_int> &history() const { return seen; }
     mrb_int count(const std::vector<mrb_int> &v) const { return static_cast<mrb_int>(v.size()); }
+    std::string label{"l"};
+    mrb_int length_of(const std::string &s) const { return static_cast<mrb_int>(s.size()); }
+    std::string echo(std::string s) const { return s; }
 };
 
 constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected>();

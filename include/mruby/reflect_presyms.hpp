@@ -82,7 +82,7 @@ consteval char reflect_get_args_letter(const std::meta::info type)
     if (t == ^^bool || t == std::meta::dealias(^^mrb_bool)) return 'b';
     if (t == std::meta::dealias(^^mrb_sym)) return 'n';
     if (t == ^^RClass *) return 'c';
-    if (t == std::meta::dealias(^^std::string_view) || t == std::meta::dealias(^^std::string)) return 's';
+    if (t == std::meta::dealias(^^std::string_view)) return 's';
     if (t == std::meta::dealias(^^std::span<const mrb_value>)) return '*';
     if (std::meta::is_integral_type(t)) return 'i';
     if (std::meta::is_floating_point_type(t)) return 'f';
