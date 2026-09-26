@@ -65,7 +65,7 @@ or a class.
 - One attribute per public data member: `total` and `total=`.
 - `initialize` where the class has a default constructor.
 - A `std::string`, `std::vector`, `std::array`, `std::map`, `std::set` or
-  `std::pair` member or result is a `Std::` object over the C++ value.
+  `std::pair` member or result is an object over the C++ value.
   Its methods are the C++ methods. It is frozen where the C++ side is
   `const`. `to_s`, `to_a` and `to_h` give a Ruby copy.
 - A parameter of such a type takes that object as itself, and a Ruby
