@@ -102,15 +102,15 @@ struct reflect_ownership_traits {
 };
 
 template <class T>
-constexpr bool reflect_has_owner = requires(const T &t) { reflect_ownership_traits<T>::owner(t); };
+constexpr bool reflect_has_parent = requires(const T &t) { reflect_ownership_traits<T>::parent(t); };
 
 template <class T>
-consteval std::meta::info reflect_owner_class()
+consteval std::meta::info reflect_ownership_class()
 {
     if (!std::meta::is_class_type(^^T)) return ^^void;
-    if (reflect_has_owner<T>) return ^^T;
+    if (reflect_has_parent<T>) return ^^T;
     for (const std::meta::info b : reflect_bases(^^T))
-        if (std::meta::extract<bool>(std::meta::substitute(^^reflect_has_owner, {b}))) return b;
+        if (std::meta::extract<bool>(std::meta::substitute(^^reflect_has_parent, {b}))) return b;
     return ^^void;
 }
 
@@ -163,7 +163,7 @@ inline void reflect_identity_erase(mrb_state *const mrb, const void *const objec
 template <class T>
 const void *reflect_identity_of(const T *const object)
 {
-    using O = [:reflect_owner_class<T>():];
+    using O = [:reflect_ownership_class<T>():];
     return static_cast<const O *>(object);
 }
 
@@ -195,7 +195,7 @@ template <class T>
 const reflect_data_type &reflect_data_type_owned()
 {
     static constexpr auto name = std::define_static_string(reflect_class_name(^^T));
-    if constexpr (reflect_owner_class<T>() != ^^void) {
+    if constexpr (reflect_ownership_class<T>() != ^^void) {
         static const reflect_data_type type{{name, [](mrb_state *const mrb, void *const p) {
                                                  reflect_identity_erase(mrb, reflect_identity_of(static_cast<T *>(p)));
                                                  delete static_cast<T *>(p);
@@ -216,7 +216,7 @@ template <class T>
 const reflect_data_type &reflect_data_type_borrowed()
 {
     static constexpr auto name = std::define_static_string(reflect_class_name(^^T));
-    if constexpr (reflect_owner_class<T>() != ^^void) {
+    if constexpr (reflect_ownership_class<T>() != ^^void) {
         static const reflect_data_type type{{name, [](mrb_state *const mrb, void *const p) { reflect_identity_erase(mrb, reflect_identity_of(static_cast<T *>(p))); }},
                                             reflect_upcasts<T>(), nullptr};
         return type;
@@ -276,17 +276,17 @@ T *reflect_ptr(mrb_state *const mrb, const mrb_value v)
 template <class T>
 void reflect_attach(mrb_state *const mrb, const mrb_value object)
 {
-    using O = [:reflect_owner_class<T>():];
+    using O = [:reflect_ownership_class<T>():];
     T *const cpp = reflect_ptr<T>(mrb, object);
     if (cpp == nullptr) return;
-    const O *const owner = reflect_ownership_traits<O>::owner(*cpp);
-    if (owner == nullptr) return;
+    const O *const parent = reflect_ownership_traits<O>::parent(*cpp);
+    if (parent == nullptr) return;
     RData *const data = RDATA(object);
     const mrb_data_type *const cpp_owned = static_cast<const reflect_data_type *>(data->type)->owned_by_cpp;
     if (cpp_owned != nullptr) data->type = cpp_owned;
-    RObject *const holder = reflect_identity(mrb, owner);
+    RObject *const holder = reflect_identity(mrb, parent);
     if (holder == nullptr) return;
-    const mrb_sym key = mrb_intern_lit(mrb, "reflected owned");
+    const mrb_sym key = mrb_intern_lit(mrb, "reflected children");
     mrb_value held = mrb_iv_get(mrb, mrb_obj_value(holder), key);
     if (mrb_nil_p(held)) {
         held = mrb_ary_new(mrb);
@@ -301,7 +301,7 @@ template <class T>
 void reflect_adopt(mrb_state *const mrb, const mrb_value self, T *const made)
 {
     mrb_data_init(self, made, &reflect_data_type_owned<T>());
-    if constexpr (reflect_owner_class<T>() != ^^void) {
+    if constexpr (reflect_ownership_class<T>() != ^^void) {
         reflect_identity_set(mrb, reflect_identity_of(made), mrb_obj_ptr(self));
         reflect_attach<T>(mrb, self);
     }
@@ -313,7 +313,7 @@ mrb_value reflect_object(mrb_state *const mrb, T &&value, const bool frozen = fa
     using U = std::remove_cvref_t<T>;
     RData *const data = mrb_data_object_alloc(mrb, reflect_class<^^U>(mrb), nullptr, &reflect_data_type_owned<U>());
     U *kept;
-    if constexpr (reflect_owner_class<U>() != ^^void) {
+    if constexpr (reflect_ownership_class<U>() != ^^void) {
         kept = new U(std::forward<T>(value));
         reflect_identity_set(mrb, reflect_identity_of(kept), reinterpret_cast<RObject *>(data));
     } else {
@@ -328,13 +328,13 @@ mrb_value reflect_object(mrb_state *const mrb, T &&value, const bool frozen = fa
 template <class T>
 mrb_value reflect_borrowed(mrb_state *const mrb, T *const ref, const mrb_value owner, const bool frozen)
 {
-    if constexpr (reflect_owner_class<T>() != ^^void) {
+    if constexpr (reflect_ownership_class<T>() != ^^void) {
         if (RObject *const known = reflect_identity(mrb, reflect_identity_of(ref)); known != nullptr) return mrb_obj_value(known);
     }
     RData *const data = mrb_data_object_alloc(mrb, reflect_class<^^T>(mrb), ref, &reflect_data_type_borrowed<T>());
     const mrb_value object = mrb_obj_value(data);
     mrb_iv_set(mrb, object, reflect_sym<kOwner>(mrb), owner);
-    if constexpr (reflect_owner_class<T>() != ^^void) {
+    if constexpr (reflect_ownership_class<T>() != ^^void) {
         reflect_identity_set(mrb, reflect_identity_of(ref), mrb_obj_ptr(object));
         reflect_attach<T>(mrb, object);
     }
@@ -624,7 +624,7 @@ mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
     using T = [:std::meta::dealias(Type):];
     if constexpr (std::meta::is_constructor(Function)) {
         auto args = reflect_get_args<Function, 0, Count>(mrb);
-        if constexpr (reflect_owner_class<T>() != ^^void) {
+        if constexpr (reflect_ownership_class<T>() != ^^void) {
             return reflect_translate_exceptions(mrb, [&] {
                 reflect_adopt<T>(mrb, self, std::apply([&](auto &...held) { return new T(reflect_pass(held)...); }, args));
                 return self;
@@ -669,12 +669,12 @@ mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
                 return std::apply([&](auto &...held) -> mrb_value { return reflect_result(mrb, self, object->[:Function:](reflect_pass(held)...)); }, args);
             }
         });
-        if constexpr (reflect_owner_class<T>() != ^^void) reflect_attach<T>(mrb, self);
+        if constexpr (reflect_ownership_class<T>() != ^^void) reflect_attach<T>(mrb, self);
         const mrb_value *const argv = mrb_get_argv(mrb);
         template for (constexpr std::size_t I : std::views::iota(std::size_t{0}, Count)) {
             constexpr std::meta::info bare = reflect_bare(std::meta::type_of(std::meta::parameters_of(Function)[I]));
             constexpr std::meta::info held = std::meta::is_pointer_type(bare) ? std::meta::dealias(std::meta::remove_cv(std::meta::remove_pointer(bare))) : bare;
-            if constexpr (std::meta::is_class_type(held) && reflect_owner_class<typename [:held:]>() != ^^void) {
+            if constexpr (std::meta::is_class_type(held) && reflect_ownership_class<typename [:held:]>() != ^^void) {
                 if (mrb_type(argv[I]) == MRB_TT_CDATA) reflect_attach<typename [:held:]>(mrb, argv[I]);
             }
         }
@@ -993,7 +993,7 @@ RClass *reflect_define_class(mrb_state *const mrb, RClass *const under)
         MRB_DEFINE_ALLOCATOR(klass);
         ::mrb_define_method_id(mrb, klass, reflect_sym<kInitialize>(mrb),
                                [](mrb_state *const mrb, const mrb_value self) {
-                                   if constexpr (reflect_owner_class<T>() != ^^void) {
+                                   if constexpr (reflect_ownership_class<T>() != ^^void) {
                                        reflect_adopt<T>(mrb, self, new T());
                                    } else {
                                        T *const kept = static_cast<T *>(mrb_malloc(mrb, sizeof(T)));

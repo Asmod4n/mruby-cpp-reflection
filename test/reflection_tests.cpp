@@ -186,8 +186,8 @@ struct Callback {
 };
 /* Node deletes the nodes it owns in its destructor, as a tree of
  * objects in a GUI library does. reflect_ownership_traits names the
- * owner, so the collector frees a node only while it has none, and the
- * Ruby object of an owned node lives as long as its owner's, with its
+ * parent, so the collector frees a node only while it has none, and the
+ * Ruby object of a node with a parent lives as long as its parent's, with its
  * instance variables. alive counts the nodes C++ has. */
 static mrb_int &nodes_alive()
 {
@@ -222,7 +222,7 @@ struct Node {
 };
 template <>
 struct mrb_cpp_reflector::reflect_ownership_traits<Node> {
-    static Node *owner(const Node &n) { return n.parent; }
+    static Node *parent(const Node &n) { return n.parent; }
 };
 constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node>();
 constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();

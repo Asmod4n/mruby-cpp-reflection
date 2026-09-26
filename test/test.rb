@@ -229,7 +229,7 @@ def node_tree_without_a_reference
   nil
 end
 
-assert('an object with an owner lives as long as its owner') do
+assert('an object with a parent lives as long as its parent') do
   full_gc
   base = Node.alive
   root = Node.new
@@ -247,7 +247,7 @@ assert('an object with an owner lives as long as its owner') do
   assert_equal(base + 3, Node.alive)
 end
 
-assert('an object without an owner is freed with the objects it owns') do
+assert('an object without a parent is freed with its children') do
   full_gc
   base = Node.alive
   node_tree_without_a_reference
