@@ -168,6 +168,28 @@ const void *reflect_identity_of(const T *const object)
 }
 
 template <class T>
+constexpr bool reflect_trackable = std::is_class_v<T> && std::has_virtual_destructor_v<T> && !std::is_final_v<T>;
+
+template <class T>
+struct reflect_tracked final : T {
+    mrb_state *mrb = nullptr;
+    RObject *ruby = nullptr;
+    template <class... A>
+    explicit reflect_tracked(A &&...args) : T(std::forward<A>(args)...)
+    {
+    }
+    ~reflect_tracked()
+    {
+        if (ruby == nullptr) return;
+        DATA_PTR(mrb_obj_value(ruby)) = nullptr;
+        if constexpr (reflect_ownership_class<T>() != ^^void) reflect_identity_erase(mrb, reflect_identity_of(static_cast<T *>(this)));
+    }
+};
+
+template <class T>
+const reflect_data_type &reflect_data_type_tracked();
+
+template <class T>
 const reflect_data_type &reflect_data_type_owned();
 
 template <class T>
@@ -195,8 +217,19 @@ template <class T>
 const reflect_data_type &reflect_data_type_owned()
 {
     static constexpr auto name = std::define_static_string(reflect_class_name(^^T));
-    if constexpr (reflect_ownership_class<T>() != ^^void) {
+    if constexpr (reflect_trackable<T>) {
         static const reflect_data_type type{{name, [](mrb_state *const mrb, void *const p) {
+                                                 if (p == nullptr) return;
+                                                 reflect_tracked<T> *const tracked = static_cast<reflect_tracked<T> *>(static_cast<T *>(p));
+                                                 tracked->ruby = nullptr;
+                                                 if constexpr (reflect_ownership_class<T>() != ^^void) reflect_identity_erase(mrb, reflect_identity_of(static_cast<T *>(p)));
+                                                 delete tracked;
+                                             }},
+                                            reflect_upcasts<T>(), &reflect_data_type_tracked<T>()};
+        return type;
+    } else if constexpr (reflect_ownership_class<T>() != ^^void) {
+        static const reflect_data_type type{{name, [](mrb_state *const mrb, void *const p) {
+                                                 if (p == nullptr) return;
                                                  reflect_identity_erase(mrb, reflect_identity_of(static_cast<T *>(p)));
                                                  delete static_cast<T *>(p);
                                              }},
@@ -204,6 +237,7 @@ const reflect_data_type &reflect_data_type_owned()
         return type;
     } else {
         static const reflect_data_type type{{name, [](mrb_state *const mrb, void *const p) {
+                                                 if (p == nullptr) return;
                                                  static_cast<T *>(p)->~T();
                                                  mrb_free(mrb, p);
                                              }},
@@ -213,11 +247,26 @@ const reflect_data_type &reflect_data_type_owned()
 }
 
 template <class T>
+const reflect_data_type &reflect_data_type_tracked()
+{
+    static constexpr auto name = std::define_static_string(reflect_class_name(^^T));
+    static const reflect_data_type type{{name, [](mrb_state *const mrb, void *const p) {
+                                             if (p == nullptr) return;
+                                             static_cast<reflect_tracked<T> *>(static_cast<T *>(p))->ruby = nullptr;
+                                             if constexpr (reflect_ownership_class<T>() != ^^void) reflect_identity_erase(mrb, reflect_identity_of(static_cast<T *>(p)));
+                                         }},
+                                        reflect_upcasts<T>(), nullptr};
+    return type;
+}
+
+template <class T>
 const reflect_data_type &reflect_data_type_borrowed()
 {
     static constexpr auto name = std::define_static_string(reflect_class_name(^^T));
     if constexpr (reflect_ownership_class<T>() != ^^void) {
-        static const reflect_data_type type{{name, [](mrb_state *const mrb, void *const p) { reflect_identity_erase(mrb, reflect_identity_of(static_cast<T *>(p))); }},
+        static const reflect_data_type type{{name, [](mrb_state *const mrb, void *const p) {
+                                                 if (p != nullptr) reflect_identity_erase(mrb, reflect_identity_of(static_cast<T *>(p)));
+                                             }},
                                             reflect_upcasts<T>(), nullptr};
         return type;
     } else {
@@ -264,6 +313,10 @@ T *reflect_ptr(mrb_state *const mrb, const mrb_value v)
 {
     void *const owned = mrb_data_check_get_ptr(mrb, v, &reflect_data_type_owned<T>());
     if (owned != nullptr) return static_cast<T *>(owned);
+    if constexpr (reflect_trackable<T>) {
+        void *const tracked = mrb_data_check_get_ptr(mrb, v, &reflect_data_type_tracked<T>());
+        if (tracked != nullptr) return static_cast<T *>(tracked);
+    }
     void *const borrowed = mrb_data_check_get_ptr(mrb, v, &reflect_data_type_borrowed<T>());
     if (borrowed != nullptr || mrb_type(v) != MRB_TT_CDATA || DATA_PTR(v) == nullptr || DATA_TYPE(v) == nullptr) return static_cast<T *>(borrowed);
     RClass *const methods = reflect_module<^^T>(mrb);
@@ -297,10 +350,31 @@ void reflect_attach(mrb_state *const mrb, const mrb_value object)
     mrb_ary_push(mrb, held, object);
 }
 
+template <class T, class... A>
+T *reflect_new(mrb_state *const mrb, A &&...args)
+{
+    if constexpr (reflect_trackable<T>) return new reflect_tracked<T>(std::forward<A>(args)...);
+    else if constexpr (reflect_ownership_class<T>() != ^^void) return new T(std::forward<A>(args)...);
+    else {
+        T *const kept = static_cast<T *>(mrb_malloc(mrb, sizeof(T)));
+        try {
+            return new (kept) T(std::forward<A>(args)...);
+        } catch (...) {
+            mrb_free(mrb, kept);
+            throw;
+        }
+    }
+}
+
 template <class T>
 void reflect_adopt(mrb_state *const mrb, const mrb_value self, T *const made)
 {
     mrb_data_init(self, made, &reflect_data_type_owned<T>());
+    if constexpr (reflect_trackable<T>) {
+        reflect_tracked<T> *const tracked = static_cast<reflect_tracked<T> *>(made);
+        tracked->mrb = mrb;
+        tracked->ruby = mrb_obj_ptr(self);
+    }
     if constexpr (reflect_ownership_class<T>() != ^^void) {
         reflect_identity_set(mrb, reflect_identity_of(made), mrb_obj_ptr(self));
         reflect_attach<T>(mrb, self);
@@ -312,15 +386,7 @@ mrb_value reflect_object(mrb_state *const mrb, T &&value, const bool frozen = fa
 {
     using U = std::remove_cvref_t<T>;
     RData *const data = mrb_data_object_alloc(mrb, reflect_class<^^U>(mrb), nullptr, &reflect_data_type_owned<U>());
-    U *kept;
-    if constexpr (reflect_ownership_class<U>() != ^^void) {
-        kept = new U(std::forward<T>(value));
-        reflect_identity_set(mrb, reflect_identity_of(kept), reinterpret_cast<RObject *>(data));
-    } else {
-        kept = static_cast<U *>(mrb_malloc(mrb, sizeof(U)));
-        new (kept) U(std::forward<T>(value));
-    }
-    data->data = kept;
+    reflect_adopt<U>(mrb, mrb_obj_value(data), reflect_new<U>(mrb, std::forward<T>(value)));
     if (frozen) mrb_obj_freeze(mrb, mrb_obj_value(data));
     return mrb_obj_value(data);
 }
@@ -624,24 +690,10 @@ mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
     using T = [:std::meta::dealias(Type):];
     if constexpr (std::meta::is_constructor(Function)) {
         auto args = reflect_get_args<Function, 0, Count>(mrb);
-        if constexpr (reflect_ownership_class<T>() != ^^void) {
-            return reflect_translate_exceptions(mrb, [&] {
-                reflect_adopt<T>(mrb, self, std::apply([&](auto &...held) { return new T(reflect_pass(held)...); }, args));
-                return self;
-            });
-        } else {
-            T *const kept = static_cast<T *>(mrb_malloc(mrb, sizeof(T)));
-            return reflect_translate_exceptions(mrb, [&] {
-                try {
-                    std::apply([&](auto &...held) { new (kept) T(reflect_pass(held)...); }, args);
-                } catch (...) {
-                    mrb_free(mrb, kept);
-                    throw;
-                }
-                mrb_data_init(self, kept, &reflect_data_type_owned<T>());
-                return self;
-            });
-        }
+        return reflect_translate_exceptions(mrb, [&] {
+            reflect_adopt<T>(mrb, self, std::apply([&](auto &...held) { return reflect_new<T>(mrb, reflect_pass(held)...); }, args));
+            return self;
+        });
     } else if constexpr (std::meta::is_static_member(Function)) {
         auto args = reflect_get_args<Function, 0, Count>(mrb);
         return reflect_translate_exceptions(mrb, [&] {
@@ -993,13 +1045,7 @@ RClass *reflect_define_class(mrb_state *const mrb, RClass *const under)
         MRB_DEFINE_ALLOCATOR(klass);
         ::mrb_define_method_id(mrb, klass, reflect_sym<kInitialize>(mrb),
                                [](mrb_state *const mrb, const mrb_value self) {
-                                   if constexpr (reflect_ownership_class<T>() != ^^void) {
-                                       reflect_adopt<T>(mrb, self, new T());
-                                   } else {
-                                       T *const kept = static_cast<T *>(mrb_malloc(mrb, sizeof(T)));
-                                       new (kept) T();
-                                       mrb_data_init(self, kept, &reflect_data_type_owned<T>());
-                                   }
+                                   reflect_adopt<T>(mrb, self, reflect_new<T>(mrb));
                                    return self;
                                }, MRB_ARGS_NONE());
     } else {

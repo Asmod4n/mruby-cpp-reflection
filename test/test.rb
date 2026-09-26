@@ -255,3 +255,18 @@ assert('an object without a parent is freed with its children') do
   assert_equal(base, Node.alive)
 end
 
+def node_child_of_a_dropped_root
+  Node.new(Node.new)
+end
+
+assert('a Ruby object whose C++ object C++ deleted raises when used') do
+  root = Node.new
+  child = Node.new(root)
+  root.delete_child(0)
+  assert_equal(0, root.child_count)
+  assert_raise(TypeError) { child.child_count }
+  orphan = node_child_of_a_dropped_root
+  full_gc
+  assert_raise(TypeError) { orphan.child_count }
+end
+

@@ -188,7 +188,9 @@ struct Callback {
  * objects in a GUI library does. reflect_ownership_traits names the
  * parent, so the collector frees a node only while it has none, and the
  * Ruby object of a node with a parent lives as long as its parent's, with its
- * instance variables. alive counts the nodes C++ has. */
+ * instance variables. Whatever deletes a node that Ruby made, the Ruby
+ * object then raises instead of reaching freed memory. alive counts the
+ * nodes C++ has. */
 static mrb_int &nodes_alive()
 {
     static mrb_int n = 0;
@@ -201,7 +203,7 @@ struct Node {
     explicit Node(Node *p) : Node() { set_parent(p); }
     Node(const Node &) = delete;
     Node &operator=(const Node &) = delete;
-    ~Node()
+    virtual ~Node()
     {
         for (Node *c : children) {
             c->parent = nullptr;
@@ -217,6 +219,7 @@ struct Node {
         if (p != nullptr) p->children.push_back(this);
     }
     Node *child_at(mrb_int i) const { return children.at(static_cast<std::size_t>(i)); }
+    void delete_child(mrb_int i) { delete children.at(static_cast<std::size_t>(i)); }
     mrb_int child_count() const { return static_cast<mrb_int>(children.size()); }
     static mrb_int alive() { return nodes_alive(); }
 };
