@@ -5,13 +5,10 @@
 #include <mruby/variable.h>
 #include <mruby/class.h>
 #include <mruby/string.h>
-#include <mruby/void_pointer.h>
 #include <cstdint>
 #include <format>
 #include <string>
-#if defined(__cpp_impl_reflection)
 #include <mruby/reflection.hpp>
-#endif
 
 const struct mrb_data_type mrb_void_pointer_type = {"VoidPointer", nullptr};
 const struct mrb_data_type mrb_const_void_pointer_type = {"ConstVoidPointer", nullptr};

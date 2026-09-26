@@ -1,11 +1,17 @@
 #pragma once
+#include <mruby.h>
+#include <mruby/data.h>
+
+extern "C" {
+extern const struct mrb_data_type mrb_void_pointer_type;
+extern const struct mrb_data_type mrb_const_void_pointer_type;
+}
+
 #if defined(__cpp_impl_reflection)
 
-#include <mruby.h>
 #include <mruby/array.h>
 #include <mruby/class.h>
 #include <mruby/data.h>
-#include <mruby/void_pointer.h>
 #include <mruby/error.h>
 #include <mruby/hash.h>
 #include <mruby/proc.h>
