@@ -61,7 +61,7 @@ mrb_sym reflect_intern(mrb_state *const mrb)
     else return mrb_intern_static(mrb, name.data(), name.size());
 }
 
-inline constexpr std::string_view kCPP = "CPP", kOwner = "owner", kInitialize = "initialize", kToS = "to_s",
+inline constexpr std::string_view kOwner = "owner", kInitialize = "initialize", kReplace = "replace", kToS = "to_s",
                                   kToA = "to_a", kToH = "to_h", kEach = "each",
                                   kEnumerable = "Enumerable";
 
@@ -448,14 +448,33 @@ void reflect_define_conversions(mrb_state *const mrb, RClass *const klass)
     }
 }
 
+template <class T>
+void reflect_define_replace(mrb_state *const mrb, RClass *const klass)
+{
+    ::mrb_define_method_id(mrb, klass, reflect_sym<kReplace>(mrb), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+        mrb_check_frozen(mrb, mrb_obj_ptr(self));
+        T *const object = reflect_ptr<T>(mrb, self);
+        if (object == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
+        mrb_value v;
+        mrb_get_args(mrb, "o", &v);
+        if (T *const p = reflect_ptr<T>(mrb, v); p != nullptr) *object = *p;
+        else if constexpr (mrbcpp::value_converter::convertible_from_mrb<T>) *object = mrb_value_to<T>(mrb, v);
+        else mrb_raise(mrb, E_TYPE_ERROR, "wrong type");
+        return self;
+    }, MRB_ARGS_REQ(1));
+}
+
 template <std::meta::info Type>
-RClass *reflect_define_class(mrb_state *const mrb, RClass *const super)
+RClass *reflect_define_class(mrb_state *const mrb, RClass *const under)
 {
     using T = [:std::meta::dealias(Type):];
-    RClass *outer = ::mrb_define_module_id(mrb, reflect_sym<kCPP>(mrb));
+    RClass *outer = under;
     template for (constexpr std::meta::info scope : std::define_static_array(reflect_namespaces(Type)))
         outer = ::mrb_define_module_under_id(mrb, outer, reflect_intern<scope>(mrb));
-    RClass *const klass = ::mrb_define_class_under_id(mrb, outer, reflect_intern<Type>(mrb), super);
+    const mrb_sym name = reflect_intern<Type>(mrb);
+    if (mrb_const_defined_at(mrb, mrb_obj_value(outer), name))
+        mrb_raisef(mrb, E_NAME_ERROR, "%n is already defined in %C", name, outer);
+    RClass *const klass = ::mrb_define_class_under_id(mrb, outer, name, mrb->object_class);
     MRB_SET_INSTANCE_TT(klass, MRB_TT_CDATA);
     reflect_class_slot<std::meta::dealias(std::meta::remove_cvref(Type))>() = klass;
     if constexpr (std::is_default_constructible_v<T>) {
@@ -484,14 +503,15 @@ RClass *reflect_define_class(mrb_state *const mrb, RClass *const super)
     template for (constexpr std::meta::info field : reflect_fields<Type>())
         reflect_define_field<field>(mrb, klass);
     reflect_define_conversions<T>(mrb, klass);
+    if constexpr (std::is_copy_assignable_v<T>) reflect_define_replace<T>(mrb, klass);
     return klass;
 }
 
 template <auto Classes>
-void reflect_define(mrb_state *const mrb)
+void reflect_define(mrb_state *const mrb, RClass *const under = nullptr)
 {
     template for (constexpr std::meta::info type : Classes)
-        reflect_define_class<type>(mrb, mrb->object_class);
+        reflect_define_class<type>(mrb, under != nullptr ? under : mrb->object_class);
 }
 
 }

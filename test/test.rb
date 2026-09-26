@@ -1,6 +1,6 @@
-if Object.const_defined?(:CPP) && CPP.const_defined?(:Reflected)
+if Object.const_defined?(:Reflected)
   assert("a reflected C++ class answers from Ruby") do
-    r = CPP::Reflected.new
+    r = Reflected.new
     assert_true(r.same('abc', 3))
     assert_false(r.same('ab', 3))
     assert_equal(10, r.same(5))
@@ -24,7 +24,7 @@ if Object.const_defined?(:CPP) && CPP.const_defined?(:Reflected)
     r.seen.push_back(9)
     assert_equal([4, 9], r.seen.to_a)
     # A std::string parameter takes a Ruby String as a copy and a
-    # CPP::Std::String as itself. assign is the way back from a Ruby String.
+    # Std::String as itself. assign is the way back from a Ruby String.
     assert_equal(3, r.length_of('abc'))
     assert_equal(1, r.length_of(r.label))
     assert_raise(TypeError) { r.length_of(1) }
@@ -36,6 +36,21 @@ if Object.const_defined?(:CPP) && CPP.const_defined?(:Reflected)
     r.label.assign(copy)
     assert_equal('lx', r.label.to_s)
     assert_equal(2, r.length_of(r.label))
+    # replace is operator=: the argument is the same class as itself, or a
+    # Ruby value as a copy. A const object raises, a wrong type raises.
+    assert_equal([1, 2], r.seen.replace([1, 2]).to_a)
+    source = Reflected.new
+    source.add(7)
+    assert_equal([7], r.seen.replace(source.history).to_a)
+    assert_equal('y', r.label.replace('y').to_s)
+    assert_raise(FrozenError) { r.history.replace([]) }
+    assert_raise(TypeError) { r.seen.replace('no') }
+    other = Reflected.new
+    other.replace(r)
+    assert_equal('y', other.label.to_s)
+    assert_equal(r.total, other.total)
+    assert_equal('Std::Vector', r.seen.class.to_s)
+    assert_equal(1, Under::Plain.new.n)
     assert_true(reflect_presym_ok?)
   end
 end

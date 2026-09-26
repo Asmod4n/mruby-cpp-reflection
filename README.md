@@ -27,43 +27,52 @@ extern "C" void mrb_my_gem_gem_init(mrb_state *mrb)
 ```
 
 ```ruby
-c = CPP::Counter.new
+c = Counter.new
 c.add(4)
 c.total            # => 4
 c.total = 9
 c.scaled_by(5)     # => 10
 c.scaled_by(5, 3)  # => 15
-c.history          # => a CPP::Std::Vector, frozen
+c.history          # => a Std::Vector, frozen
 c.history.to_a     # => [4], a copy
-c.label            # => a CPP::Std::String
+c.label            # => a Std::String
 c.label.to_s       # => "", a copy
-c.label.assign("x")
+c.label.replace("x")
+c.seen.replace([1, 2])
 ```
 
 Two calls. `reflect<^^A, ^^B>()` names the classes, once, at namespace
 scope. `reflect_define<classes>(mrb)` defines them, in `gem_init`.
+`reflect_define<classes>(mrb, outer)` defines them under `outer`, a module
+or a class.
 
 ## What Ruby sees
 
-- A class `CPP::Name`, under one module per C++ namespace: `ns::Thing` is
-  `CPP::Ns::Thing`. The name is the C++ name in CamelCase.
+- A class under the C++ namespace path, in CamelCase: `Counter` is
+  `Counter`, `ns::Thing` is `Ns::Thing`, `std::vector` is `Std::Vector`.
+  A name that is already defined at that place raises `NameError`.
+- A type that is not listed in `reflect<>` and appears as a member, a
+  parameter or a result is defined at first use, under its own namespace.
+  One Ruby class per C++ type in the process.
 - One method per public member function, under the C++ name. Overloads are
   one Ruby method; the call picks the overload by argument count and type.
   A parameter with a default argument is optional.
 - One attribute per public data member: `total` and `total=`.
 - `initialize` where the class has a default constructor.
 - A `std::string`, `std::vector`, `std::array`, `std::map`, `std::set` or
-  `std::pair` member or result is a `CPP::Std::` object over the C++ value.
+  `std::pair` member or result is a `Std::` object over the C++ value.
   Its methods are the C++ methods. It is frozen where the C++ side is
   `const`. `to_s`, `to_a` and `to_h` give a Ruby copy.
-- A parameter of such a type takes the `CPP::Std::` object as itself, and
-  a Ruby String, Array or Hash as a copy. `assign` and `insert` take a Ruby
-  value too, so a copy goes back into the C++ value when the caller says so.
+- A parameter of such a type takes the `Std::` object as itself, and a Ruby
+  String, Array or Hash as a copy.
+- `replace` is `operator=`, on every class that has one: `x.replace(y)`
+  copies `y` into `x`, from the same class or from a Ruby value, and
+  returns `x`. That is the way a Ruby copy goes back into a C++ value.
 - `std::string_view` and `std::span<const mrb_value>` parameters read the
   Ruby value in place. `mrb_value` passes through.
 - A `const` object raises `FrozenError` on a method that is not `const`.
 - A member function with no Ruby form is not defined: iterators, allocators,
-  a non-const reference to a type without a `CPP::` class, rvalue-qualified
+  a non-const reference to a type without a reflected class, rvalue-qualified
   members, member templates.
 
 ## Build

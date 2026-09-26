@@ -29,7 +29,12 @@ struct Reflected {
     std::string echo(std::string s) const { return s; }
 };
 
+struct Plain {
+    mrb_int n = 1;
+};
+
 constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected>();
+constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();
 
 static_assert(std::string_view(mrb_cpp_reflector::reflect_get_args_format<std::meta::members_of(^^Reflected, std::meta::access_context::current())[2]>().data()) == "si");
 static_assert(mrb_cpp_reflector::reflect_presym("same") != 0);
@@ -45,6 +50,7 @@ extern "C" void mrb_mruby_cpp_reflection_gem_test(mrb_state *mrb)
 {
     mrb_define_module_function(mrb, mrb->kernel_module, "reflect_presym_ok?", presym_ok_q, MRB_ARGS_NONE());
     mrb_cpp_reflector::reflect_define<classes>(mrb);
+    mrb_cpp_reflector::reflect_define<under>(mrb, mrb_define_module(mrb, "Under"));
 }
 #else
 extern "C" void mrb_mruby_cpp_reflection_gem_test(mrb_state *) {}

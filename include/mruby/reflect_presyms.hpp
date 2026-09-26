@@ -197,7 +197,6 @@ consteval auto reflect_overloads()
 template <std::meta::info Type>
 void reflect_names_into(std::vector<std::string_view> &names)
 {
-    names.push_back("CPP");
     template for (constexpr std::meta::info scope : std::define_static_array(reflect_namespaces(Type)))
         names.push_back(std::define_static_string(reflect_class_name(scope)));
     names.push_back(std::define_static_string(reflect_class_name(Type)));
