@@ -213,12 +213,21 @@ consteval bool reflect_call_supported(const std::meta::info function)
     return std::meta::is_constructor(function) || reflect_result_supported(std::meta::return_type_of(function));
 }
 
+consteval bool reflect_reserved(const std::meta::info type)
+{
+    const std::meta::info t = std::meta::dealias(type);
+    const std::string_view name = std::meta::has_identifier(t)          ? std::meta::identifier_of(t)
+                                  : std::meta::has_template_arguments(t) ? std::meta::identifier_of(std::meta::template_of(t))
+                                                                         : std::string_view{};
+    return name.contains("__") || (name.size() > 1 && name[0] == '_' && name[1] >= 'A' && name[1] <= 'Z');
+}
+
 consteval std::vector<std::meta::info> reflect_direct_bases(const std::meta::info type)
 {
     std::vector<std::meta::info> bases;
     if (!std::meta::is_class_type(std::meta::dealias(type)) || !std::meta::is_complete_type(std::meta::dealias(type))) return bases;
     for (const std::meta::info b : std::meta::bases_of(std::meta::dealias(type), std::meta::access_context::current()))
-        if (std::meta::is_public(b) && !std::meta::is_virtual(b)) bases.push_back(std::meta::dealias(std::meta::type_of(b)));
+        if (std::meta::is_public(b) && !std::meta::is_virtual(b) && !reflect_reserved(std::meta::type_of(b))) bases.push_back(std::meta::dealias(std::meta::type_of(b)));
     return bases;
 }
 

@@ -52,7 +52,7 @@ if Object.const_defined?(:Reflected)
     other.replace(r)
     assert_equal('y', other.label.to_s)
     assert_equal(r.total, other.total)
-    assert_equal('Std::Vector', r.seen.class.to_s)
+    assert_equal('Std::Vector[:long]', r.seen.class.to_s)
     assert_equal(1, Under::Plain.new.n)
     assert_true(reflect_presym_ok?)
   end
@@ -350,3 +350,37 @@ assert('dup and clone copy the C++ object with its copy constructor') do
   assert_raise(TypeError) { Node.new.dup }
 end
 
+# std::vector is a template, not a type, so Std::Vector is a module;
+# each specialization is a class of its own that includes it, reached
+# with its template arguments: a class type as its class, any other
+# type as the symbol C++ spells it with. An argument with a default may
+# be left out, as in C++, and std::string is the alias it is in C++.
+assert('a template is a module and its specializations are classes') do
+  r = Reflected.new
+  longs = r.seen
+  assert_false(Std::Vector.is_a?(Class))
+  assert_true(longs.is_a?(Std::Vector))
+  assert_same(Std::Vector[:long], longs.class)
+  assert_same(Std::Vector[:long], Std::Vector[:long, Std::Allocator[:long]])
+  assert_same(Std::String, r.label.class)
+  words = r.words.class
+  assert_same(Std::Vector[Std::String], words)
+  assert_equal('Std::Vector[Std::String]', words.name)
+  pointers = r.pointers.class
+  assert_same(Std::Vector[Under::Plain::Ptr], pointers)
+  const_pointers = r.const_pointers.class
+  assert_same(Std::Vector[Under::Plain::ConstPtr], const_pointers)
+  raw = r.raw_longs.class
+  assert_same(Std::Vector[:long__ptr], raw)
+  assert_raise(ArgumentError) { Std::Vector[:double] }
+end
+
+
+# libstdc++ declares std::allocator<char> an extern template, so its
+# members come from the shared library, which was built before C++23
+# added allocate_at_least. The second link points that one at
+# reflect_undefined, and a call to it raises instead of failing to link.
+assert('a function no linked library defines raises NotImplementedError') do
+  Reflected.new.label
+  assert_raise(NotImplementedError) { Std::Allocator[:char].new.allocate_at_least(1) }
+end

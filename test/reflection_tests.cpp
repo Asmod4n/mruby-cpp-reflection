@@ -21,6 +21,9 @@
 #include <regex>
 #include <filesystem>
 
+struct Plain {
+    mrb_int n = 1;
+};
 struct Reflected {
     mrb_int total = 0;
     std::vector<mrb_int> seen;
@@ -34,13 +37,14 @@ struct Reflected {
     const std::vector<mrb_int> &history() const { return seen; }
     mrb_int count(const std::vector<mrb_int> &v) const { return static_cast<mrb_int>(v.size()); }
     std::string label{"l"};
+    std::vector<std::string> words{"a"};
+    std::vector<Plain *> pointers;
+    std::vector<const Plain *> const_pointers;
+    std::vector<mrb_int *> raw_longs;
     mrb_int length_of(const std::string &s) const { return static_cast<mrb_int>(s.size()); }
     std::string echo(std::string s) const { return s; }
 };
 
-struct Plain {
-    mrb_int n = 1;
-};
 
 /* The names follow the example of multiple inheritance in [class.mi].
  * Each constructor appends its class to constructed, so the order C++
