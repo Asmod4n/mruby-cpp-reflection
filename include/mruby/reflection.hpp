@@ -31,7 +31,6 @@
 #include <new>
 #include <memory>
 #include <unordered_map>
-#include <mutex>
 #include <optional>
 #include <ranges>
 #include <span>
@@ -129,50 +128,38 @@ consteval std::meta::info reflect_ownership_class()
     return ^^void;
 }
 
-struct reflect_identity_key {
-    mrb_state *mrb;
-    const void *object;
-    bool operator==(const reflect_identity_key &) const = default;
-};
+using reflect_identities = std::unordered_map<const void *, RObject *>;
 
-struct reflect_identity_hash {
-    std::size_t operator()(const reflect_identity_key &key) const
-    {
-        return std::hash<const void *>()(key.mrb) ^ (std::hash<const void *>()(key.object) << 1);
-    }
-};
-
-struct reflect_identities {
-    std::mutex lock;
-    std::unordered_map<reflect_identity_key, RObject *, reflect_identity_hash> objects;
-};
-
-inline reflect_identities &reflect_identity_map()
+inline mrb_sym reflect_identities_key(mrb_state *const mrb)
 {
-    static reflect_identities map;
-    return map;
+    return mrb_intern_lit(mrb, "reflected identities");
+}
+
+inline reflect_identities &reflect_identity_map(mrb_state *const mrb)
+{
+    return *static_cast<reflect_identities *>(mrb_cptr(mrb_iv_get(mrb, mrb_obj_value(mrb->object_class), reflect_identities_key(mrb))));
 }
 
 inline RObject *reflect_identity(mrb_state *const mrb, const void *const object)
 {
-    reflect_identities &map = reflect_identity_map();
-    const std::lock_guard held(map.lock);
-    const auto found = map.objects.find({mrb, object});
-    return found == map.objects.end() ? nullptr : found->second;
+    const reflect_identities &map = reflect_identity_map(mrb);
+    const auto found = map.find(object);
+    return found == map.end() ? nullptr : found->second;
 }
 
 inline void reflect_identity_set(mrb_state *const mrb, const void *const object, RObject *const ruby)
 {
-    reflect_identities &map = reflect_identity_map();
-    const std::lock_guard held(map.lock);
-    map.objects[{mrb, object}] = ruby;
+    reflect_identity_map(mrb)[object] = ruby;
 }
 
 inline void reflect_identity_erase(mrb_state *const mrb, const void *const object)
 {
-    reflect_identities &map = reflect_identity_map();
-    const std::lock_guard held(map.lock);
-    map.objects.erase({mrb, object});
+    reflect_identity_map(mrb).erase(object);
+}
+
+inline mrb_sym reflect_reflected_key(mrb_state *const mrb)
+{
+    return mrb_intern_lit(mrb, "reflected");
 }
 
 template <class T>
@@ -1409,6 +1396,7 @@ RClass *reflect_define_class(reflect_definition &definition, RClass *const under
         klass = mrb_class_new(mrb, superclass);
     }
     MRB_SET_INSTANCE_TT(klass, MRB_TT_CDATA);
+    mrb_iv_set(mrb, mrb_obj_value(klass), reflect_reflected_key(mrb), mrb_true_value());
     mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), reflect_class_key<std::meta::dealias(std::meta::remove_cvref(Type))>(mrb), mrb_obj_value(klass));
     RClass *const methods = ::mrb_define_module_under_id(mrb, klass, reflect_sym<kInstanceMethods>(mrb));
     mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), reflect_module_key<std::meta::dealias(std::meta::remove_cvref(Type))>(mrb), mrb_obj_value(methods));
