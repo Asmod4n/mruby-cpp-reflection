@@ -198,6 +198,7 @@ static mrb_int &nodes_alive()
 }
 struct Node {
     Node *parent = nullptr;
+    Plain tag;
     std::vector<Node *> children;
     Node() { ++nodes_alive(); }
     explicit Node(Node *p) : Node() { set_parent(p); }
@@ -298,7 +299,25 @@ struct WatchedHolder {
     Watched *get() const { return held.get(); }
     void reset() { held.reset(); }
 };
-constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Sharer, ^^SelfSharer, ^^WatchedHolder>();
+/* A reference a method returns is copied when the type can be
+ * copied, since nothing tells how long C++ keeps what it points to; a
+ * Lonely cannot be copied, has no guard and no share, and Ruby did not
+ * make it, so asking for it raises. A field is lent, and it goes with
+ * the object it belongs to. */
+struct Lonely {
+    mrb_int v = 4;
+    Lonely() = default;
+    Lonely(const Lonely &) = delete;
+    Lonely &operator=(const Lonely &) = delete;
+};
+struct Lender {
+    std::vector<mrb_int> items{1, 2};
+    std::unique_ptr<Lonely> lonely = std::make_unique<Lonely>();
+    const std::vector<mrb_int> &view() const { return items; }
+    Lonely &alone() const { return *lonely; }
+    void add(mrb_int n) { items.push_back(n); }
+};
+constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Sharer, ^^SelfSharer, ^^WatchedHolder, ^^Lender>();
 constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();
 
 static_assert(std::string_view(mrb_cpp_reflector::reflect_get_args_format<std::meta::members_of(^^Reflected, std::meta::access_context::current())[2]>().data()) == "si");

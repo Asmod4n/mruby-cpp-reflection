@@ -184,10 +184,26 @@ const void *reflect_identity_of(const T *const object)
 template <class T>
 constexpr bool reflect_trackable = std::is_class_v<T> && std::has_virtual_destructor_v<T> && !std::is_final_v<T>;
 
-template <class T>
-struct reflect_tracked final : T {
+inline mrb_sym reflect_lent_key(mrb_state *const mrb)
+{
+    return mrb_intern_lit(mrb, "reflected lent");
+}
+
+inline void reflect_forget(mrb_state *const mrb, const mrb_value object)
+{
+    DATA_PTR(object) = nullptr;
+    const mrb_value lent = mrb_iv_get(mrb, object, reflect_lent_key(mrb));
+    if (!mrb_array_p(lent)) return;
+    for (mrb_int i = 0; i < RARRAY_LEN(lent); i++) reflect_forget(mrb, RARRAY_PTR(lent)[i]);
+}
+
+struct reflect_tracked_base {
     mrb_state *mrb = nullptr;
     RObject *ruby = nullptr;
+};
+
+template <class T>
+struct reflect_tracked final : T, reflect_tracked_base {
     template <class... A>
     explicit reflect_tracked(A &&...args) : T(std::forward<A>(args)...)
     {
@@ -195,7 +211,7 @@ struct reflect_tracked final : T {
     ~reflect_tracked()
     {
         if (ruby == nullptr) return;
-        DATA_PTR(mrb_obj_value(ruby)) = nullptr;
+        reflect_forget(mrb, mrb_obj_value(ruby));
         if constexpr (reflect_ownership_class<T>() != ^^void) reflect_identity_erase(mrb, reflect_identity_of(static_cast<T *>(this)));
     }
 };
@@ -455,7 +471,7 @@ template <class T>
 mrb_value reflect_object(mrb_state *const mrb, T &&value, const bool frozen = false)
 {
     using U = std::remove_cvref_t<T>;
-    RData *const data = mrb_data_object_alloc(mrb, reflect_class<^^U>(mrb), nullptr, &reflect_data_type_owned<U>());
+    RData *const data = mrb_data_object_alloc(mrb, reflect_class<std::meta::dealias(std::meta::remove_cvref(^^U))>(mrb), nullptr, &reflect_data_type_owned<U>());
     reflect_adopt<U>(mrb, mrb_obj_value(data), reflect_new<U>(mrb, std::forward<T>(value)));
     if (frozen) mrb_obj_freeze(mrb, mrb_obj_value(data));
     return mrb_obj_value(data);
@@ -470,10 +486,10 @@ mrb_value reflect_borrowed(mrb_state *const mrb, T *const ref, const mrb_value o
     RData *data;
     if constexpr (reflect_guard_class<T>() != ^^void) {
         using O = [:reflect_guard_class<T>():];
-        data = mrb_data_object_alloc(mrb, reflect_class<^^T>(mrb), new typename reflect_ownership_traits<O>::guard(static_cast<O *>(ref)),
+        data = mrb_data_object_alloc(mrb, reflect_class<std::meta::dealias(std::meta::remove_cvref(^^T))>(mrb), new typename reflect_ownership_traits<O>::guard(static_cast<O *>(ref)),
                                      &reflect_data_type_guarded<T>());
     } else {
-        data = mrb_data_object_alloc(mrb, reflect_class<^^T>(mrb), ref, &reflect_data_type_borrowed<T>());
+        data = mrb_data_object_alloc(mrb, reflect_class<std::meta::dealias(std::meta::remove_cvref(^^T))>(mrb), ref, &reflect_data_type_borrowed<T>());
     }
     const mrb_value object = mrb_obj_value(data);
     mrb_iv_set(mrb, object, reflect_sym<kOwner>(mrb), owner);
@@ -672,6 +688,42 @@ auto reflect_get_args(mrb_state *const mrb)
 }
 
 template <class P>
+mrb_value reflect_lend(mrb_state *const mrb, const mrb_value holder, P *const object, const bool frozen)
+{
+    const mrb_value lent = reflect_borrowed<std::remove_const_t<P>>(mrb, const_cast<std::remove_const_t<P> *>(object), holder, frozen);
+    mrb_value list = mrb_iv_get(mrb, holder, reflect_lent_key(mrb));
+    if (!mrb_array_p(list)) {
+        list = mrb_ary_new(mrb);
+        mrb_iv_set(mrb, holder, reflect_lent_key(mrb), list);
+    }
+    mrb_ary_push(mrb, list, lent);
+    return lent;
+}
+
+template <class P>
+mrb_value reflect_shared_from(mrb_state *mrb, P *object);
+
+template <class P>
+mrb_value reflect_reference(mrb_state *const mrb, P *const object)
+{
+    using Q = std::remove_const_t<P>;
+    if (const mrb_value shared = reflect_shared_from(mrb, object); !mrb_undef_p(shared)) return shared;
+    if constexpr (reflect_guard_class<Q>() != ^^void) return reflect_borrowed<Q>(mrb, const_cast<Q *>(object), mrb_nil_value(), std::is_const_v<P>);
+    else {
+        if constexpr (std::is_polymorphic_v<Q>) {
+            if (const reflect_tracked_base *const made = dynamic_cast<const reflect_tracked_base *>(object);
+                made != nullptr && made->mrb == mrb && made->ruby != nullptr)
+                return mrb_obj_value(made->ruby);
+        }
+        if constexpr (reflect_ownership_class<Q>() != ^^void) {
+            if (RObject *const known = reflect_identity(mrb, reflect_identity_of(object)); known != nullptr) return mrb_obj_value(known);
+        }
+        if constexpr (std::is_copy_constructible_v<Q> && !std::is_abstract_v<Q>) return reflect_object(mrb, static_cast<const Q &>(*object));
+        else mrb_raisef(mrb, E_TYPE_ERROR, "%s is kept by C++ and cannot be kept alive from Ruby", std::define_static_string(reflect_class_name(^^Q)));
+    }
+}
+
+template <class P>
 mrb_value reflect_shared_from(mrb_state *const mrb, P *const object)
 {
     if constexpr (requires { object->weak_from_this().lock(); }) {
@@ -707,20 +759,13 @@ mrb_value reflect_result(mrb_state *const mrb, const mrb_value self, R &&value)
         using P = std::remove_cv_t<std::remove_pointer_t<T>>;
         if constexpr (std::same_as<P, char>) return value == nullptr ? mrb_nil_value() : mrb_str_new_cstr(mrb, value);
         else if constexpr (mrbcpp::value_converter::is_std_pair<P>::value) return value == nullptr ? mrb_nil_value() : reflect_result(mrb, self, *value);
-        else {
-            if (value == nullptr) return mrb_nil_value();
-            if (const mrb_value shared = reflect_shared_from(mrb, value); !mrb_undef_p(shared)) return shared;
-            return reflect_borrowed<P>(mrb, const_cast<P *>(value), self, std::is_const_v<std::remove_pointer_t<T>>);
-        }
+        else return value == nullptr ? mrb_nil_value() : reflect_reference(mrb, value);
     } else if constexpr (mrbcpp::value_converter::is_std_pair<T>::value) {
         const mrb_value pair = mrb_ary_new_capa(mrb, 2);
         mrb_ary_push(mrb, pair, reflect_result(mrb, self, value.first));
         mrb_ary_push(mrb, pair, reflect_result(mrb, self, value.second));
         return pair;
-    } else if constexpr (std::is_lvalue_reference_v<R>) {
-        if (const mrb_value shared = reflect_shared_from(mrb, &value); !mrb_undef_p(shared)) return shared;
-        return reflect_borrowed<T>(mrb, const_cast<T *>(&value), self, frozen);
-    }
+    } else if constexpr (std::is_lvalue_reference_v<R>) return reflect_reference(mrb, &value);
     else if constexpr (reflect_is_view(^^T)) return reflect_view<T>(mrb, std::move(value), self, frozen);
     else return reflect_object<T>(mrb, std::move(value), frozen);
 }
@@ -979,7 +1024,10 @@ void reflect_define_field(mrb_state *const mrb, RClass *const klass)
     ::mrb_define_method_id(mrb, klass, reflect_intern<Field>(mrb), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
         T *const object = reflect_ptr<T>(mrb, self);
         if (object == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
-        return reflect_result(mrb, self, object->[:Field:]);
+        using F = [:reflect_bare(std::meta::type_of(Field)):];
+        if constexpr (std::is_class_v<F> && (reflect_guard_class<T>() == ^^void) && !std::same_as<F, std::string_view>)
+            return reflect_lend(mrb, self, &object->[:Field:], std::meta::is_const_type(std::meta::type_of(Field)) || mrb_frozen_p(mrb_obj_ptr(self)));
+        else return reflect_result(mrb, self, object->[:Field:]);
     }, MRB_ARGS_NONE());
     if constexpr (!std::meta::is_const_type(std::meta::type_of(Field)) && std::is_copy_assignable_v<typename [:reflect_bare(std::meta::type_of(Field)):]>) {
         constexpr std::string_view name = std::meta::identifier_of(Field);
@@ -1070,7 +1118,9 @@ template <std::meta::info Member>
 void reflect_define_static_data_member(mrb_state *const mrb, RClass *const singleton)
 {
     ::mrb_define_method_id(mrb, singleton, reflect_intern<Member>(mrb), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
-        return reflect_result(mrb, self, [:Member:]);
+        using F = [:reflect_bare(std::meta::type_of(Member)):];
+        if constexpr (std::is_class_v<F>) return reflect_borrowed<F>(mrb, const_cast<F *>(&[:Member:]), self, std::meta::is_const_type(std::meta::type_of(Member)));
+        else return reflect_result(mrb, self, [:Member:]);
     }, MRB_ARGS_NONE());
     if constexpr (!std::meta::is_const_type(std::meta::type_of(Member)) && std::is_copy_assignable_v<typename [:reflect_bare(std::meta::type_of(Member)):]>) {
         constexpr auto setter = std::define_static_string(std::string(std::meta::identifier_of(Member)) + "=");
@@ -1160,6 +1210,22 @@ RClass *reflect_define_class(mrb_state *const mrb, RClass *const under)
                                }, MRB_ARGS_NONE());
     } else {
         MRB_UNDEF_ALLOCATOR(klass);
+    }
+    if constexpr (std::is_copy_constructible_v<T> && std::is_destructible_v<T> && !std::is_abstract_v<T>) {
+        ::mrb_define_method_id(mrb, klass, mrb_intern_lit(mrb, "initialize_copy"), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+            mrb_value original;
+            mrb_get_args(mrb, "o", &original);
+            T *const source = reflect_ptr<T>(mrb, original);
+            if (source == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong original");
+            return reflect_translate_exceptions(mrb, [&] {
+                reflect_adopt<T>(mrb, self, reflect_new<T>(mrb, static_cast<const T &>(*source)));
+                return self;
+            });
+        }, MRB_ARGS_REQ(1));
+    } else {
+        ::mrb_define_method_id(mrb, klass, mrb_intern_lit(mrb, "initialize_copy"), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+            mrb_raisef(mrb, E_TYPE_ERROR, "can't copy %s", std::define_static_string(reflect_class_name(^^T)));
+        }, MRB_ARGS_REQ(1));
     }
     template for (constexpr std::meta::info member : reflect_members<Type>()) {
         constexpr bool first_of_its_name = [] consteval {

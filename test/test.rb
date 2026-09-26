@@ -17,8 +17,10 @@ if Object.const_defined?(:Reflected)
     r.total = 3
     assert_equal(3, r.total)
     assert_equal([4], r.history.to_a)
-    assert_true(r.history.frozen?)
-    assert_raise(FrozenError) { r.history.push_back(1) }
+    copy = r.history
+    assert_false(copy.frozen?)
+    copy.push_back(1)
+    assert_equal([4], r.history.to_a)
     assert_equal(2, r.count([1, 2]))
     assert_equal(1, r.count(r.history))
     r.seen.push_back(9)
@@ -43,7 +45,8 @@ if Object.const_defined?(:Reflected)
     source.add(7)
     assert_equal([7], r.seen.replace(source.history).to_a)
     assert_equal('y', r.label.replace('y').to_s)
-    assert_raise(FrozenError) { r.history.replace([]) }
+    assert_equal([], r.history.replace([]).to_a)
+    assert_equal([7], r.history.to_a)
     assert_raise(TypeError) { r.seen.replace('no') }
     other = Reflected.new
     other.replace(r)
@@ -314,5 +317,36 @@ assert('an object C++ deleted raises through its guard') do
   assert_equal(3, watched.v)
   holder.reset
   assert_raise(TypeError) { watched.v }
+end
+
+assert('a reference from a method is a copy, and a field is lent') do
+  lender = Lender.new
+  view = lender.view
+  lender.add(3)
+  assert_equal([1, 2], view.to_a)
+  assert_false(view.frozen?)
+  assert_equal([1, 2, 3], lender.items.to_a)
+  assert_raise(TypeError) { lender.alone }
+end
+
+assert('a field goes with the object it belongs to') do
+  root = Node.new
+  child = Node.new(root)
+  tag = child.tag
+  assert_equal(1, tag.n)
+  root.delete_child(0)
+  assert_raise(TypeError) { tag.n }
+end
+
+assert('dup and clone copy the C++ object with its copy constructor') do
+  s = S.new(7)
+  d = s.dup
+  d.v = 1
+  assert_equal([7, 1], [s.v, d.v])
+  s.freeze
+  assert_true(s.clone.frozen?)
+  assert_false(s.dup.frozen?)
+  assert_equal(7, s.clone.v)
+  assert_raise(TypeError) { Node.new.dup }
 end
 
