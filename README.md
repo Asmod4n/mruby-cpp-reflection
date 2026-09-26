@@ -95,6 +95,10 @@ type is defined with its class only where a member uses it.
 - A member function with no Ruby form is not defined: iterators, allocators,
   a non-const reference to a type without a reflected class, rvalue-qualified
   members, member templates.
+- A union is not reflected. A union does not record which member is
+  active, and a read of an inactive member is undefined behaviour. Where
+  Ruby needs a union, the program provides a C++ class that holds it and
+  knows which member is active, and lists that class in `reflect<>`.
 
 ## Build
 
