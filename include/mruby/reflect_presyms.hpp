@@ -466,16 +466,21 @@ consteval std::meta::info reflect_operand_class(const std::meta::info function)
     return reflect_bare(std::meta::type_of(std::meta::parameters_of(function)[0]));
 }
 
+consteval bool reflect_operand_is_lvalue(const std::meta::info function)
+{
+    return !std::meta::is_rvalue_reference_type(std::meta::type_of(std::meta::parameters_of(function)[0]));
+}
+
 consteval std::vector<std::meta::info> reflect_free_operators(const std::meta::info scope, const std::span<const std::meta::info> classes)
 {
     std::vector<std::meta::info> operators;
     for (const std::meta::info m : std::meta::members_of(scope, std::meta::access_context::current()))
         if (std::meta::is_function(m) && reflect_skip(m) == 1 && !reflect_operator_method(m).empty() &&
-            std::meta::is_class_type(reflect_operand_class(m)) && reflect_call_supported(m))
+            std::meta::is_class_type(reflect_operand_class(m)) && reflect_operand_is_lvalue(m) && reflect_call_supported(m))
             operators.push_back(m);
     for (const std::meta::info c : classes)
         if (std::meta::is_function(c) && std::meta::parent_of(c) == scope && reflect_skip(c) == 1 && !reflect_operator_method(c).empty() &&
-            std::meta::is_class_type(reflect_operand_class(c)) && reflect_call_supported(c) && std::ranges::find(operators, c) == operators.end())
+            std::meta::is_class_type(reflect_operand_class(c)) && reflect_operand_is_lvalue(c) && reflect_call_supported(c) && std::ranges::find(operators, c) == operators.end())
             operators.push_back(c);
     return operators;
 }

@@ -592,6 +592,7 @@ assert('a free operator is a method of the class of its first operand') do
   assert_equal('1v27', log.text.to_s)
   assert_raise(TypeError) { log << 'x' }
   assert_false(Ops.respond_to?(:+))
+  assert_false(Ops::Vec.method_defined?(:*))
 end
 
 # A variable at namespace scope is a module function of its namespace, as

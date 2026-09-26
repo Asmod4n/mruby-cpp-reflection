@@ -475,6 +475,7 @@ struct Vec {
 inline bool operator==(const Vec &a, const Vec &b) { return a.x == b.x; }
 inline Vec operator+(const Vec &a, const Vec &b) { return {a.x + b.x}; }
 inline Vec operator-(const Vec &a) { return {-a.x}; }
+inline Vec operator*(Vec &&a, int n) { return {a.x * n}; }
 struct Log {
     std::string text;
     Log &operator<<(int n)
