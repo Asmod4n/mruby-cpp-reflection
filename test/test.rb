@@ -593,3 +593,21 @@ assert('a free operator is a method of the class of its first operand') do
   assert_raise(TypeError) { log << 'x' }
   assert_false(Ops.respond_to?(:+))
 end
+
+# A variable at namespace scope is a module function of its namespace, as
+# a static data member is a class method. An object of class type is lent,
+# so Ruby changes the C++ variable, and a const one is frozen. A namespace
+# that is not listed shows only what reflect<> names in it.
+assert('a namespace variable is a module function of its namespace') do
+  assert_equal(3, Globals.counter)
+  Globals.counter = 4
+  assert_equal(4, Globals.read_counter)
+  assert_equal(10, Globals.limit)
+  assert_false(Globals.respond_to?(:limit=))
+  Globals.shared.n = 7
+  assert_equal(7, Globals.read_shared)
+  assert_true(Globals.fixed.frozen?)
+  assert_equal(5, OnlyOne.picked)
+  assert_false(OnlyOne.respond_to?(:skipped))
+  assert_false(OnlyOne.respond_to?(:skipped_function))
+end

@@ -439,6 +439,22 @@ consteval std::array<std::meta::info, sizeof...(Types)> reflect()
     return {Types...};
 }
 
+consteval bool reflect_variable_supported(const std::meta::info variable)
+{
+    const std::meta::info type = reflect_bare(std::meta::type_of(variable));
+    if (std::meta::is_class_type(type)) return std::meta::is_complete_type(type) && !reflect_is_iterator(type);
+    return reflect_result_supported(std::meta::type_of(variable));
+}
+
+consteval std::vector<std::meta::info> reflect_variables(const std::meta::info scope)
+{
+    std::vector<std::meta::info> variables;
+    for (const std::meta::info m : std::meta::members_of(scope, std::meta::access_context::current()))
+        if (std::meta::is_variable(m) && std::meta::has_identifier(m) && !std::meta::identifier_of(m).starts_with("_") && reflect_variable_supported(m))
+            variables.push_back(m);
+    return variables;
+}
+
 consteval std::vector<std::meta::info> reflect_given_parameters(const std::meta::info function)
 {
     const std::vector<std::meta::info> parameters = std::meta::parameters_of(function);
@@ -494,7 +510,8 @@ consteval std::vector<std::meta::info> reflect_instances_computed(const std::met
 {
     std::vector<std::meta::info> instances;
     for (const std::meta::info c : classes)
-        if (std::meta::is_function(c) && std::meta::parent_of(c) == scope && reflect_call_supported(c)) instances.push_back(c);
+        if (std::meta::parent_of(c) == scope && ((std::meta::is_function(c) && reflect_call_supported(c)) || (std::meta::is_variable(c) && reflect_variable_supported(c))))
+            instances.push_back(c);
     if (!templates || !(std::meta::is_namespace(scope) || std::meta::is_class_type(scope))) return instances;
     const std::vector<std::meta::info> candidates = reflect_template_candidates(scope);
     for (const std::meta::info m : std::meta::members_of(scope, std::meta::access_context::current())) {
@@ -533,7 +550,7 @@ consteval std::vector<std::meta::info> reflect_scopes(const std::span<const std:
 {
     std::vector<std::meta::info> scopes;
     for (const std::meta::info c : classes) {
-        const std::meta::info scope = std::meta::is_function(c) ? std::meta::parent_of(c) : c;
+        const std::meta::info scope = std::meta::is_function(c) || std::meta::is_variable(c) ? std::meta::parent_of(c) : c;
         if (std::ranges::find(scopes, scope) == scopes.end()) scopes.push_back(scope);
     }
     return scopes;
@@ -543,7 +560,7 @@ consteval std::vector<std::meta::info> reflect_merged(const std::span<const std:
 {
     std::vector<std::meta::info> merged(functions.begin(), functions.end());
     for (const std::meta::info i : instances)
-        if (std::meta::is_static_member(i) == statics) merged.push_back(i);
+        if (std::meta::is_function(i) && std::meta::is_static_member(i) == statics) merged.push_back(i);
     return merged;
 }
 

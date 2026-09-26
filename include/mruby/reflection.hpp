@@ -1615,7 +1615,7 @@ void reflect_define_operators(reflect_definition &definition)
     }
 }
 
-template <std::meta::info Namespace, auto Instances = std::array<std::meta::info, 0>{}>
+template <std::meta::info Namespace, auto Instances = std::array<std::meta::info, 0>{}, bool Listed = true>
 RClass *reflect_define_namespace(reflect_definition &definition, RClass *const under)
 {
     mrb_state *const mrb = definition.mrb;
@@ -1626,10 +1626,18 @@ RClass *reflect_define_namespace(reflect_definition &definition, RClass *const u
     RClass *const singleton = mrb_class_ptr(mrb_singleton_class(mrb, mrb_obj_value(module)));
     static constexpr auto functions = std::define_static_array([] consteval {
         std::vector<std::meta::info> all;
-        for (const std::meta::info f : reflect_merged(reflect_members<Namespace>(), Instances, false))
+        for (const std::meta::info f : reflect_merged(Listed ? reflect_members<Namespace>() : std::span<const std::meta::info>{}, Instances, false))
             if (reflect_skip(f) == 0) all.push_back(f);
         return all;
     }());
+    static constexpr auto variables = std::define_static_array([] consteval {
+        std::vector<std::meta::info> all = Listed ? reflect_variables(Namespace) : std::vector<std::meta::info>{};
+        for (const std::meta::info v : Instances)
+            if (std::meta::is_variable(v) && std::ranges::find(all, v) == all.end()) all.push_back(v);
+        return all;
+    }());
+    template for (constexpr std::meta::info variable : variables)
+        reflect_define_static_data_member<variable>(mrb, singleton);
     template for (constexpr std::meta::info function : functions) {
         if constexpr (reflect_first_of_its_name(functions, function)) {
             static constexpr auto overloads = std::define_static_array(reflect_overloads_in(functions, function));
@@ -1649,7 +1657,8 @@ void reflect_define(mrb_state *const mrb, RClass *const under = nullptr)
     reflect_definition definition(mrb);
     template for (constexpr std::meta::info type : std::define_static_array(reflect_scopes(Classes))) {
         constexpr auto instances = reflect_instances<type, Classes, Options.templates>();
-        if constexpr (std::meta::is_namespace(type)) reflect_define_namespace<type, instances>(definition, under != nullptr ? under : mrb->object_class);
+        if constexpr (std::meta::is_namespace(type))
+            reflect_define_namespace<type, instances, std::ranges::find(Classes, type) != Classes.end()>(definition, under != nullptr ? under : mrb->object_class);
         else if (!mrb_iv_defined(mrb, mrb_obj_value(mrb->object_class), reflect_class_key<std::meta::dealias(std::meta::remove_cvref(type))>(mrb)))
         {
             if constexpr (std::meta::is_enum_type(std::meta::dealias(type))) reflect_define_enum<type>(definition, under != nullptr ? under : mrb->object_class);

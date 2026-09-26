@@ -489,6 +489,22 @@ inline Log &operator<<(Log &log, const Vec &v)
     return log;
 }
 }
+namespace globals {
+struct Counter {
+    int n = 1;
+};
+inline int counter = 3;
+inline const int limit = 10;
+inline Counter shared;
+inline const Counter fixed{};
+inline int read_counter() { return counter; }
+inline int read_shared() { return shared.n; }
+}
+namespace only_one {
+inline int picked = 5;
+inline int skipped = 6;
+inline int skipped_function() { return 0; }
+}
 struct Converts {
     operator int() const { return 7; }
     operator double() const { return 2.5; }
@@ -521,6 +537,7 @@ constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();
 constexpr auto nested = mrb_cpp_reflector::reflect<^^Holder>();
 constexpr auto named = mrb_cpp_reflector::reflect<^^fruit::Basket::count<fruit::Apple>>();
 constexpr auto operators = mrb_cpp_reflector::reflect<^^ops, ^^ops::Vec, ^^ops::Log>();
+constexpr auto variables = mrb_cpp_reflector::reflect<^^globals, ^^only_one::picked>();
 constexpr auto instantiated = mrb_cpp_reflector::reflect<^^fruit, ^^fruit::Apple, ^^fruit::Pear, ^^fruit::Kind, ^^fruit::Scale>();
 
 static_assert(std::string_view(mrb_cpp_reflector::reflect_get_args_format<std::meta::members_of(^^Reflected, std::meta::access_context::current())[2]>().data()) == "si");
@@ -609,6 +626,7 @@ extern "C" void mrb_mruby_cpp_reflection_gem_test(mrb_state *mrb)
     mrb_cpp_reflector::reflect_define<nested, {.nested_types = true}>(mrb);
     mrb_cpp_reflector::reflect_define<named>(mrb);
     mrb_cpp_reflector::reflect_define<operators>(mrb);
+    mrb_cpp_reflector::reflect_define<variables>(mrb);
     mrb_cpp_reflector::reflect_define<instantiated, {.templates = true}>(mrb);
 }
 #else

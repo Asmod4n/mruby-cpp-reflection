@@ -95,6 +95,12 @@ type is defined with its class only where a member uses it.
 - A member function with no Ruby form is not defined: iterators, allocators,
   a non-const reference to a type without a reflected class, rvalue-qualified
   members.
+- A variable at namespace scope is a module function of its namespace,
+  with a writer where it is not `const`: `ns::counter` is `Ns.counter` and
+  `Ns.counter=`. An object of class type is lent, and frozen where it is
+  `const`. A listed namespace shows all of its variables and functions. A
+  namespace that is not listed shows only the variables and function
+  instances that `reflect<>` names in it, such as `^^std::cout`.
 - An operator declared outside a class is a method of the class of its
   first operand, next to the operators of that class: `operator+(const
   Vec &, const Vec &)` is `Vec#+`. The operators of the class's own
