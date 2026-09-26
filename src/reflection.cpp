@@ -8,18 +8,13 @@
 #endif
 
 #if defined(__cpp_impl_reflection)
-extern "C" [[noreturn]] void reflect_undefined()
+namespace mrb_cpp_reflector {
+[[noreturn]] void reflect_undefined()
 {
-    throw mrb_cpp_reflector::reflect_undefined_call();
+    throw reflect_undefined_call();
 }
-#endif
 
-#if defined(__cpp_impl_reflection)
-/* mrb_close runs the gem finalizers before it frees the objects, in no
- * order. Every reflected object is freed here while the table of
- * identities still exists, and detached, so the collector later calls
- * no dfree that would reach the table. */
-static int reflect_free_object(mrb_state *const mrb, RBasic *const object, void *)
+int reflect_free_object(mrb_state *const mrb, RBasic *const object, void *)
 {
     if (mrb_object_dead_p(mrb, object) || object->tt != MRB_TT_CDATA || object->c == nullptr) return MRB_EACH_OBJ_OK;
     const mrb_value value = mrb_obj_value(object);
@@ -33,6 +28,7 @@ static int reflect_free_object(mrb_state *const mrb, RBasic *const object, void 
     if (type != nullptr && type->dfree != nullptr && data != nullptr) type->dfree(mrb, data);
     return MRB_EACH_OBJ_OK;
 }
+}
 
 extern "C" void mrb_mruby_cpp_reflection_gem_init(mrb_state *const mrb)
 {
@@ -42,7 +38,7 @@ extern "C" void mrb_mruby_cpp_reflection_gem_init(mrb_state *const mrb)
 
 extern "C" void mrb_mruby_cpp_reflection_gem_final(mrb_state *const mrb)
 {
-    mrb_objspace_each_objects(mrb, reflect_free_object, nullptr);
+    mrb_objspace_each_objects(mrb, mrb_cpp_reflector::reflect_free_object, nullptr);
     delete &mrb_cpp_reflector::reflect_identity_map(mrb);
     mrb_iv_remove(mrb, mrb_obj_value(mrb->object_class), mrb_cpp_reflector::reflect_identities_key(mrb));
 }

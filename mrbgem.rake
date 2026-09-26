@@ -28,30 +28,6 @@ def reflect_presyms(spec, runner_src)
   spec.objs << obj
 end
 
-# A reflected class may name a function that its headers declare and no
-# linked library defines: an extern template, a C++23 member a shared
-# library built earlier lacks, a marker only ever named in sizeof. The
-# first link names what is missing; the second points each at
-# reflect_undefined, which raises NotImplementedError when Ruby calls it.
-module ReflectUndefinedLink
-  private
-
-  def _run(options, params = {}, chdir: nil)
-    return super unless options.equal?(link_options)
-    require 'open3'
-    cmd = command_line(options, params)
-    out, status = Open3.capture2e({ 'LC_ALL' => 'C' }, "#{cmd} -Wl,--no-demangle", chdir: chdir || Dir.pwd)
-    return if status.success?
-    missing = out.scan(/undefined reference to [`']([^']+)'/).flatten.uniq
-    if missing.empty?
-      $stderr.print out
-      fail "Command failed with status (#{status.exitstatus}): [#{cmd}]"
-    end
-    _pp 'LD', "again, #{missing.size} undefined"
-    sh "#{cmd} #{missing.map { |symbol| "-Wl,--defsym=#{symbol}=reflect_undefined" }.join(' ')}", chdir: chdir || Dir.pwd
-  end
-end
-
 MRuby::Gem::Specification.new('mruby-cpp-reflection') do |spec|
   spec.license = 'MPL-2'
   spec.authors = 'Hendrik Beskow'
@@ -65,5 +41,7 @@ MRuby::Gem::Specification.new('mruby-cpp-reflection') do |spec|
   spec.add_test_dependency 'mruby-class-ext', core: 'mruby-class-ext'
   spec.add_test_dependency 'mruby-method', core: 'mruby-method'
   reflect_presyms(spec, "#{spec.dir}/test/reflect_presyms/main.cpp")
-  spec.build.linker.extend(ReflectUndefinedLink) unless spec.build.linker.singleton_class.include?(ReflectUndefinedLink)
+  spec.build.enable_cxx_exception
+  relink = "#{spec.dir}/tools/relink.rb"
+  spec.build.linker.command = "#{RbConfig.ruby} #{relink} #{spec.build.linker.command}" unless spec.build.linker.command.include?(relink)
 end

@@ -681,7 +681,7 @@ auto reflect_get_args(mrb_state *const mrb)
 {
     [[maybe_unused]] constexpr auto format = reflect_get_args_format<Function, Skip, Count>();
     return [&]<std::size_t... I>(std::index_sequence<I...>) {
-        constexpr auto slot = []<std::meta::info P>() consteval {
+        constexpr auto retrieving_type = []<std::meta::info P>() consteval {
             using T = [:reflect_bare(std::meta::type_of(P)):];
             if constexpr (reflect_is_object(std::meta::type_of(P)) || (std::meta::is_pointer_type(std::meta::dealias(std::meta::type_of(P))) && !std::same_as<T, const char *>))
                 return std::type_identity<mrb_value>{};
@@ -692,15 +692,15 @@ auto reflect_get_args(mrb_state *const mrb)
             else if constexpr (std::floating_point<T>) return std::type_identity<mrb_float>{};
             else return std::type_identity<T>{};
         };
-        std::tuple<typename decltype(slot.template operator()<std::meta::parameters_of(Function)[I + Skip]>())::type...> slots{};
+        std::tuple<typename decltype(retrieving_type.template operator()<std::meta::parameters_of(Function)[I + Skip]>())::type...> retrieved{};
         std::apply([&](auto *const... p) { ::mrb_get_args(mrb, format.data(), p...); },
                    std::tuple_cat([&]<std::size_t J>() {
-                       auto &s = std::get<J>(slots);
+                       auto &s = std::get<J>(retrieved);
                        if constexpr (requires { s.first; s.second; }) return std::tuple{&s.first, &s.second};
                        else return std::tuple{&s};
                    }.template operator()<I>()...));
         const auto converted = [&]<std::size_t J>() {
-            auto &s = std::get<J>(slots);
+            auto &s = std::get<J>(retrieved);
             constexpr std::meta::info P = std::meta::parameters_of(Function)[J + Skip];
             using T = [:reflect_bare(std::meta::type_of(P)):];
             if constexpr (std::same_as<std::remove_cvref_t<decltype(s)>, mrb_value> && !std::same_as<T, mrb_value>) return reflect_argument<P>(mrb, s);
