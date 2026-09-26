@@ -1071,7 +1071,27 @@ mrb_value reflect_dispatch(mrb_state *const mrb, const mrb_value self)
                 if (!std::meta::is_const(Function) && reflect_get_args_match<Function>(mrb, argv)) mrb_check_frozen(mrb, mrb_obj_ptr(self));
             }
         }
-        if (mrb_undef_p(answer)) mrb_argnum_error(mrb, mrb_get_argc(mrb), 0, -1);
+        if (mrb_undef_p(answer)) [[unlikely]] {
+            constexpr auto counts = [] consteval {
+                std::size_t fewest = SIZE_MAX, most = 0;
+                bool unbounded = false;
+                for (const std::meta::info f : {Overloads...}) {
+                    const std::size_t total = std::meta::parameters_of(f).size() - (reflect_takes_block(f) ? 1 : 0);
+                    fewest = std::min(fewest, reflect_rest(f) ? total - 1 : reflect_required(f));
+                    most = std::max(most, total);
+                    unbounded = unbounded || reflect_rest(f);
+                }
+                return std::array{fewest, unbounded ? SIZE_MAX : most};
+            }();
+            bool fits = false;
+            template for (constexpr std::meta::info Function : std::array{Overloads...}) {
+                constexpr std::size_t total = std::meta::parameters_of(Function).size() - (reflect_takes_block(Function) ? 1 : 0);
+                constexpr std::size_t required = reflect_rest(Function) ? total - 1 : reflect_required(Function);
+                fits = fits || (argv.size() >= required && (reflect_rest(Function) || argv.size() <= total));
+            }
+            if (fits) mrb_raisef(mrb, E_TYPE_ERROR, "no overload of '%n' takes these argument types", mrb_get_mid(mrb));
+            mrb_argnum_error(mrb, mrb_get_argc(mrb), static_cast<int>(counts[0]), counts[1] == SIZE_MAX ? -1 : static_cast<int>(counts[1]));
+        }
         return answer;
     }
 }

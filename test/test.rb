@@ -568,7 +568,8 @@ assert('templates instantiates a function template for the types of its namespac
   assert_equal(10, s.measure(Fruit::Apple.new))
   assert_equal(20, s.measure(Fruit::Pear.new))
   assert_equal(0, s.measure)
-  assert_raise(ArgumentError) { s.measure(Fruit::Kind::Sweet) }
+  assert_raise(TypeError) { s.measure(Fruit::Kind::Sweet) }
+  assert_raise(ArgumentError) { s.measure(Fruit::Apple.new, 1) }
   assert_equal(2, Fruit.weight(Fruit::Pear.new))
   assert_equal(250, Fruit.weight(250))
 end
