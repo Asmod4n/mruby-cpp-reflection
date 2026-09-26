@@ -262,6 +262,46 @@ consteval auto reflect_converting_constructors()
 }
 
 template <std::meta::info Type>
+consteval auto reflect_static_functions_computed()
+{
+    std::vector<std::meta::info> functions;
+    for (const std::meta::info m : std::meta::members_of(std::meta::dealias(Type), std::meta::access_context::current()))
+        if (std::meta::is_function(m) && std::meta::is_static_member(m) &&
+            (std::meta::is_operator_function(m) ? !reflect_operator_method(m).empty() : std::meta::has_identifier(m)) &&
+            reflect_call_supported(m))
+            functions.push_back(m);
+    return std::define_static_array(functions);
+}
+
+template <std::meta::info Type>
+inline constexpr auto reflect_static_functions_cached = reflect_static_functions_computed<Type>();
+
+template <std::meta::info Type>
+consteval auto reflect_static_functions()
+{
+    return reflect_static_functions_cached<Type>;
+}
+
+template <std::meta::info Type>
+consteval auto reflect_static_data_members_computed()
+{
+    std::vector<std::meta::info> members;
+    for (const std::meta::info m : std::meta::members_of(std::meta::dealias(Type), std::meta::access_context::current()))
+        if (std::meta::is_variable(m) && std::meta::is_static_member(m) && std::meta::has_identifier(m) && reflect_result_supported(std::meta::type_of(m)))
+            members.push_back(m);
+    return std::define_static_array(members);
+}
+
+template <std::meta::info Type>
+inline constexpr auto reflect_static_data_members_cached = reflect_static_data_members_computed<Type>();
+
+template <std::meta::info Type>
+consteval auto reflect_static_data_members()
+{
+    return reflect_static_data_members_cached<Type>;
+}
+
+template <std::meta::info Type>
 inline constexpr auto reflect_members_cached = reflect_members_computed<Type>();
 
 template <std::meta::info Type>
@@ -299,7 +339,7 @@ template <std::meta::info Type, std::meta::info Member>
 consteval auto reflect_overloads()
 {
     std::vector<std::meta::info> same;
-    for (const std::meta::info m : reflect_members<Type>())
+    for (const std::meta::info m : std::meta::is_static_member(Member) ? reflect_static_functions<Type>() : reflect_members<Type>())
         if (reflect_identifier(m) == reflect_identifier(Member)) same.push_back(m);
     return std::define_static_array(same);
 }
@@ -312,6 +352,10 @@ void reflect_names_into(std::vector<std::string_view> &names)
     names.push_back(std::define_static_string(reflect_class_name(Type)));
     template for (constexpr std::meta::info member : reflect_members<Type>())
         names.push_back(reflect_identifier(member));
+    template for (constexpr std::meta::info function : reflect_static_functions<Type>())
+        names.push_back(reflect_identifier(function));
+    template for (constexpr std::meta::info member : reflect_static_data_members<Type>())
+        names.push_back(std::meta::identifier_of(member));
     template for (constexpr std::meta::info field : reflect_fields<Type>())
         names.push_back(std::meta::identifier_of(field));
 }
@@ -321,6 +365,8 @@ void reflect_setter_names_into(std::vector<std::string_view> &names)
 {
     template for (constexpr std::meta::info field : reflect_fields<Type>())
         if constexpr (!std::meta::is_const_type(std::meta::type_of(field))) names.push_back(std::meta::identifier_of(field));
+    template for (constexpr std::meta::info member : reflect_static_data_members<Type>())
+        if constexpr (!std::meta::is_const_type(std::meta::type_of(member))) names.push_back(std::meta::identifier_of(member));
 }
 
 template <auto Classes>

@@ -323,6 +323,14 @@ mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
         std::apply([&](auto &...held) { new (kept) T(reflect_pass(held)...); }, args);
         mrb_data_init(self, kept, &reflect_data_type_owned<T>());
         return self;
+    } else if constexpr (std::meta::is_static_member(Function)) {
+        auto args = reflect_get_args<Function, 0, Count>(mrb);
+        if constexpr (std::meta::return_type_of(Function) == ^^void) {
+            std::apply([&](auto &...held) { [:Function:](reflect_pass(held)...); }, args);
+            return mrb_nil_value();
+        } else {
+            return std::apply([&](auto &...held) -> mrb_value { return reflect_result(mrb, self, [:Function:](reflect_pass(held)...)); }, args);
+        }
     } else {
         if constexpr (!std::meta::is_const(Function)) mrb_check_frozen(mrb, mrb_obj_ptr(self));
         T *const object = reflect_ptr<T>(mrb, self);
@@ -541,6 +549,28 @@ void reflect_define_replace(mrb_state *const mrb, RClass *const klass)
     }, MRB_ARGS_REQ(1));
 }
 
+template <std::meta::info Member>
+void reflect_define_static_data_member(mrb_state *const mrb, RClass *const singleton)
+{
+    ::mrb_define_method_id(mrb, singleton, reflect_intern<Member>(mrb), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+        return reflect_result(mrb, self, [:Member:]);
+    }, MRB_ARGS_NONE());
+    if constexpr (!std::meta::is_const_type(std::meta::type_of(Member)) && std::is_copy_assignable_v<typename [:reflect_bare(std::meta::type_of(Member)):]>) {
+        constexpr auto setter = std::define_static_string(std::string(std::meta::identifier_of(Member)) + "=");
+        constexpr mrb_sym presym = reflect_presym(setter);
+        const mrb_sym sym = presym != 0 ? presym : mrb_intern_static(mrb, setter, std::meta::identifier_of(Member).size() + 1);
+        ::mrb_define_method_id(mrb, singleton, sym, [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+            using F = [:reflect_bare(std::meta::type_of(Member)):];
+            mrb_value v;
+            mrb_get_args(mrb, "o", &v);
+            if (F *const p = reflect_ptr<F>(mrb, v); p != nullptr) [:Member:] = *p;
+            else if constexpr (mrbcpp::value_converter::convertible_from_mrb<F>) [:Member:] = mrb_value_to<F>(mrb, v);
+            else mrb_raise(mrb, E_TYPE_ERROR, "wrong type");
+            return v;
+        }, MRB_ARGS_REQ(1));
+    }
+}
+
 template <std::meta::info Type, std::meta::info Subscript>
 void reflect_define_element_assignment(mrb_state *const mrb, RClass *const methods)
 {
@@ -631,6 +661,23 @@ RClass *reflect_define_class(mrb_state *const mrb, RClass *const under)
     }
     template for (constexpr std::meta::info field : reflect_fields<Type>())
         reflect_define_field<field>(mrb, methods);
+    RClass *const singleton = mrb_class_ptr(mrb_singleton_class(mrb, mrb_obj_value(klass)));
+    template for (constexpr std::meta::info function : reflect_static_functions<Type>()) {
+        constexpr bool first_of_its_name = [] consteval {
+            for (const std::meta::info m : reflect_static_functions<Type>()) {
+                if (m == function) return true;
+                if (reflect_identifier(m) == reflect_identifier(function)) return false;
+            }
+            return true;
+        }();
+        if constexpr (first_of_its_name) {
+            [&]<std::size_t... I>(std::index_sequence<I...>) {
+                reflect_define_method<Type, reflect_overloads<Type, function>()[I]...>(mrb, singleton, reflect_intern<function>(mrb));
+            }(std::make_index_sequence<reflect_overloads<Type, function>().size()>{});
+        }
+    }
+    template for (constexpr std::meta::info member : reflect_static_data_members<Type>())
+        reflect_define_static_data_member<member>(mrb, singleton);
     mrb_include_module(mrb, klass, methods);
     reflect_define_conversions<T>(mrb, klass);
     if constexpr (std::is_copy_assignable_v<T>) reflect_define_replace<T>(mrb, klass);

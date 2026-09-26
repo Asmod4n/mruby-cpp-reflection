@@ -138,3 +138,16 @@ assert('a member operator is the Ruby method of the same sign') do
   assert_false(Operand.method_defined?(:'+='))
 end
 
+assert('a static member is a class method') do
+  assert_equal(6, Static.twice(3))
+  assert_equal(12, Static.twice(2, 3))
+  assert_equal(4, Static.make(4).v)
+  assert_equal(10, Static.limit)
+  assert_false(Static.respond_to?(:limit=))
+  assert_false(Static.new.respond_to?(:twice))
+  assert_equal(1, Static.count)
+  Static.count = 5
+  assert_equal(5, Static.count)
+  assert_equal(5, Static.read_count)
+end
+

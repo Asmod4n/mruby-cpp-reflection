@@ -123,7 +123,21 @@ struct Operand {
     mrb_int operator()(mrb_int n) const { return v * n; }
     Operand &operator+=(const Operand &o) { v += o.v; return *this; }
 };
-constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand>();
+/* A static member function is a class method, overloads and all; a
+ * static data member ([class.static.data]) is a class method that reads
+ * it, and one that writes it unless it is const. Both reach the one
+ * object C++ has, so a write from Ruby is what C++ reads. */
+struct Static {
+    mrb_int v = 0;
+    static mrb_int count;
+    static constexpr mrb_int limit = 10;
+    static mrb_int twice(mrb_int n) { return n * 2; }
+    static mrb_int twice(mrb_int n, mrb_int m) { return n * m * 2; }
+    static Static make(mrb_int n) { Static s; s.v = n; return s; }
+    static mrb_int read_count() { return count; }
+};
+mrb_int Static::count = 1;
+constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static>();
 constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();
 
 static_assert(std::string_view(mrb_cpp_reflector::reflect_get_args_format<std::meta::members_of(^^Reflected, std::meta::access_context::current())[2]>().data()) == "si");
