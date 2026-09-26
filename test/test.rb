@@ -477,3 +477,18 @@ assert('a nested class is a constant of its enclosing class') do
   assert_equal(3, i.n)
   assert_false(Object.const_defined?(:Inner))
 end
+
+# With virtual bases a diamond holds one Top, so every path from Diamond
+# to Top reaches the same object and the conversion is not ambiguous.
+assert('a class with a virtual base reaches it through every path') do
+  d = Diamond.new
+  assert_equal(1, d.top)
+  assert_equal(2, d.left)
+  assert_equal(3, d.right)
+  assert_kind_of(Top::InstanceMethods, d)
+  assert_kind_of(RightOfDiamond::InstanceMethods, d)
+  assert_equal(1, d.reach(d))
+  assert_equal(3, d.reach_right(d))
+  d.n = 5
+  assert_equal(5, d.reach(d))
+end
