@@ -113,10 +113,8 @@ RClass *reflect_class(mrb_state *const mrb)
 template <class T>
 T *reflect_ptr(mrb_state *const mrb, const mrb_value v)
 {
-    if (!mrb_data_p(v)) return nullptr;
-    const mrb_data_type *const type = DATA_TYPE(v);
-    if (type != &reflect_data_type_owned<T>() && type != &reflect_data_type_borrowed<T>()) return nullptr;
-    return static_cast<T *>(DATA_PTR(v));
+    void *const owned = mrb_data_check_get_ptr(mrb, v, &reflect_data_type_owned<T>());
+    return static_cast<T *>(owned != nullptr ? owned : mrb_data_check_get_ptr(mrb, v, &reflect_data_type_borrowed<T>()));
 }
 
 template <class T>
