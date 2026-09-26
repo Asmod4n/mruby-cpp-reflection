@@ -11,6 +11,7 @@
 #include <mruby.h>
 #if defined(__cpp_impl_reflection)
 #include <mruby/reflection.hpp>
+#include <compare>
 
 struct Reflected {
     mrb_int total = 0;
@@ -101,7 +102,28 @@ struct F {
     mrb_int h(const Z &arg) const { return arg.v; }
     mrb_int y(const Y &arg) const { return arg.x.v; }
 };
-constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F>();
+/* Each member operator of Operand is the Ruby method of the same sign.
+ * operator[] returns a reference that can be assigned, so there is []=
+ * as well; operator() is call; <=> answers -1, 0 or 1. The converting
+ * constructor lets an Integer stand on the right of +. */
+struct Operand {
+    mrb_int v = 0;
+    Operand() = default;
+    Operand(mrb_int n) : v(n) {}
+    Operand operator+(const Operand &o) const { return v + o.v; }
+    Operand operator-(const Operand &o) const { return v - o.v; }
+    Operand operator-() const { return -v; }
+    Operand operator*(const Operand &o) const { return v * o.v; }
+    Operand operator<<(mrb_int n) const { return v << n; }
+    bool operator==(const Operand &o) const { return v == o.v; }
+    bool operator<(const Operand &o) const { return v < o.v; }
+    std::strong_ordering operator<=>(const Operand &o) const { return v <=> o.v; }
+    bool operator!() const { return v == 0; }
+    mrb_int &operator[](mrb_int) { return v; }
+    mrb_int operator()(mrb_int n) const { return v * n; }
+    Operand &operator+=(const Operand &o) { v += o.v; return *this; }
+};
+constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand>();
 constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();
 
 static_assert(std::string_view(mrb_cpp_reflector::reflect_get_args_format<std::meta::members_of(^^Reflected, std::meta::access_context::current())[2]>().data()) == "si");

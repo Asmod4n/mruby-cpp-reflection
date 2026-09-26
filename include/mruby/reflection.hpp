@@ -17,6 +17,7 @@
 #include <mruby/reflect_presyms.hpp>
 
 #include <array>
+#include <compare>
 #include <concepts>
 #include <cstddef>
 #include <meta>
@@ -295,6 +296,8 @@ mrb_value reflect_result(mrb_state *const mrb, const mrb_value self, R &&value)
     constexpr bool frozen = std::is_const_v<std::remove_reference_t<R>>;
     if constexpr (std::same_as<T, mrb_value>) return value;
     else if constexpr (std::same_as<T, bool> || std::is_arithmetic_v<T>) return cpp_to_mrb_value(mrb, value);
+    else if constexpr (std::same_as<T, std::strong_ordering> || std::same_as<T, std::weak_ordering> || std::same_as<T, std::partial_ordering>)
+        return value < 0 ? mrb_fixnum_value(-1) : value > 0 ? mrb_fixnum_value(1) : value == 0 ? mrb_fixnum_value(0) : mrb_nil_value();
     else if constexpr (std::is_pointer_v<T>) {
         using P = std::remove_cv_t<std::remove_pointer_t<T>>;
         if constexpr (std::same_as<P, char>) return value == nullptr ? mrb_nil_value() : mrb_str_new_cstr(mrb, value);
@@ -538,6 +541,26 @@ void reflect_define_replace(mrb_state *const mrb, RClass *const klass)
     }, MRB_ARGS_REQ(1));
 }
 
+template <std::meta::info Type, std::meta::info Subscript>
+void reflect_define_element_assignment(mrb_state *const mrb, RClass *const methods)
+{
+    ::mrb_define_method_id(mrb, methods, mrb_intern_lit(mrb, "[]="), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+        using T = [:std::meta::dealias(Type):];
+        using E = [:reflect_bare(std::meta::return_type_of(Subscript)):];
+        mrb_check_frozen(mrb, mrb_obj_ptr(self));
+        T *const object = reflect_ptr<T>(mrb, self);
+        if (object == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
+        mrb_value index, v;
+        mrb_get_args(mrb, "oo", &index, &v);
+        auto held = reflect_argument<std::meta::parameters_of(Subscript)[0]>(mrb, index);
+        E &element = object->[:Subscript:](reflect_pass(held));
+        if (E *const p = reflect_ptr<E>(mrb, v); p != nullptr) element = *p;
+        else if constexpr (mrbcpp::value_converter::convertible_from_mrb<E>) element = mrb_value_to<E>(mrb, v);
+        else mrb_raise(mrb, E_TYPE_ERROR, "wrong type");
+        return v;
+    }, MRB_ARGS_REQ(2));
+}
+
 template <std::meta::info Type>
 RClass *reflect_define_class(mrb_state *const mrb, RClass *const under)
 {
@@ -589,7 +612,7 @@ RClass *reflect_define_class(mrb_state *const mrb, RClass *const under)
         constexpr bool first_of_its_name = [] consteval {
             for (const std::meta::info m : reflect_members<Type>()) {
                 if (m == member) return true;
-                if (std::meta::identifier_of(m) == std::meta::identifier_of(member)) return false;
+                if (reflect_identifier(m) == reflect_identifier(member)) return false;
             }
             return true;
         }();
@@ -598,6 +621,13 @@ RClass *reflect_define_class(mrb_state *const mrb, RClass *const under)
                 reflect_define_method<Type, reflect_overloads<Type, member>()[I]...>(mrb, methods, reflect_intern<member>(mrb));
             }(std::make_index_sequence<reflect_overloads<Type, member>().size()>{});
         }
+    }
+    template for (constexpr std::meta::info member : reflect_members<Type>()) {
+        if constexpr (std::meta::is_operator_function(member) && std::meta::operator_of(member) == std::meta::operators::op_square_brackets &&
+                      std::meta::parameters_of(member).size() == 1 && !std::meta::is_const(member) &&
+                      std::meta::is_lvalue_reference_type(std::meta::return_type_of(member)) &&
+                      !std::meta::is_const_type(std::meta::remove_reference(std::meta::return_type_of(member))))
+            reflect_define_element_assignment<Type, member>(mrb, methods);
     }
     template for (constexpr std::meta::info field : reflect_fields<Type>())
         reflect_define_field<field>(mrb, methods);

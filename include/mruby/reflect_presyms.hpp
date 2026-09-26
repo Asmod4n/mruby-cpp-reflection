@@ -22,8 +22,39 @@ struct RClass;
 namespace mrb_cpp_reflector
 {
 
+consteval std::string_view reflect_operator_method(const std::meta::info function)
+{
+    using enum std::meta::operators;
+    const bool unary = std::meta::parameters_of(function).empty();
+    switch (std::meta::operator_of(function)) {
+    case op_plus: return unary ? "+@" : "+";
+    case op_minus: return unary ? "-@" : "-";
+    case op_star: return unary ? "" : "*";
+    case op_ampersand: return unary ? "" : "&";
+    case op_slash: return "/";
+    case op_percent: return "%";
+    case op_caret: return "^";
+    case op_pipe: return "|";
+    case op_tilde: return "~";
+    case op_exclamation: return "!";
+    case op_less_less: return "<<";
+    case op_greater_greater: return ">>";
+    case op_equals_equals: return "==";
+    case op_exclamation_equals: return "!=";
+    case op_less: return "<";
+    case op_greater: return ">";
+    case op_less_equals: return "<=";
+    case op_greater_equals: return ">=";
+    case op_spaceship: return "<=>";
+    case op_square_brackets: return "[]";
+    case op_parentheses: return "call";
+    default: return "";
+    }
+}
+
 consteval std::string_view reflect_identifier(const std::meta::info named)
 {
+    if (std::meta::is_operator_function(named)) return reflect_operator_method(named);
     if (std::meta::has_identifier(named)) return std::meta::identifier_of(named);
     const std::meta::info bare = std::meta::is_type(named) ? std::meta::dealias(std::meta::remove_cvref(named)) : named;
     if (std::meta::has_identifier(bare)) return std::meta::identifier_of(bare);
@@ -185,8 +216,9 @@ consteval auto reflect_members_computed()
     std::vector<std::meta::info> methods;
     for (const std::meta::info m : std::meta::members_of(std::meta::dealias(Type), std::meta::access_context::current()))
         if (std::meta::is_function(m) && !std::meta::is_static_member(m) &&
-            !std::meta::is_special_member_function(m) && !std::meta::is_operator_function(m) &&
-            std::meta::has_identifier(m) && reflect_call_supported(m))
+            !std::meta::is_special_member_function(m) &&
+            (std::meta::is_operator_function(m) ? !reflect_operator_method(m).empty() : std::meta::has_identifier(m)) &&
+            reflect_call_supported(m))
             methods.push_back(m);
     return std::define_static_array(methods);
 }
@@ -268,7 +300,7 @@ consteval auto reflect_overloads()
 {
     std::vector<std::meta::info> same;
     for (const std::meta::info m : reflect_members<Type>())
-        if (std::meta::identifier_of(m) == std::meta::identifier_of(Member)) same.push_back(m);
+        if (reflect_identifier(m) == reflect_identifier(Member)) same.push_back(m);
     return std::define_static_array(same);
 }
 
@@ -279,7 +311,7 @@ void reflect_names_into(std::vector<std::string_view> &names)
         names.push_back(std::define_static_string(reflect_class_name(scope)));
     names.push_back(std::define_static_string(reflect_class_name(Type)));
     template for (constexpr std::meta::info member : reflect_members<Type>())
-        names.push_back(std::meta::identifier_of(member));
+        names.push_back(reflect_identifier(member));
     template for (constexpr std::meta::info field : reflect_fields<Type>())
         names.push_back(std::meta::identifier_of(field));
 }

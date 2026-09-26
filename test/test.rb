@@ -113,3 +113,28 @@ assert('a parameter takes what a converting constructor takes') do
   assert_equal(5, f.y(Y.new(5)))
 end
 
+assert('a member operator is the Ruby method of the same sign') do
+  two = Operand.new(2)
+  three = Operand.new(3)
+  assert_equal(5, (two + three).v)
+  assert_equal(5, (two + 3).v)
+  assert_equal(-1, (two - three).v)
+  assert_equal(-2, (-two).v)
+  assert_equal(6, (two * three).v)
+  assert_equal(8, (two << 2).v)
+  assert_true(two == Operand.new(2))
+  assert_false(two != Operand.new(2))
+  assert_true(two < three)
+  assert_equal(-1, two <=> three)
+  assert_equal(0, two <=> Operand.new(2))
+  assert_equal(1, three <=> two)
+  assert_true(!Operand.new(0))
+  assert_false(!two)
+  assert_equal(2, two[0])
+  two[0] = 9
+  assert_equal(9, two.v)
+  assert_equal(27, two.(3))
+  assert_equal(27, two.call(3))
+  assert_false(Operand.method_defined?(:'+='))
+end
+
