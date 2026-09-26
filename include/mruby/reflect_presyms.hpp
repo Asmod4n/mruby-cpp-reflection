@@ -211,6 +211,25 @@ consteval auto reflect_constructors()
 }
 
 template <std::meta::info Type>
+consteval auto reflect_converting_constructors_computed()
+{
+    std::vector<std::meta::info> constructors;
+    for (const std::meta::info c : reflect_constructors<Type>())
+        if (!std::meta::is_explicit(c) && !std::meta::is_copy_constructor(c) && !std::meta::parameters_of(c).empty() && reflect_required(c) <= 1)
+            constructors.push_back(c);
+    return std::define_static_array(constructors);
+}
+
+template <std::meta::info Type>
+inline constexpr auto reflect_converting_constructors_cached = reflect_converting_constructors_computed<Type>();
+
+template <std::meta::info Type>
+consteval auto reflect_converting_constructors()
+{
+    return reflect_converting_constructors_cached<Type>;
+}
+
+template <std::meta::info Type>
 inline constexpr auto reflect_members_cached = reflect_members_computed<Type>();
 
 template <std::meta::info Type>

@@ -72,13 +72,36 @@ struct S {
     S(mrb_int n, mrb_int m, mrb_int k = 10) : v(n * m + k), from("S(mrb_int, mrb_int, mrb_int)") {}
     S(std::string_view text) : v(static_cast<mrb_int>(text.size())), from("S(std::string_view)") {}
 };
-/* X has no default constructor, so X.new without arguments is refused
- * as C++ refuses X x; */
+/* Z has no default constructor, so Z.new without arguments is refused
+ * as C++ refuses Z z;. Its constructor is explicit, so it never
+ * converts an argument ([class.conv.ctor]). */
+struct Z {
+    mrb_int v;
+    explicit Z(mrb_int n) : v(n) {}
+};
+/* X is the example of [class.conv.ctor]: both constructors convert.
+ * A parameter of type X takes an Integer through X(mrb_int) and a String
+ * through X(const char *, mrb_int = 0), and nothing else, because an
+ * implicit conversion holds at most one user-defined conversion
+ * ([over.best.ics]). */
 struct X {
     mrb_int v;
-    explicit X(mrb_int n) : v(n) {}
+    X(mrb_int n) : v(n) {}
+    X(const char *text, mrb_int n = 0) : v(static_cast<mrb_int>(std::string_view(text).size()) + n) {}
 };
-constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^X>();
+struct Y {
+    X x{mrb_int{0}};
+    Y(X arg) : x(arg) {}
+};
+/* f and g take the argument by value and by const reference, the two
+ * forms an implicit conversion reaches; h takes an explicit type. */
+struct F {
+    mrb_int f(X arg) const { return arg.v; }
+    mrb_int g(const X &arg) const { return arg.v; }
+    mrb_int h(const Z &arg) const { return arg.v; }
+    mrb_int y(const Y &arg) const { return arg.x.v; }
+};
+constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F>();
 constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();
 
 static_assert(std::string_view(mrb_cpp_reflector::reflect_get_args_format<std::meta::members_of(^^Reflected, std::meta::access_context::current())[2]>().data()) == "si");

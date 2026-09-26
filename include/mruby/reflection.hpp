@@ -178,7 +178,16 @@ struct reflect_holder {
     T *ptr = nullptr;
 };
 
-template <std::meta::info Parameter>
+template <class T>
+std::unique_ptr<T> reflect_implicit_conversion(mrb_state *mrb, mrb_value v);
+
+template <class T>
+bool reflect_implicitly_converts(mrb_state *mrb, mrb_value v);
+
+template <std::meta::info Function, bool Converting = true>
+bool reflect_get_args_match(mrb_state *mrb, std::span<const mrb_value> argv);
+
+template <std::meta::info Parameter, bool Converting = true>
 auto reflect_argument(mrb_state *const mrb, const mrb_value v)
 {
     constexpr std::meta::info type = std::meta::type_of(Parameter);
@@ -187,7 +196,7 @@ auto reflect_argument(mrb_state *const mrb, const mrb_value v)
         using P = [:std::meta::dealias(std::meta::remove_cv(std::meta::remove_pointer(std::meta::dealias(type)))):];
         if (mrb_nil_p(v)) return static_cast<P *>(nullptr);
         P *const p = reflect_ptr<P>(mrb, v);
-        if (p == nullptr) mrb_raisef(mrb, E_TYPE_ERROR, "%s wanted", std::define_static_string(reflect_class_name(^^P)));
+        if (p == nullptr) mrb_raisef(mrb, E_TYPE_ERROR, "%s wanted", std::define_static_string(reflect_class_name(std::meta::dealias(^^P))));
         if constexpr (reflect_mutates(type)) mrb_check_frozen(mrb, mrb_obj_ptr(v));
         return p;
     } else if constexpr (std::meta::is_lvalue_reference_type(type)) {
@@ -199,7 +208,9 @@ auto reflect_argument(mrb_state *const mrb, const mrb_value v)
             held.temporary = std::make_unique<T>(mrb_value_to<T>(mrb, v));
             held.ptr = held.temporary.get();
         } else {
-            mrb_raisef(mrb, E_TYPE_ERROR, "%s wanted", std::define_static_string(reflect_class_name(^^T)));
+            if constexpr (Converting && !reflect_mutates(type)) held.temporary = reflect_implicit_conversion<T>(mrb, v);
+            if (held.temporary == nullptr) mrb_raisef(mrb, E_TYPE_ERROR, "%s wanted", std::define_static_string(reflect_class_name(std::meta::dealias(^^T))));
+            held.ptr = held.temporary.get();
         }
         return held;
     } else {
@@ -209,7 +220,8 @@ auto reflect_argument(mrb_state *const mrb, const mrb_value v)
         } else if constexpr (mrbcpp::value_converter::convertible_from_mrb<T>) {
             held.temporary = std::make_unique<T>(mrb_value_to<T>(mrb, v));
         } else {
-            mrb_raisef(mrb, E_TYPE_ERROR, "%s wanted", std::define_static_string(reflect_class_name(^^T)));
+            if constexpr (Converting) held.temporary = reflect_implicit_conversion<T>(mrb, v);
+            if (held.temporary == nullptr) mrb_raisef(mrb, E_TYPE_ERROR, "%s wanted", std::define_static_string(reflect_class_name(std::meta::dealias(^^T))));
         }
         held.ptr = held.temporary.get();
         return held;
@@ -326,7 +338,7 @@ mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
     }
 }
 
-template <std::meta::info Function>
+template <std::meta::info Function, bool Converting>
 bool reflect_get_args_match(mrb_state *const mrb, const std::span<const mrb_value> argv)
 {
     constexpr auto format = reflect_get_args_format<Function>();
@@ -346,13 +358,43 @@ bool reflect_get_args_match(mrb_state *const mrb, const std::span<const mrb_valu
             else if constexpr (letter == 'c') fits = mrb_class_p(v) || mrb_module_p(v);
             else if constexpr (letter == 'o' && reflect_is_object(std::meta::type_of(P))) {
                 using T = [:reflect_bare(std::meta::type_of(P)):];
-                fits = reflect_ptr<T>(mrb, v) != nullptr || (!reflect_mutates(std::meta::type_of(P)) && mrbcpp::value_converter::convertible_from_mrb<T>);
+                fits = reflect_ptr<T>(mrb, v) != nullptr || (!reflect_mutates(std::meta::type_of(P)) && mrbcpp::value_converter::convertible_from_mrb<T> ||
+                                                        (Converting && !reflect_mutates(std::meta::type_of(P)) && reflect_implicitly_converts<T>(mrb, v)));
                 if (fits && reflect_mutates(std::meta::type_of(P))) fits = !mrb_frozen_p(mrb_obj_ptr(v));
             }
         }
         at++;
     }
     return fits;
+}
+
+template <class T>
+bool reflect_implicitly_converts(mrb_state *const mrb, const mrb_value v)
+{
+    bool converts = false;
+    template for (constexpr std::meta::info constructor : reflect_converting_constructors<^^T>())
+        converts = converts || reflect_get_args_match<constructor, false>(mrb, std::span<const mrb_value>(&v, 1));
+    return converts;
+}
+
+template <class T>
+std::unique_ptr<T> reflect_implicit_conversion(mrb_state *const mrb, const mrb_value v)
+{
+    std::unique_ptr<T> made;
+    template for (constexpr std::meta::info constructor : reflect_converting_constructors<^^T>()) {
+        if (made == nullptr && reflect_get_args_match<constructor, false>(mrb, std::span<const mrb_value>(&v, 1))) {
+            constexpr std::meta::info P = std::meta::parameters_of(constructor)[0];
+            using U = [:reflect_bare(std::meta::type_of(P)):];
+            if constexpr (std::meta::is_pointer_type(std::meta::dealias(std::meta::type_of(P))) &&
+                          std::meta::dealias(std::meta::remove_cv(std::meta::remove_pointer(std::meta::dealias(std::meta::type_of(P))))) == ^^char)
+                made = std::make_unique<T>(mrb_string_cstr(mrb, v));
+            else if constexpr (reflect_is_object(std::meta::type_of(P)) || std::meta::is_pointer_type(std::meta::dealias(std::meta::type_of(P)))) {
+                auto held = reflect_argument<P, false>(mrb, v);
+                made = std::make_unique<T>(reflect_pass(held));
+            } else made = std::make_unique<T>(mrb_value_to<U>(mrb, v));
+        }
+    }
+    return made;
 }
 
 template <std::meta::info Type, std::meta::info Function>

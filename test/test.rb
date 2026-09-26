@@ -93,8 +93,23 @@ assert('initialize takes every public constructor') do
   assert_equal([16, 'S(mrb_int, mrb_int, mrb_int)'], [S.new(2, 3).v, S.new(2, 3).from.to_s])
   assert_equal(7, S.new(2, 3, 1).v)
   assert_equal([3, 'S(std::string_view)'], [S.new('abc').v, S.new('abc').from.to_s])
-  assert_equal(5, X.new(5).v)
-  assert_raise(ArgumentError) { X.new }
+  assert_equal(5, Z.new(5).v)
+  assert_raise(ArgumentError) { Z.new }
   assert_raise(ArgumentError) { S.new(1, 2, 3, 4) }
+end
+
+assert('a parameter takes what a converting constructor takes') do
+  f = F.new
+  assert_equal(7, f.f(7))
+  assert_equal(6, f.f('Jessie'))
+  assert_equal(7, f.g(7))
+  assert_equal(6, f.g('Jessie'))
+  assert_equal(3, f.g(X.new(3)))
+  assert_equal(9, f.g(X.new('abc', 6)))
+  assert_raise(TypeError) { f.h(5) }
+  assert_equal(5, f.h(Z.new(5)))
+  assert_raise(TypeError) { f.y(5) }
+  assert_equal(5, f.y(Y.new(X.new(5))))
+  assert_equal(5, f.y(Y.new(5)))
 end
 
