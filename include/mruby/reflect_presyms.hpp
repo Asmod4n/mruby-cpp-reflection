@@ -285,6 +285,7 @@ consteval auto reflect_members_computed()
         if (std::meta::is_function(m) && !std::meta::is_static_member(m) &&
             !std::meta::is_special_member_function(m) &&
             (std::meta::is_operator_function(m) ? !reflect_operator_method(m).empty() : std::meta::has_identifier(m)) &&
+            (!std::meta::has_identifier(m) || std::meta::identifier_of(m) != "swap" || std::meta::extract<bool>(std::meta::substitute(^^std::swappable, {std::meta::dealias(Type)}))) &&
             reflect_call_supported(m))
             methods.push_back(m);
     return std::define_static_array(methods);

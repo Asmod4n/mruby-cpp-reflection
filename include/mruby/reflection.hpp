@@ -328,6 +328,7 @@ struct reflect_definition {
     using registration = void (*)(reflect_definition &, RClass *);
     mrb_state *mrb;
     std::vector<std::pair<registration, RClass *>> pending;
+    std::vector<std::pair<registration, RClass *>> unnamed;
     explicit reflect_definition(mrb_state *const state) : mrb(state) {}
     reflect_definition(const reflect_definition &) = delete;
     reflect_definition &operator=(const reflect_definition &) = delete;
@@ -337,6 +338,11 @@ struct reflect_definition {
             const auto [registration, klass] = pending.front();
             pending.erase(pending.begin());
             registration(*this, klass);
+        }
+        while (!unnamed.empty()) {
+            const auto [naming, klass] = unnamed.back();
+            unnamed.pop_back();
+            naming(*this, klass);
         }
     }
 };
@@ -624,10 +630,10 @@ bool reflect_implicitly_converts(mrb_state *mrb, mrb_value v);
 template <std::meta::info Function, bool Converting = true>
 bool reflect_get_args_match(mrb_state *mrb, std::span<const mrb_value> argv);
 
-template <std::meta::info Parameter, bool Converting = true>
+template <std::meta::info ParameterType, bool Converting = true>
 auto reflect_argument(mrb_state *const mrb, const mrb_value v)
 {
-    constexpr std::meta::info type = std::meta::type_of(Parameter);
+    constexpr std::meta::info type = ParameterType;
     using T = [:reflect_bare(type):];
     if constexpr (std::meta::is_pointer_type(std::meta::dealias(type))) {
         using P = [:std::meta::dealias(std::meta::remove_cv(std::meta::remove_pointer(std::meta::dealias(type)))):];
@@ -726,7 +732,7 @@ auto reflect_get_args(mrb_state *const mrb)
             auto &s = std::get<J>(retrieved);
             constexpr std::meta::info P = std::meta::parameters_of(Function)[J + Skip];
             using T = [:reflect_bare(std::meta::type_of(P)):];
-            if constexpr (std::same_as<std::remove_cvref_t<decltype(s)>, mrb_value> && !std::same_as<T, mrb_value>) return reflect_argument<P>(mrb, s);
+            if constexpr (std::same_as<std::remove_cvref_t<decltype(s)>, mrb_value> && !std::same_as<T, mrb_value>) return reflect_argument<std::meta::type_of(P)>(mrb, s);
             else if constexpr (std::same_as<T, std::string_view>) return std::string_view(s.first, static_cast<std::size_t>(s.second));
             else if constexpr (std::same_as<T, std::string>) return std::string(s.first, static_cast<std::size_t>(s.second));
             else if constexpr (std::same_as<T, std::span<const mrb_value>>) return std::span(s.first, static_cast<std::size_t>(s.second));
@@ -1022,7 +1028,7 @@ std::unique_ptr<T> reflect_implicit_conversion(mrb_state *const mrb, const mrb_v
                           std::meta::dealias(std::meta::remove_cv(std::meta::remove_pointer(std::meta::dealias(std::meta::type_of(P))))) == ^^char)
                 made = std::make_unique<T>(mrb_string_cstr(mrb, v));
             else if constexpr (reflect_is_object(std::meta::type_of(P)) || std::meta::is_pointer_type(std::meta::dealias(std::meta::type_of(P)))) {
-                auto held = reflect_argument<P, false>(mrb, v);
+                auto held = reflect_argument<std::meta::type_of(P), false>(mrb, v);
                 made = std::make_unique<T>(reflect_pass(held));
             } else made = std::make_unique<T>(mrb_value_to<U>(mrb, v));
         }
@@ -1246,7 +1252,7 @@ void reflect_define_element_assignment(mrb_state *const mrb, RClass *const metho
         if (object == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
         mrb_value index, v;
         mrb_get_args(mrb, "oo", &index, &v);
-        auto held = reflect_argument<std::meta::parameters_of(Subscript)[0]>(mrb, index);
+        auto held = reflect_argument<std::meta::type_of(std::meta::parameters_of(Subscript)[0])>(mrb, index);
         E &element = object->[:Subscript:](reflect_pass(held));
         if constexpr (std::is_pointer_v<E> && std::is_void_v<std::remove_pointer_t<E>>) element = reflect_void_ptr<std::remove_pointer_t<E>>(mrb, v);
             else if (E *const p = reflect_ptr<E>(mrb, v); p != nullptr) element = *p;
@@ -1366,6 +1372,9 @@ inline mrb_value reflect_template_lookup(mrb_state *const mrb, const mrb_value s
 }
 
 template <std::meta::info Type>
+void reflect_name_specialization(reflect_definition &definition, RClass *klass);
+
+template <std::meta::info Type>
 void reflect_register_specialization(reflect_definition &definition, RClass *const klass)
 {
     mrb_state *const mrb = definition.mrb;
@@ -1383,13 +1392,27 @@ void reflect_register_specialization(reflect_definition &definition, RClass *con
     static constexpr auto lengths = std::define_static_array(reflect_template_lengths(t));
     for (const std::size_t n : lengths)
         mrb_hash_set(mrb, table, mrb_ary_new_from_values(mrb, static_cast<mrb_int>(n), RARRAY_PTR(values)), mrb_obj_value(klass));
-    const mrb_value shortest = mrb_ary_new_from_values(mrb, static_cast<mrb_int>(lengths[0]), RARRAY_PTR(values));
+    definition.unnamed.emplace_back(&reflect_name_specialization<t>, klass);
+}
+
+template <std::meta::info Type>
+void reflect_name_specialization(reflect_definition &definition, RClass *const klass)
+{
+    mrb_state *const mrb = definition.mrb;
+    constexpr std::meta::info t = std::meta::dealias(Type);
+    RClass *const templ = mrb_class_ptr(mrb_iv_get(mrb, mrb_obj_value(mrb->object_class), reflect_template_key<t>(mrb)));
+    static constexpr auto arguments = std::define_static_array(std::meta::template_arguments_of(t));
+    static constexpr auto lengths = std::define_static_array(reflect_template_lengths(t));
+    const mrb_value shortest = mrb_ary_new_capa(mrb, static_cast<mrb_int>(lengths[0]));
+    template for (constexpr std::size_t i : std::views::iota(std::size_t{0}, lengths[0]))
+        mrb_ary_push(mrb, shortest, reflect_template_argument<arguments[i]>(definition));
     mrb_value name = mrb_str_dup(mrb, mrb_class_path(mrb, templ));
     mrb_str_cat_lit(mrb, name, "[");
     for (mrb_int i = 0; i < RARRAY_LEN(shortest); i++) {
         if (i > 0) mrb_str_cat_lit(mrb, name, ", ");
         const mrb_value argument = RARRAY_PTR(shortest)[i];
-        mrb_str_cat_str(mrb, name, mrb_class_p(argument) ? mrb_class_path(mrb, mrb_class_ptr(argument)) : mrb_inspect(mrb, argument));
+        const mrb_value path = mrb_class_p(argument) ? mrb_class_path(mrb, mrb_class_ptr(argument)) : mrb_nil_value();
+        mrb_str_cat_str(mrb, name, mrb_string_p(path) ? path : mrb_inspect(mrb, argument));
     }
     mrb_str_cat_lit(mrb, name, "]");
     mrb_obj_iv_set(mrb, reinterpret_cast<RObject *>(klass), MRB_SYM(__classname__), name);
