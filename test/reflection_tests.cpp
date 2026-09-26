@@ -12,6 +12,7 @@
 #if defined(__cpp_impl_reflection)
 #include <mruby/reflection.hpp>
 #include <compare>
+#include <stdexcept>
 
 struct Reflected {
     mrb_int total = 0;
@@ -137,7 +138,19 @@ struct Static {
     static mrb_int read_count() { return count; }
 };
 mrb_int Static::count = 1;
-constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static>();
+/* What a reflected function throws reaches Ruby as the exception Ruby
+ * has for it, with what() as the message; a constructor that throws
+ * leaves no object behind. */
+struct Thrower {
+    std::vector<mrb_int> seen{1, 2};
+    Thrower() = default;
+    explicit Thrower(mrb_int n) { if (n < 0) throw std::invalid_argument("negative"); }
+    void invalid() const { throw std::invalid_argument("bad argument"); }
+    mrb_int at(mrb_int i) const { return seen.at(static_cast<std::size_t>(i)); }
+    void overflow() const { throw std::overflow_error("too big"); }
+    void runtime() const { throw std::runtime_error("broken"); }
+};
+constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower>();
 constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();
 
 static_assert(std::string_view(mrb_cpp_reflector::reflect_get_args_format<std::meta::members_of(^^Reflected, std::meta::access_context::current())[2]>().data()) == "si");

@@ -151,3 +151,14 @@ assert('a static member is a class method') do
   assert_equal(5, Static.read_count)
 end
 
+assert('a C++ exception is the Ruby exception for it') do
+  t = Thrower.new
+  assert_equal('bad argument', assert_raise(ArgumentError) { t.invalid }.message)
+  assert_equal(2, t.at(1))
+  assert_raise(IndexError) { t.at(5) }
+  assert_equal('too big', assert_raise(RangeError) { t.overflow }.message)
+  assert_equal('broken', assert_raise(RuntimeError) { t.runtime }.message)
+  assert_equal('negative', assert_raise(ArgumentError) { Thrower.new(-1) }.message)
+  assert_equal(2, Thrower.new(1).at(1))
+end
+

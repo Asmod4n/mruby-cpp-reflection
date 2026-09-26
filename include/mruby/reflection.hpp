@@ -26,6 +26,8 @@
 #include <optional>
 #include <ranges>
 #include <span>
+#include <stdexcept>
+#include <string>
 #include <string_view>
 #include <tuple>
 #include <utility>
@@ -313,6 +315,35 @@ mrb_value reflect_result(mrb_state *const mrb, const mrb_value self, R &&value)
     else return reflect_object<T>(mrb, std::move(value), frozen);
 }
 
+template <class Call>
+mrb_value reflect_translate_exceptions(mrb_state *const mrb, const Call &call)
+{
+    RClass *kind;
+    std::string what;
+    try {
+        return call();
+    } catch (const std::invalid_argument &e) {
+        kind = E_ARGUMENT_ERROR;
+        what = e.what();
+    } catch (const std::out_of_range &e) {
+        kind = E_INDEX_ERROR;
+        what = e.what();
+    } catch (const std::range_error &e) {
+        kind = E_RANGE_ERROR;
+        what = e.what();
+    } catch (const std::overflow_error &e) {
+        kind = E_RANGE_ERROR;
+        what = e.what();
+    } catch (const std::underflow_error &e) {
+        kind = E_RANGE_ERROR;
+        what = e.what();
+    } catch (const std::exception &e) {
+        kind = E_RUNTIME_ERROR;
+        what = e.what();
+    }
+    mrb_exc_raise(mrb, mrb_exc_new(mrb, kind, what.data(), static_cast<mrb_int>(what.size())));
+}
+
 template <std::meta::info Type, std::meta::info Function, std::size_t Count = std::meta::parameters_of(Function).size()>
 mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
 {
@@ -320,32 +351,43 @@ mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
     if constexpr (std::meta::is_constructor(Function)) {
         auto args = reflect_get_args<Function, 0, Count>(mrb);
         T *const kept = static_cast<T *>(mrb_malloc(mrb, sizeof(T)));
-        std::apply([&](auto &...held) { new (kept) T(reflect_pass(held)...); }, args);
-        mrb_data_init(self, kept, &reflect_data_type_owned<T>());
-        return self;
+        return reflect_translate_exceptions(mrb, [&] {
+            try {
+                std::apply([&](auto &...held) { new (kept) T(reflect_pass(held)...); }, args);
+            } catch (...) {
+                mrb_free(mrb, kept);
+                throw;
+            }
+            mrb_data_init(self, kept, &reflect_data_type_owned<T>());
+            return self;
+        });
     } else if constexpr (std::meta::is_static_member(Function)) {
         auto args = reflect_get_args<Function, 0, Count>(mrb);
-        if constexpr (std::meta::return_type_of(Function) == ^^void) {
-            std::apply([&](auto &...held) { [:Function:](reflect_pass(held)...); }, args);
-            return mrb_nil_value();
-        } else {
-            return std::apply([&](auto &...held) -> mrb_value { return reflect_result(mrb, self, [:Function:](reflect_pass(held)...)); }, args);
-        }
+        return reflect_translate_exceptions(mrb, [&] {
+            if constexpr (std::meta::return_type_of(Function) == ^^void) {
+                std::apply([&](auto &...held) { [:Function:](reflect_pass(held)...); }, args);
+                return mrb_nil_value();
+            } else {
+                return std::apply([&](auto &...held) -> mrb_value { return reflect_result(mrb, self, [:Function:](reflect_pass(held)...)); }, args);
+            }
+        });
     } else {
         if constexpr (!std::meta::is_const(Function)) mrb_check_frozen(mrb, mrb_obj_ptr(self));
         T *const object = reflect_ptr<T>(mrb, self);
         if (object == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
         auto args = reflect_get_args<Function, 0, Count>(mrb);
-        if constexpr (std::meta::return_type_of(Function) == ^^void) {
-            std::apply([&](auto &...held) { object->[:Function:](reflect_pass(held)...); }, args);
-            return mrb_nil_value();
-        } else if constexpr (std::meta::is_reference_type(std::meta::return_type_of(Function)) &&
-                             reflect_bare(std::meta::return_type_of(Function)) == std::meta::dealias(^^T)) {
-            std::apply([&](auto &...held) { object->[:Function:](reflect_pass(held)...); }, args);
-            return self;
-        } else {
-            return std::apply([&](auto &...held) -> mrb_value { return reflect_result(mrb, self, object->[:Function:](reflect_pass(held)...)); }, args);
-        }
+        return reflect_translate_exceptions(mrb, [&] {
+            if constexpr (std::meta::return_type_of(Function) == ^^void) {
+                std::apply([&](auto &...held) { object->[:Function:](reflect_pass(held)...); }, args);
+                return mrb_nil_value();
+            } else if constexpr (std::meta::is_reference_type(std::meta::return_type_of(Function)) &&
+                                 reflect_bare(std::meta::return_type_of(Function)) == std::meta::dealias(^^T)) {
+                std::apply([&](auto &...held) { object->[:Function:](reflect_pass(held)...); }, args);
+                return self;
+            } else {
+                return std::apply([&](auto &...held) -> mrb_value { return reflect_result(mrb, self, object->[:Function:](reflect_pass(held)...)); }, args);
+            }
+        });
     }
 }
 
