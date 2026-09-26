@@ -178,3 +178,47 @@ assert('a thread cancelled inside a reflected call ends as cancelled') do
   assert_true(cancelled_through_a_call?)
 end
 
+class CallableForTest
+  def call(n)
+    n - 1
+  end
+end
+
+assert('a std::function parameter takes anything that answers call') do
+  c = Callback.new
+  assert_equal(6, c.apply(->(n) { n * 2 }, 3))
+  assert_equal(6, c.apply(proc { |n| n * 2 }, 3))
+  assert_equal(2, c.apply(CallableForTest.new, 3))
+  assert_equal(12, c.apply(Operand.new(4), 3))
+  assert_equal(7, c.each_twice(3) { |n| n + 2 })
+  assert_raise(TypeError) { c.apply(5, 3) }
+end
+
+assert('a callback C++ keeps survives a full collection') do
+  c = Callback.new
+  c.keep(->(n) { n * 10 })
+  full_gc
+  assert_equal(30, c.call_kept(3))
+end
+
+assert('a std::function or a lambda from C++ answers call and to_proc') do
+  c = Callback.new
+  times = c.times(3)
+  assert_equal(12, times.call(4))
+  assert_equal(12, times.(4))
+  assert_equal([3, 6], [1, 2].map(&times))
+  assert_equal(1, times.to_proc.arity)
+  assert_true(times.to_proc.lambda?)
+  plus = c.plus(1)
+  assert_equal(5, plus.call(4))
+  assert_equal([2, 3], [1, 2].map(&plus))
+  assert_equal(15, c.apply(times, 5))
+end
+
+assert('a std::function made from Ruby goes back as the object it was made from') do
+  c = Callback.new
+  l = ->(n) { n }
+  c.keep(l)
+  assert_same(l, c.given)
+end
+

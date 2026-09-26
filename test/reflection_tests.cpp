@@ -13,6 +13,7 @@
 #include <mruby/reflection.hpp>
 #include <mruby/compile.h>
 #include <compare>
+#include <functional>
 #include <pthread.h>
 #include <stdexcept>
 #include <new>
@@ -166,7 +167,24 @@ struct Thrower {
     void regex() const { throw std::regex_error(std::regex_constants::error_paren); }
     void filesystem() const { throw std::filesystem::filesystem_error("fs", std::make_error_code(std::errc::no_such_file_or_directory)); }
 };
-constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower>();
+/* A std::function parameter takes anything that answers call, or the
+ * block when the last parameter is one and no argument stands there. A
+ * std::function or a lambda that C++ returns answers call and to_proc,
+ * and a callback C++ keeps is still there after a full collection. A
+ * std::function that came from Ruby goes back to Ruby as the object it
+ * was made from. */
+using number = mrb_int;
+struct Callback {
+    std::function<number(number)> kept;
+    mrb_int apply(const std::function<number(number)> &f, mrb_int n) const { return f(n); }
+    mrb_int each_twice(mrb_int n, std::function<number(number)> f) const { return f(f(n)); }
+    void keep(std::function<number(number)> f) { kept = std::move(f); }
+    mrb_int call_kept(mrb_int n) const { return kept(n); }
+    const std::function<number(number)> &given() const { return kept; }
+    std::function<number(number)> times(mrb_int k) const { return [k](mrb_int n) { return n * k; }; }
+    auto plus(mrb_int k) const { return [k](mrb_int n) { return n + k; }; }
+};
+constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback>();
 constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();
 
 static_assert(std::string_view(mrb_cpp_reflector::reflect_get_args_format<std::meta::members_of(^^Reflected, std::meta::access_context::current())[2]>().data()) == "si");
@@ -224,8 +242,15 @@ static mrb_value cancelled_m(mrb_state *mrb, mrb_value)
     return mrb_bool_value(result == PTHREAD_CANCELED);
 }
 
+static mrb_value full_gc_m(mrb_state *mrb, mrb_value)
+{
+    mrb_full_gc(mrb);
+    return mrb_nil_value();
+}
+
 extern "C" void mrb_mruby_cpp_reflection_gem_test(mrb_state *mrb)
 {
+    mrb_define_module_function(mrb, mrb->kernel_module, "full_gc", full_gc_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "cancelled_through_a_call?", cancelled_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "second_state", second_state_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "constructed", constructed_m, MRB_ARGS_NONE());

@@ -9,6 +9,7 @@ typedef struct mrb_state mrb_state;
 #include <mruby/value.h>
 
 #include <algorithm>
+#include <functional>
 #include <meta>
 #include <span>
 #include <memory>
@@ -126,6 +127,18 @@ consteval bool reflect_mutates(const std::meta::info type)
     if (std::meta::is_lvalue_reference_type(type)) return !std::meta::is_const_type(std::meta::remove_reference(type));
     if (std::meta::is_pointer_type(std::meta::dealias(type))) return !std::meta::is_const_type(std::meta::remove_pointer(std::meta::dealias(type)));
     return false;
+}
+
+consteval bool reflect_is_function(const std::meta::info type)
+{
+    const std::meta::info t = std::meta::dealias(std::meta::remove_cvref(type));
+    return std::meta::has_template_arguments(t) && std::meta::template_of(t) == ^^std::function;
+}
+
+consteval bool reflect_takes_block(const std::meta::info function)
+{
+    const auto parameters = std::meta::parameters_of(function);
+    return !parameters.empty() && reflect_is_function(std::meta::type_of(parameters.back()));
 }
 
 consteval std::size_t reflect_required(const std::meta::info function)
