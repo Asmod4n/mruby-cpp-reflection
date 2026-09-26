@@ -174,12 +174,12 @@ consteval auto reflect_members_computed()
 }
 
 template <std::meta::info Type>
-inline constexpr auto reflect_members_once = reflect_members_computed<Type>();
+inline constexpr auto reflect_members_cached = reflect_members_computed<Type>();
 
 template <std::meta::info Type>
 consteval auto reflect_members()
 {
-    return reflect_members_once<Type>;
+    return reflect_members_cached<Type>;
 }
 
 template <std::meta::info Type>
@@ -193,12 +193,12 @@ consteval auto reflect_fields_computed()
 }
 
 template <std::meta::info Type>
-inline constexpr auto reflect_fields_once = reflect_fields_computed<Type>();
+inline constexpr auto reflect_fields_cached = reflect_fields_computed<Type>();
 
 template <std::meta::info Type>
 consteval auto reflect_fields()
 {
-    return reflect_fields_once<Type>;
+    return reflect_fields_cached<Type>;
 }
 
 template <std::meta::info... Types>
