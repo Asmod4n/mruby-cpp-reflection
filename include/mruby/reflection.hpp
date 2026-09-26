@@ -344,6 +344,9 @@ struct reflect_definition {
 template <std::meta::info Type>
 RClass *reflect_define_class(reflect_definition &definition, RClass *super);
 
+template <std::meta::info Type>
+RClass *reflect_define_enum(reflect_definition &definition, RClass *under);
+
 template <std::meta::info Bare>
 mrb_sym reflect_class_key(mrb_state *const mrb)
 {
@@ -371,7 +374,10 @@ RClass *reflect_class(reflect_definition &definition)
     mrb_state *const mrb = definition.mrb;
     constexpr std::meta::info bare = std::meta::dealias(std::meta::remove_cvref(Type));
     const mrb_sym key = reflect_class_key<bare>(mrb);
-    if (!mrb_iv_defined(mrb, mrb_obj_value(mrb->object_class), key)) reflect_define_class<bare>(definition, mrb->object_class);
+    if (!mrb_iv_defined(mrb, mrb_obj_value(mrb->object_class), key)) {
+        if constexpr (std::meta::is_enum_type(bare)) reflect_define_enum<bare>(definition, mrb->object_class);
+        else reflect_define_class<bare>(definition, mrb->object_class);
+    }
     return mrb_class_ptr(mrb_iv_get(mrb, mrb_obj_value(mrb->object_class), key));
 }
 
@@ -566,6 +572,9 @@ struct reflect_gc_root {
 
 template <class R>
 mrb_value reflect_result(mrb_state *mrb, mrb_value self, R &&value);
+
+template <class E>
+mrb_value reflect_enumerator(mrb_state *mrb, E value);
 
 template <class Q>
 Q *reflect_void_ptr(mrb_state *const mrb, const mrb_value v)
@@ -800,6 +809,7 @@ mrb_value reflect_result(mrb_state *const mrb, const mrb_value self, R &&value)
         if (const reflect_callable<Signature> *const made = value.template target<reflect_callable<Signature>>(); made != nullptr) return made->root->object;
     }
     if constexpr (std::same_as<T, mrb_value>) return value;
+    else if constexpr (std::is_enum_v<T>) return reflect_enumerator(mrb, static_cast<T>(value));
     else if constexpr (std::same_as<T, bool> || std::is_arithmetic_v<T>) return cpp_to_mrb_value(mrb, value);
     else if constexpr (std::same_as<T, std::strong_ordering> || std::same_as<T, std::weak_ordering> || std::same_as<T, std::partial_ordering>)
         return value < 0 ? mrb_fixnum_value(-1) : value > 0 ? mrb_fixnum_value(1) : value == 0 ? mrb_fixnum_value(0) : mrb_nil_value();
@@ -1332,15 +1342,87 @@ void reflect_register_specialization(reflect_definition &definition, RClass *con
 }
 
 template <std::meta::info Type>
-RClass *reflect_define_class(reflect_definition &definition, RClass *const under)
+RClass *reflect_enclosing_scope(reflect_definition &definition, RClass *const under)
 {
     mrb_state *const mrb = definition.mrb;
-    using T = [:std::meta::dealias(Type):];
     RClass *outer = under;
     template for (constexpr std::meta::info scope : std::define_static_array(reflect_namespaces(Type)))
         outer = ::mrb_define_module_under_id(mrb, outer, reflect_intern<scope>(mrb));
     constexpr std::meta::info enclosing = std::meta::parent_of(std::meta::dealias(Type));
     if constexpr (std::meta::is_type(enclosing) && std::meta::is_class_type(enclosing) && !reflect_reserved(enclosing)) outer = reflect_class<enclosing>(definition);
+    return outer;
+}
+
+template <std::meta::info Type>
+RClass *reflect_define_enum(reflect_definition &definition, RClass *const under)
+{
+    mrb_state *const mrb = definition.mrb;
+    using E = [:std::meta::dealias(Type):];
+    RClass *const outer = reflect_enclosing_scope<Type>(definition, under);
+    const mrb_sym name = reflect_intern<Type>(mrb);
+    if (mrb_const_defined_at(mrb, mrb_obj_value(outer), name)) [[unlikely]]
+        mrb_raisef(mrb, E_NAME_ERROR, "%n is already defined in %C", name, outer);
+    RClass *const klass = ::mrb_define_class_under_id(mrb, outer, name, mrb->object_class);
+    MRB_SET_INSTANCE_TT(klass, MRB_TT_CDATA);
+    mrb_undef_class_method(mrb, klass, "new");
+    mrb_iv_set(mrb, mrb_obj_value(klass), reflect_reflected_key(mrb), mrb_true_value());
+    mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), reflect_class_key<std::meta::dealias(Type)>(mrb), mrb_obj_value(klass));
+    RClass *const methods = ::mrb_define_module_under_id(mrb, klass, reflect_sym<kInstanceMethods>(mrb));
+    mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), reflect_module_key<std::meta::dealias(Type)>(mrb), mrb_obj_value(methods));
+    constexpr auto to_i = [](mrb_state *const mrb, const mrb_value self) -> mrb_value { return mrb_convert_number(mrb, *reflect_ptr<E>(mrb, self)); };
+    ::mrb_define_method(mrb, methods, "to_i", to_i, MRB_ARGS_NONE());
+    if constexpr (!std::meta::is_scoped_enum_type(std::meta::dealias(Type))) ::mrb_define_method(mrb, methods, "to_int", to_i, MRB_ARGS_NONE());
+    ::mrb_define_method(mrb, methods, "<=>", [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+        const E *const other = reflect_ptr<E>(mrb, mrb_get_arg1(mrb));
+        if (other == nullptr) return mrb_nil_value();
+        const E value = *reflect_ptr<E>(mrb, self);
+        return mrb_fixnum_value(value < *other ? -1 : value > *other ? 1 : 0);
+    }, MRB_ARGS_REQ(1));
+    constexpr auto equal = [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+        const E *const other = reflect_ptr<E>(mrb, mrb_get_arg1(mrb));
+        return mrb_bool_value(other != nullptr && *other == *reflect_ptr<E>(mrb, self));
+    };
+    ::mrb_define_method(mrb, methods, "==", equal, MRB_ARGS_REQ(1));
+    ::mrb_define_method(mrb, methods, "eql?", equal, MRB_ARGS_REQ(1));
+    ::mrb_define_method(mrb, methods, "hash", [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+        return mrb_int_value(mrb, static_cast<mrb_int>(std::hash<E>{}(*reflect_ptr<E>(mrb, self))));
+    }, MRB_ARGS_NONE());
+    ::mrb_define_method(mrb, methods, "to_s", [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+        const E value = *reflect_ptr<E>(mrb, self);
+        template for (constexpr std::meta::info enumerator : std::define_static_array(std::meta::enumerators_of(std::meta::dealias(Type)))) {
+            if (value == [:enumerator:]) return mrb_str_new_static(mrb, std::meta::identifier_of(enumerator).data(), std::meta::identifier_of(enumerator).size());
+        }
+        return mrb_funcall_id(mrb, mrb_convert_number(mrb, value), reflect_sym<kToS>(mrb), 0);
+    }, MRB_ARGS_NONE());
+    ::mrb_define_method(mrb, methods, "inspect", [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+        return mrb_format(mrb, "#<%C %v>", mrb_obj_class(mrb, self), mrb_funcall_id(mrb, self, reflect_sym<kToS>(mrb), 0));
+    }, MRB_ARGS_NONE());
+    mrb_include_module(mrb, klass, mrb_module_get(mrb, "Comparable"));
+    mrb_include_module(mrb, klass, methods);
+    template for (constexpr std::meta::info enumerator : std::define_static_array(std::meta::enumerators_of(std::meta::dealias(Type)))) {
+        static constexpr std::string_view constant = std::define_static_string(reflect_class_name(enumerator));
+        mrb_define_const(mrb, klass, constant.data(), reflect_object(mrb, E{[:enumerator:]}, true));
+    }
+    return klass;
+}
+
+template <class E>
+mrb_value reflect_enumerator(mrb_state *const mrb, const E value)
+{
+    RClass *const klass = reflect_class<^^E>(mrb);
+    template for (constexpr std::meta::info enumerator : std::define_static_array(std::meta::enumerators_of(^^E))) {
+        static constexpr std::string_view constant = std::define_static_string(reflect_class_name(enumerator));
+        if (value == [:enumerator:]) return mrb_const_get(mrb, mrb_obj_value(klass), mrb_intern_static(mrb, constant.data(), constant.size()));
+    }
+    return reflect_object(mrb, value, true);
+}
+
+template <std::meta::info Type>
+RClass *reflect_define_class(reflect_definition &definition, RClass *const under)
+{
+    mrb_state *const mrb = definition.mrb;
+    using T = [:std::meta::dealias(Type):];
+    RClass *const outer = reflect_enclosing_scope<Type>(definition, under);
     static constexpr auto direct = std::define_static_array(reflect_direct_bases(Type));
     RClass *superclass = mrb->object_class;
     if constexpr (direct.size() > 0) superclass = reflect_class<direct[0]>(definition);
@@ -1493,7 +1575,10 @@ void reflect_define(mrb_state *const mrb, RClass *const under = nullptr)
     template for (constexpr std::meta::info type : Classes) {
         if constexpr (std::meta::is_namespace(type)) reflect_define_namespace<type>(definition, under != nullptr ? under : mrb->object_class);
         else if (!mrb_iv_defined(mrb, mrb_obj_value(mrb->object_class), reflect_class_key<std::meta::dealias(std::meta::remove_cvref(type))>(mrb)))
-            reflect_define_class<type>(definition, under != nullptr ? under : mrb->object_class);
+        {
+            if constexpr (std::meta::is_enum_type(std::meta::dealias(type))) reflect_define_enum<type>(definition, under != nullptr ? under : mrb->object_class);
+            else reflect_define_class<type>(definition, under != nullptr ? under : mrb->object_class);
+        }
     }
     definition.finish();
 }

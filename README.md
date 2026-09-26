@@ -68,13 +68,26 @@ or a class.
   `std::pair` member or result is a `Std::` object over the C++ value.
   Its methods are the C++ methods. It is frozen where the C++ side is
   `const`. `to_s`, `to_a` and `to_h` give a Ruby copy.
-- A parameter of such a type takes the `Std::` object as itself, and a Ruby
+- A parameter of such a type takes that object as itself, and a Ruby
   String, Array or Hash as a copy.
 - `replace` is `operator=`, on every class that has one: `x.replace(y)`
   copies `y` into `x`, from the same class or from a Ruby value, and
   returns `x`. That is the way a Ruby copy goes back into a C++ value.
 - `std::string_view` and `std::span<const mrb_value>` parameters read the
   Ruby value in place. `mrb_value` passes through.
+- An enum is a class. Each enumerator is a frozen instance and a constant:
+  `enum class Color { red }` gives `Color::Red`. A result is that
+  constant, and a value that is no enumerator is a frozen instance of its
+  own. A parameter takes only an instance. `to_i` gives the value, and a
+  plain `enum` also answers `to_int`. Instances compare by value.
+- A conversion function to an integer, a floating point type or text
+  answers `to_i`, `to_f` or `to_s`, and `to_int` or `to_str` where it is
+  not `explicit`.
+- `void *` is a `VoidPointer` and `const void *` a `ConstVoidPointer`,
+  which hold the address and nothing that reads the memory behind it.
+  `nil` is a null pointer. `mrb_void_pointer_type` and
+  `mrb_const_void_pointer_type` are their data types, for the `d` format of
+  `mrb_get_args`.
 - A `const` object raises `FrozenError` on a method that is not `const`.
 - A member function with no Ruby form is not defined: iterators, allocators,
   a non-const reference to a type without a reflected class, rvalue-qualified

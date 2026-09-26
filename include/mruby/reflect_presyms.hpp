@@ -99,7 +99,7 @@ consteval bool reflect_is_object(const std::meta::info type)
 {
     const std::meta::info bare = reflect_bare(type);
     if (bare == std::meta::dealias(^^mrb_value) || bare == std::meta::dealias(^^std::string_view) || reflect_is_view(bare)) return false;
-    return std::meta::is_class_type(bare);
+    return std::meta::is_class_type(bare) || std::meta::is_enum_type(bare);
 }
 
 consteval char reflect_get_args_letter(const std::meta::info type)
@@ -119,7 +119,7 @@ consteval char reflect_get_args_letter(const std::meta::info type)
     if (t == std::meta::dealias(^^std::span<const mrb_value>)) return '*';
     if (std::meta::is_integral_type(t)) return 'i';
     if (std::meta::is_floating_point_type(t)) return 'f';
-    if (std::meta::is_class_type(t)) return 'o';
+    if (std::meta::is_class_type(t) || std::meta::is_enum_type(t)) return 'o';
     return '\0';
 }
 
@@ -215,7 +215,7 @@ consteval bool reflect_result_supported(const std::meta::info type)
 {
     if (!reflect_complete(type)) return false;
     const std::meta::info bare = reflect_bare(type);
-    if (bare == ^^void || bare == std::meta::dealias(^^mrb_value) || bare == ^^bool || std::meta::is_arithmetic_type(bare)) return true;
+    if (bare == ^^void || bare == std::meta::dealias(^^mrb_value) || bare == ^^bool || std::meta::is_arithmetic_type(bare) || std::meta::is_enum_type(bare)) return true;
     if (std::meta::is_pointer_type(bare)) {
         const std::meta::info to = std::meta::dealias(std::meta::remove_cv(std::meta::remove_pointer(bare)));
         return to == ^^char || to == ^^void || (std::meta::is_class_type(to) && std::meta::is_complete_type(to));
@@ -295,6 +295,7 @@ template <std::meta::info Type>
 consteval auto reflect_constructors_computed()
 {
     std::vector<std::meta::info> constructors;
+    if (!std::meta::is_class_type(std::meta::dealias(Type))) return std::define_static_array(constructors);
     for (const std::meta::info m : std::meta::members_of(std::meta::dealias(Type), std::meta::access_context::current()))
         if (std::meta::is_constructor(m) && !std::meta::is_deleted(m) && !std::meta::is_move_constructor(m) && reflect_call_supported(m))
             constructors.push_back(m);

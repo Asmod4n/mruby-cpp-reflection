@@ -506,3 +506,36 @@ assert('a bitfield reads and assigns like any field') do
   assert_equal(1, f.count)
   assert_equal(9, f.wide)
 end
+
+# An enum is a class and each enumerator one frozen instance of it. C++
+# converts no integer to an enum, so a parameter takes only an instance.
+# A plain enum converts to an integer implicitly and an enum class only
+# when asked, as for a conversion function.
+assert('an enum is a class with one instance for each enumerator') do
+  assert_equal([:DarkBlue, :Green, :Red], Color.constants(false).select { |c| Color.const_get(c).is_a?(Color) }.sort)
+  assert_true(Color::Red.frozen?)
+  assert_raise(NoMethodError) { Color.new }
+  p = Palette.new
+  assert_same(Color::Green, p.color)
+  assert_same(Color::DarkBlue, p.pick(6))
+  assert_equal(5, p.value_of(Color::Green))
+  assert_raise(TypeError) { p.value_of(5) }
+  assert_equal(6, Color::DarkBlue.to_i)
+  assert_false(Color::Red.respond_to?(:to_int))
+  assert_equal(1, Flag::Read.to_int)
+  assert_same(Flag::Read, p.first)
+  both = p.both
+  assert_equal(3, both.to_i)
+  assert_true(both.frozen?)
+  assert_equal('#<Flag 3>', both.inspect)
+  assert_equal('green', Color::Green.to_s)
+  assert_equal('#<Color dark_blue>', Color::DarkBlue.inspect)
+  assert_true(Color::Red < Color::Green)
+  assert_equal(p.pick(5), Color::Green)
+  assert_true(p.pick(7).eql?(p.pick(7)))
+  assert_equal(p.pick(7).hash, p.pick(7).hash)
+  p.color = Color::Red
+  assert_same(Color::Red, p.color)
+  mode = p.mode
+  assert_same(Palette::Mode::Off, mode)
+end
