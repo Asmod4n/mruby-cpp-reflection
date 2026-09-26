@@ -184,7 +184,47 @@ struct Callback {
     std::function<number(number)> times(mrb_int k) const { return [k](mrb_int n) { return n * k; }; }
     auto plus(mrb_int k) const { return [k](mrb_int n) { return n + k; }; }
 };
-constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback>();
+/* Node deletes the nodes it owns in its destructor, as a tree of
+ * objects in a GUI library does. reflect_ownership_traits names the
+ * owner, so the collector frees a node only while it has none, and the
+ * Ruby object of an owned node lives as long as its owner's, with its
+ * instance variables. alive counts the nodes C++ has. */
+static mrb_int &nodes_alive()
+{
+    static mrb_int n = 0;
+    return n;
+}
+struct Node {
+    Node *parent = nullptr;
+    std::vector<Node *> children;
+    Node() { ++nodes_alive(); }
+    explicit Node(Node *p) : Node() { set_parent(p); }
+    Node(const Node &) = delete;
+    Node &operator=(const Node &) = delete;
+    ~Node()
+    {
+        for (Node *c : children) {
+            c->parent = nullptr;
+            delete c;
+        }
+        if (parent != nullptr) std::erase(parent->children, this);
+        --nodes_alive();
+    }
+    void set_parent(Node *p)
+    {
+        if (parent != nullptr) std::erase(parent->children, this);
+        parent = p;
+        if (p != nullptr) p->children.push_back(this);
+    }
+    Node *child_at(mrb_int i) const { return children.at(static_cast<std::size_t>(i)); }
+    mrb_int child_count() const { return static_cast<mrb_int>(children.size()); }
+    static mrb_int alive() { return nodes_alive(); }
+};
+template <>
+struct mrb_cpp_reflector::reflect_ownership_traits<Node> {
+    static Node *owner(const Node &n) { return n.parent; }
+};
+constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node>();
 constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();
 
 static_assert(std::string_view(mrb_cpp_reflector::reflect_get_args_format<std::meta::members_of(^^Reflected, std::meta::access_context::current())[2]>().data()) == "si");

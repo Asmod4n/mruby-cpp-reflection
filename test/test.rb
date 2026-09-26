@@ -222,3 +222,36 @@ assert('a std::function made from Ruby goes back as the object it was made from'
   assert_same(l, c.given)
 end
 
+def node_tree_without_a_reference
+  root = Node.new
+  Node.new(root)
+  Node.new(root)
+  nil
+end
+
+assert('an object with an owner lives as long as its owner') do
+  full_gc
+  base = Node.alive
+  root = Node.new
+  child = Node.new
+  child.set_parent(root)
+  child.instance_variable_set(:@tag, 5)
+  child = nil
+  full_gc
+  assert_equal(base + 2, Node.alive)
+  assert_equal(5, root.child_at(0).instance_variable_get(:@tag))
+  assert_same(root.child_at(0), root.child_at(0))
+  Node.new(root)
+  full_gc
+  assert_equal(2, root.child_count)
+  assert_equal(base + 3, Node.alive)
+end
+
+assert('an object without an owner is freed with the objects it owns') do
+  full_gc
+  base = Node.alive
+  node_tree_without_a_reference
+  full_gc
+  assert_equal(base, Node.alive)
+end
+

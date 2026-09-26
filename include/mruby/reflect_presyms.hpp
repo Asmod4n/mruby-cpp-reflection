@@ -169,7 +169,9 @@ consteval bool reflect_is_iterator(const std::meta::info bare)
 consteval bool reflect_parameter_supported(const std::meta::info type)
 {
     if (reflect_get_args_letter(type) == '\0') return false;
-    if (reflect_mutates(type) && !reflect_is_object(type)) return false;
+    const bool class_pointer = std::meta::is_pointer_type(reflect_bare(type)) &&
+                               std::meta::is_class_type(std::meta::dealias(std::meta::remove_cv(std::meta::remove_pointer(reflect_bare(type)))));
+    if (reflect_mutates(type) && !reflect_is_object(type) && !class_pointer) return false;
     if (std::meta::is_pointer_type(reflect_bare(type))) {
         const std::meta::info to = std::meta::dealias(std::meta::remove_cv(std::meta::remove_pointer(reflect_bare(type))));
         if (std::meta::is_class_type(to) && !std::meta::is_complete_type(to)) return false;
