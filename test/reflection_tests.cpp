@@ -385,6 +385,21 @@ struct Outer {
     };
     Inner inner() const { return {}; }
 };
+struct TakesRvalues {
+    std::string taken;
+    std::size_t take(std::string &&s)
+    {
+        taken = std::move(s);
+        return taken.size();
+    }
+    int take_inner(Outer::Inner &&i)
+    {
+        const int n = i.n;
+        i.n = 0;
+        return n;
+    }
+    int take_number(int &&n) { return n + 1; }
+};
 struct Converts {
     operator int() const { return 7; }
     operator double() const { return 2.5; }
@@ -412,7 +427,7 @@ mrb_int twice(mrb_int n, mrb_int m) { return n * m * 2; }
 mrb_int scaled(mrb_int n, mrb_int by = 3) { return n * by; }
 Plain made(mrb_int n) { return Plain{n}; }
 }
-constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Sharer, ^^SelfSharer, ^^WatchedHolder, ^^Lender, ^^free_functions, ^^Odd, ^^Converts, ^^Outer, ^^Diamond, ^^ConvertsExplicitly, ^^std::pair<const std::string, int>, ^^std::pair<std::string, int>>();
+constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Sharer, ^^SelfSharer, ^^WatchedHolder, ^^Lender, ^^free_functions, ^^Odd, ^^Converts, ^^Outer, ^^Diamond, ^^TakesRvalues, ^^ConvertsExplicitly, ^^std::pair<const std::string, int>, ^^std::pair<std::string, int>>();
 constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();
 
 static_assert(std::string_view(mrb_cpp_reflector::reflect_get_args_format<std::meta::members_of(^^Reflected, std::meta::access_context::current())[2]>().data()) == "si");

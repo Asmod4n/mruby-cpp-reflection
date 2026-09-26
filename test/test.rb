@@ -492,3 +492,18 @@ assert('a class with a virtual base reaches it through every path') do
   d.n = 5
   assert_equal(5, d.reach(d))
 end
+
+# A Ruby value is an lvalue, and C++ binds an lvalue to T&& only through
+# a copy. The function moves from the copy, and the Ruby object keeps
+# its value.
+assert('a T&& parameter moves from a copy of the Ruby value') do
+  t = TakesRvalues.new
+  s = "moved"
+  assert_equal(5, t.take(s))
+  assert_equal("moved", s)
+  assert_equal("moved", t.taken.to_s)
+  i = Outer.new.inner
+  assert_equal(3, t.take_inner(i))
+  assert_equal(3, i.n)
+  assert_equal(2, t.take_number(1))
+end
