@@ -910,7 +910,13 @@ auto reflect_get_args(mrb_state *const mrb)
             else if constexpr (std::same_as<T, std::string_view>) return std::string_view(s.first, static_cast<std::size_t>(s.second));
             else if constexpr (std::same_as<T, std::string>) return std::string(s.first, static_cast<std::size_t>(s.second));
             else if constexpr (std::same_as<T, std::span<const mrb_value>>) return std::span(s.first, static_cast<std::size_t>(s.second));
-            else return static_cast<T>(s);
+            else if constexpr (std::integral<T> && !std::same_as<T, bool>) {
+                if ((std::is_unsigned_v<T> && s < 0) || static_cast<mrb_int>(static_cast<T>(s)) != s) [[unlikely]] mrb_raisef(mrb, E_RANGE_ERROR, "integer %i does not fit", s);
+                return static_cast<T>(s);
+            } else if constexpr (std::floating_point<T> && sizeof(T) < sizeof(s)) {
+                if (std::isfinite(s) && std::abs(s) > std::numeric_limits<T>::max()) [[unlikely]] mrb_raisef(mrb, E_RANGE_ERROR, "float %f does not fit", s);
+                return static_cast<T>(s);
+            } else return static_cast<T>(s);
         };
         return std::tuple<decltype(converted.template operator()<I>())...>(converted.template operator()<I>()...);
     }(std::make_index_sequence<Count>{});

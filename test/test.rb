@@ -662,13 +662,26 @@ assert('a standard container checks what its operator[], front and back need') d
   shelf = Shelf.new
   assert_equal(2, shelf.full[1])
   assert_raise(IndexError) { shelf.full[2] }
-  assert_raise(IndexError) { shelf.full[-1] }
+  assert_raise(RangeError) { shelf.full[-1] }
   assert_raise(IndexError) { shelf.full[2] = 5 }
   assert_raise(IndexError) { shelf.empty.front }
   assert_raise(IndexError) { shelf.empty.back }
   assert_raise(IndexError) { shelf.empty.pop_back }
   assert_equal(1, shelf.full.front)
   assert_raise(IndexError) { shelf.items[2] }
+end
+
+# A C++ int holds less than a Ruby Integer. A value that does not fit
+# raises RangeError, as Ruby does, and is never cut.
+assert('a number that does not fit its C++ type raises RangeError') do
+  shelf = Shelf.new
+  assert_equal(5, shelf.fits(5))
+  assert_equal(-2**31, shelf.fits(-2**31))
+  assert_raise(RangeError) { shelf.fits(2**40) }
+  assert_raise(RangeError) { shelf.fits(-2**31 - 1) }
+  assert_raise(RangeError) { shelf.fits_float(1e300) }
+  assert_equal(2, shelf.count_shorts([1, 2]))
+  assert_raise(RangeError) { shelf.count_shorts([1, 2**20]) }
 end
 
 # C++ calls a virtual function through the object. For an object that
