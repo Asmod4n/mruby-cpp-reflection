@@ -1813,16 +1813,28 @@ RClass *reflect_define_enum(reflect_definition &definition, RClass *const under)
     ::mrb_define_method(mrb, methods, "to_i", to_i, MRB_ARGS_NONE());
     if constexpr (!std::meta::is_scoped_enum_type(std::meta::dealias(Type))) ::mrb_define_method(mrb, methods, "to_int", to_i, MRB_ARGS_NONE());
     ::mrb_define_method(mrb, methods, "<=>", [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+        const E value = *reflect_ptr<E>(mrb, self);
+        if constexpr (!std::meta::is_scoped_enum_type(std::meta::dealias(Type))) {
+            if (const mrb_value n = mrb_get_arg1(mrb); mrb_integer_p(n)) {
+                const std::underlying_type_t<E> u = std::to_underlying(value);
+                return mrb_fixnum_value(std::cmp_less(u, mrb_integer(n)) ? -1 : std::cmp_greater(u, mrb_integer(n)) ? 1 : 0);
+            }
+        }
         const E *const other = reflect_ptr<E>(mrb, mrb_get_arg1(mrb));
         if (other == nullptr) return mrb_nil_value();
-        const E value = *reflect_ptr<E>(mrb, self);
         return mrb_fixnum_value(value < *other ? -1 : value > *other ? 1 : 0);
     }, MRB_ARGS_REQ(1));
     constexpr auto equal = [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
         const E *const other = reflect_ptr<E>(mrb, mrb_get_arg1(mrb));
         return mrb_bool_value(other != nullptr && *other == *reflect_ptr<E>(mrb, self));
     };
-    ::mrb_define_method(mrb, methods, "==", equal, MRB_ARGS_REQ(1));
+    ::mrb_define_method(mrb, methods, "==", [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+        if constexpr (!std::meta::is_scoped_enum_type(std::meta::dealias(Type))) {
+            if (const mrb_value n = mrb_get_arg1(mrb); mrb_integer_p(n)) return mrb_bool_value(std::cmp_equal(std::to_underlying(*reflect_ptr<E>(mrb, self)), mrb_integer(n)));
+        }
+        const E *const other = reflect_ptr<E>(mrb, mrb_get_arg1(mrb));
+        return mrb_bool_value(other != nullptr && *other == *reflect_ptr<E>(mrb, self));
+    }, MRB_ARGS_REQ(1));
     ::mrb_define_method(mrb, methods, "eql?", equal, MRB_ARGS_REQ(1));
     ::mrb_define_method(mrb, methods, "hash", [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
         return mrb_int_value(mrb, static_cast<mrb_int>(std::hash<E>{}(*reflect_ptr<E>(mrb, self))));

@@ -551,6 +551,14 @@ assert('an enum is a class with one instance for each enumerator') do
   assert_equal(6, Color::DarkBlue.to_i)
   assert_false(Color::Red.respond_to?(:to_int))
   assert_equal(1, Flag::Read.to_int)
+  # C++ converts an unscoped enumerator to its integer in a comparison,
+  # and a scoped one not at all.
+  assert_true(Flag::Read == 1)
+  assert_false(Flag::Read == 2)
+  assert_equal(-1, Flag::Read <=> 2)
+  assert_false(Flag::Read.eql?(1))
+  assert_false(Color::Green == 5)
+  assert_nil(Color::Green <=> 5)
   assert_same(Flag::Read, p.first)
   both = p.both
   assert_equal(3, both.to_i)
