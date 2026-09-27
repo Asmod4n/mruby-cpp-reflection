@@ -1,0 +1,26 @@
+name: test
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: mruby-cpp-reflection
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: git bison mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-binutils mingw-w64-ucrt-x86_64-ruby
+      - run: g++ --version && nm --version && ruby --version
+      - run: git clone --depth 1 https://github.com/mruby/mruby.git
+      - run: rake test
+        working-directory: mruby
+        env:
+          MRUBY_CONFIG: ${{ github.workspace }}/mruby-cpp-reflection/.github/build_config.rb
