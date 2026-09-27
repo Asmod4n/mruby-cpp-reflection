@@ -116,6 +116,34 @@ type is defined with its class only where a member uses it.
   the classes and enums of its namespace that its declaration accepts. A
   template whose body does not compile for such a type stops the build.
 
+## Virtual functions overridden in Ruby
+
+`reflect_define<classes, {.virtual_overriders = true}>(mrb)` together with
+`reflect_virtual_overriders(spec, 'src/file.cpp')` in `mrbgem.rake` lets a
+Ruby subclass override the virtual functions of a listed class:
+
+```ruby
+class RubySquare < Shapes::Square
+  def area(k) = super * 10
+end
+```
+
+- C++ calls the Ruby method where it calls the virtual function. `super`
+  calls the C++ function it overrides. Without a Ruby method, the C++
+  function runs.
+- A pure virtual function without a Ruby method raises
+  `NotImplementedError`, so an abstract class is made through a Ruby
+  subclass.
+- An argument that C++ passes by reference or pointer is lent for the call
+  and detached when the call returns.
+- The build step compiles the named file once more to write the overriders
+  into `spec.build_dir`, and compiles the file with them in place of its
+  own object.
+- Left out: `private` and `final` virtual functions, classes without a
+  virtual destructor, and objects that C++ creates itself. While the Ruby
+  method of a function runs, a call of the same function on the same
+  object from C++ runs the C++ function.
+
 ## Build
 
 A compiler with `__cpp_impl_reflection`, today g++ 16 with `-freflection`,

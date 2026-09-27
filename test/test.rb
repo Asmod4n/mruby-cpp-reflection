@@ -612,3 +612,46 @@ assert('a namespace variable is a module function of its namespace') do
   assert_false(OnlyOne.respond_to?(:skipped))
   assert_false(OnlyOne.respond_to?(:skipped_function))
 end
+
+# C++ calls a virtual function through the object. For an object that
+# Ruby made from a subclass, the overrider calls the Ruby method of the
+# same name, and super reaches the C++ function it overrides. Without a
+# Ruby method, the C++ function runs as before.
+class RubySquare < Shapes::Square
+  def area(k) = super * 10
+  def name = 'ruby square'
+end
+
+assert('a Ruby method overrides a virtual function that C++ calls') do
+  r = RubySquare.new(2)
+  assert_equal(80, r.ask(2))
+  assert_equal('ruby square', r.told.to_s)
+  assert_equal(4, r.counted)
+  plain = Shapes::Square.new(2)
+  assert_equal(8, plain.ask(2))
+  assert_equal('shape', plain.told.to_s)
+end
+
+# A pure virtual function has no C++ body to fall back to, so an abstract
+# class is made through a Ruby subclass, and a call without a Ruby method
+# raises. An argument C++ passes by reference lives only for the call,
+# so the object Ruby got for it is detached when the call returns.
+class RubyShape < Shapes::Shape
+  def sides = 3
+  def measure(point)
+    @kept = point
+    point.x * 2
+  end
+  attr_reader :kept
+end
+
+class ShapeWithoutSides < Shapes::Shape
+end
+
+assert('an abstract class is made through a Ruby subclass, and lent arguments end with the call') do
+  r = RubyShape.new(1)
+  assert_equal(3, r.counted)
+  assert_equal(10, r.probe)
+  assert_raise(TypeError) { r.kept.x }
+  assert_raise(NotImplementedError) { ShapeWithoutSides.new(1).counted }
+end

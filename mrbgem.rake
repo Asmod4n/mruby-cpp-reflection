@@ -28,6 +28,41 @@ def reflect_presyms(spec, runner_src)
   spec.objs << obj
 end
 
+# Overriders for the virtual functions of the classes a source file lists
+# with reflect_options virtual_overriders. A first compile of the source
+# file, with MRB_CPP_REFLECTOR_GENERATE, writes the text of the overriders
+# into its object file between two marker lines. That text goes to
+# spec.build_dir, and include_virtual_overriders.cpp compiles the source
+# file with it, in place of the source file's own object.
+def reflect_virtual_overriders(spec, source)
+  return unless spec.build.cxx.flags.flatten.any? { |f| f.to_s == '-freflection' }
+  reflection = spec.build.gems.detect { |g| g.name == 'mruby-cpp-reflection' }
+  source = File.expand_path(source, spec.dir)
+  dir = "#{spec.build_dir}/virtual_overriders/#{File.basename(source, '.*')}"
+  msvc = spec.build.toolchains.include?('visualcpp')
+  quoted = ->(path) { msvc ? %(\\"#{path}\\") : %('"#{path}"') }
+  printed = "#{dir}/print_virtual_overriders#{spec.build.exts.object}"
+  text = "#{dir}/virtual_overriders.inc"
+  object = "#{dir}/include_virtual_overriders#{spec.build.exts.object}"
+  replaced = spec.objfile(source.relative_path_from(spec.dir).pathmap("#{spec.build_dir}/%X"))
+  file printed => [source, "#{reflection.dir}/src/print_virtual_overriders.cpp", "#{reflection.dir}/include/mruby/reflection.hpp"] do |t|
+    spec.cxx.run t.name, "#{reflection.dir}/src/print_virtual_overriders.cpp", ["MRB_CPP_REFLECTOR_SOURCE=#{quoted.(source)}"], [], [msvc ? '/GL-' : '-fno-lto']
+  end
+  file text => printed do |t|
+    blocks = File.binread(printed).scan(/BEGIN_MRB_CPP_REFLECTOR_VIRTUAL_OVERRIDERS\n(.*?)END_MRB_CPP_REFLECTOR_VIRTUAL_OVERRIDERS\n/m).flatten
+    File.write(t.name, blocks.flat_map { |b| b.split(/^(?=template <> struct)/) }.uniq.join)
+  end
+  file object => [text, "#{reflection.dir}/src/include_virtual_overriders.cpp"] do |t|
+    spec.cxx.run t.name, "#{reflection.dir}/src/include_virtual_overriders.cpp",
+                 ["MRB_CPP_REFLECTOR_SOURCE=#{quoted.(source)}", "MRB_CPP_REFLECTOR_VIRTUAL_OVERRIDERS=#{quoted.(text)}"]
+  end
+  if spec.test_objs.include?(replaced)
+    spec.test_objs = spec.test_objs.map { |o| o == replaced ? object : o }
+  else
+    spec.objs = spec.objs.map { |o| o == replaced ? object : o }
+  end
+end
+
 MRuby::Gem::Specification.new('mruby-cpp-reflection') do |spec|
   spec.export_include_paths << "#{spec.dir}/include" if spec.respond_to?(:export_include_paths)
   spec.license = 'MPL-2'
@@ -42,6 +77,7 @@ MRuby::Gem::Specification.new('mruby-cpp-reflection') do |spec|
   spec.add_test_dependency 'mruby-class-ext', core: 'mruby-class-ext'
   spec.add_test_dependency 'mruby-method', core: 'mruby-method'
   reflect_presyms(spec, "#{spec.dir}/test/reflect_presyms/main.cpp")
+  reflect_virtual_overriders(spec, 'test/reflection_tests.cpp')
   spec.build.enable_cxx_exception
   relink = "#{spec.dir}/tools/relink.rb"
   spec.build.linker.command = "#{RbConfig.ruby} #{relink} #{spec.build.linker.command}" unless spec.build.linker.command.include?(relink)

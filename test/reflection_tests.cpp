@@ -506,6 +506,33 @@ inline int picked = 5;
 inline int skipped = 6;
 inline int skipped_function() { return 0; }
 }
+namespace shapes {
+struct Point {
+    int x = 1;
+};
+struct Shape {
+    explicit Shape(int scale) : scale(scale) {}
+    virtual ~Shape() = default;
+    virtual int area(int k) const { return scale * k; }
+    virtual std::string name() const { return "shape"; }
+    virtual int sides() const = 0;
+    virtual int measure(const Point &p) const { return p.x; }
+    int probe() const
+    {
+        const Point p{5};
+        return measure(p);
+    }
+    int ask(int k) const { return area(k); }
+    std::string told() const { return name(); }
+    int counted() const { return sides(); }
+    int scale;
+};
+struct Square : Shape {
+    explicit Square(int scale) : Shape(scale) {}
+    int sides() const override { return 4; }
+    int area(int k) const override { return scale * scale * k; }
+};
+}
 struct Converts {
     operator int() const { return 7; }
     operator double() const { return 2.5; }
@@ -539,6 +566,7 @@ constexpr auto nested = mrb_cpp_reflector::reflect<^^Holder>();
 constexpr auto named = mrb_cpp_reflector::reflect<^^fruit::Basket::count<fruit::Apple>>();
 constexpr auto operators = mrb_cpp_reflector::reflect<^^ops, ^^ops::Vec, ^^ops::Log>();
 constexpr auto variables = mrb_cpp_reflector::reflect<^^globals, ^^only_one::picked>();
+constexpr auto overridable = mrb_cpp_reflector::reflect<^^shapes::Shape, ^^shapes::Square>();
 constexpr auto instantiated = mrb_cpp_reflector::reflect<^^fruit, ^^fruit::Apple, ^^fruit::Pear, ^^fruit::Kind, ^^fruit::Scale>();
 
 static_assert(std::string_view(mrb_cpp_reflector::reflect_get_args_format<std::meta::members_of(^^Reflected, std::meta::access_context::current())[2]>().data()) == "si");
@@ -628,6 +656,7 @@ extern "C" void mrb_mruby_cpp_reflection_gem_test(mrb_state *mrb)
     mrb_cpp_reflector::reflect_define<named>(mrb);
     mrb_cpp_reflector::reflect_define<operators>(mrb);
     mrb_cpp_reflector::reflect_define<variables>(mrb);
+    mrb_cpp_reflector::reflect_define<overridable, {.virtual_overriders = true}>(mrb);
     mrb_cpp_reflector::reflect_define<instantiated, {.templates = true}>(mrb);
 }
 #else

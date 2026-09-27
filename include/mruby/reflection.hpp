@@ -30,7 +30,9 @@ extern const struct mrb_data_type mrb_const_void_pointer_type;
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <charconv>
 #include <compare>
+#include <cstdio>
 #include <functional>
 #include <concepts>
 #include <cstddef>
@@ -198,7 +200,7 @@ struct reflect_tracked_base {
 };
 
 template <class T>
-struct reflect_tracked final : T, reflect_tracked_base {
+struct reflect_tracked : T, reflect_tracked_base {
     template <class... A>
     explicit reflect_tracked(A &&...args) : T(std::forward<A>(args)...)
     {
@@ -344,7 +346,116 @@ struct reflect_definition {
 struct reflect_options {
     bool templates = false;
     bool nested_types = false;
+    bool virtual_overriders = false;
 };
+
+template <std::meta::info Type>
+struct reflect_virtual_overrider;
+
+consteval bool reflect_virtual_signature_equal(const std::meta::info a, const std::meta::info b)
+{
+    if (std::meta::identifier_of(a) != std::meta::identifier_of(b) || std::meta::is_const(a) != std::meta::is_const(b)) return false;
+    const std::vector<std::meta::info> pa = std::meta::parameters_of(a);
+    const std::vector<std::meta::info> pb = std::meta::parameters_of(b);
+    if (pa.size() != pb.size()) return false;
+    for (std::size_t i = 0; i < pa.size(); i++)
+        if (std::meta::dealias(std::meta::type_of(pa[i])) != std::meta::dealias(std::meta::type_of(pb[i]))) return false;
+    return true;
+}
+
+consteval bool reflect_virtual_function_supported(const std::meta::info f)
+{
+    if (!std::meta::is_function(f) || !std::meta::is_virtual(f) || std::meta::is_destructor(f) || !std::meta::has_identifier(f)) return false;
+    if (std::meta::is_private(f) || std::meta::is_deleted(f) || std::meta::is_volatile(f) || std::meta::is_rvalue_reference_qualified(f)) return false;
+    if (std::meta::is_vararg_function(f)) return false;
+    for (const std::meta::info p : std::meta::parameters_of(f))
+        if (!reflect_result_supported(std::meta::type_of(p))) return false;
+    const std::meta::info r = std::meta::return_type_of(f);
+    return r == ^^void || reflect_parameter_supported(r);
+}
+
+consteval std::vector<std::meta::info> reflect_virtual_functions(const std::meta::info type)
+{
+    std::vector<std::meta::info> seen;
+    std::vector<std::meta::info> order{std::meta::dealias(type)};
+    for (std::size_t i = 0; i < order.size(); i++)
+        for (const std::meta::info b : std::meta::bases_of(order[i], std::meta::access_context::unchecked()))
+            if (std::meta::is_public(b) && !reflect_reserved(std::meta::type_of(b))) order.push_back(std::meta::dealias(std::meta::type_of(b)));
+    for (const std::meta::info t : order)
+        for (const std::meta::info m : std::meta::members_of(t, std::meta::access_context::unchecked()))
+            if (std::meta::is_function(m) && std::meta::is_virtual(m) && !std::meta::is_destructor(m) && std::meta::has_identifier(m) &&
+                std::ranges::none_of(seen, [&](const std::meta::info s) { return reflect_virtual_signature_equal(s, m); }))
+                seen.push_back(m);
+    std::vector<std::meta::info> functions;
+    for (const std::meta::info f : seen)
+        if (!std::meta::is_final(f) && reflect_virtual_function_supported(f)) functions.push_back(f);
+    return functions;
+}
+
+consteval bool reflect_overridable(const std::meta::info type)
+{
+    const std::meta::info t = std::meta::dealias(type);
+    return std::meta::is_class_type(t) && std::meta::is_complete_type(t) && !std::meta::is_final_type(t) && std::meta::has_virtual_destructor(t) &&
+           (std::meta::has_identifier(t) || std::meta::has_template_arguments(t)) && !reflect_virtual_functions(t).empty();
+}
+
+consteval std::string reflect_decimal(const std::size_t n)
+{
+    std::array<char, 24> digits{};
+    return {digits.data(), std::to_chars(digits.data(), digits.data() + digits.size(), n).ptr};
+}
+
+consteval std::string reflect_virtual_overriders_text(const std::span<const std::meta::info> classes)
+{
+    std::string text;
+    for (const std::meta::info c : classes) {
+        if (!std::meta::is_type(c) || !reflect_overridable(c)) continue;
+        const std::meta::info t = std::meta::dealias(c);
+        const std::string spelled = std::string(std::meta::display_string_of(t));
+        const std::vector<std::meta::info> functions = reflect_virtual_functions(t);
+        text += "template <> struct mrb_cpp_reflector::reflect_virtual_overrider<^^" + spelled + "> {\n";
+        text += "    using base = " + spelled + ";\n";
+        text += "    static constexpr auto functions = std::define_static_array(mrb_cpp_reflector::reflect_virtual_functions(^^base));\n";
+        text += "    struct type final : mrb_cpp_reflector::reflect_tracked<base> {\n";
+        text += "        using overridden = base;\n";
+        text += "        using mrb_cpp_reflector::reflect_tracked<base>::reflect_tracked;\n";
+        text += "        mutable std::array<bool, " + reflect_decimal(functions.size()) + "> running{};\n";
+        for (std::size_t j = 0; j < functions.size(); j++) {
+            const std::meta::info f = functions[j];
+            const std::string at = "functions[" + reflect_decimal(j) + "]";
+            const std::string result = "typename [:std::meta::return_type_of(" + at + "):]";
+            std::string parameters, arguments;
+            const std::size_t count = std::meta::parameters_of(f).size();
+            for (std::size_t k = 0; k < count; k++) {
+                if (k > 0) { parameters += ", "; arguments += ", "; }
+                parameters += "typename [:std::meta::type_of(std::meta::parameters_of(" + at + ")[" + reflect_decimal(k) + "]):] a" + reflect_decimal(k);
+                arguments += "a" + reflect_decimal(k);
+            }
+            const std::string name(std::meta::identifier_of(f));
+            text += "        auto " + name + "(" + parameters + ")" + (std::meta::is_const(f) ? " const" : "") +
+                    (std::meta::is_lvalue_reference_qualified(f) ? " &" : "") + (std::meta::is_noexcept(f) ? " noexcept" : "") + " -> " + result + " override\n";
+            text += "        {\n";
+            if (std::meta::is_pure_virtual(f))
+                text += "            const auto base = [&]() -> " + result + " { throw mrb_cpp_reflector::reflect_undefined_call(); };\n";
+            else
+                text += "            const auto base = [&]() -> " + result + " { return this->overridden::" + name + "(" + arguments + "); };\n";
+            text += "            return mrb_cpp_reflector::reflect_call_virtual_overrider<" + at + ">(*this, running[" + reflect_decimal(j) + "], base" +
+                    (count > 0 ? ", " + arguments : "") + ");\n";
+            text += "        }\n";
+        }
+        text += "    };\n};\n";
+    }
+    return text;
+}
+
+template <auto Classes>
+inline constexpr auto reflect_virtual_overriders_printed = [] {
+    constexpr std::string_view body = std::define_static_string("BEGIN_MRB_CPP_REFLECTOR_VIRTUAL_OVERRIDERS\n" + reflect_virtual_overriders_text(Classes) +
+                                                                "END_MRB_CPP_REFLECTOR_VIRTUAL_OVERRIDERS\n");
+    std::array<char, body.size() + 1> text{};
+    std::ranges::copy(body, text.begin());
+    return text;
+}();
 
 template <std::meta::info Type, reflect_options Options = reflect_options{}, auto Instances = std::array<std::meta::info, 0>{}>
 RClass *reflect_define_class(reflect_definition &definition, RClass *super);
@@ -911,6 +1022,52 @@ mrb_value reflect_translate_exceptions(mrb_state *const mrb, const Call &call)
     std::unreachable();
 }
 
+template <class A>
+mrb_value reflect_virtual_argument(mrb_state *const mrb, const mrb_value holder, A &argument)
+{
+    using B = std::remove_cvref_t<A>;
+    if constexpr (std::is_pointer_v<B> && std::is_class_v<std::remove_cv_t<std::remove_pointer_t<B>>>) {
+        if (argument == nullptr) return mrb_nil_value();
+        return reflect_lend(mrb, holder, argument, std::is_const_v<std::remove_pointer_t<B>>);
+    } else if constexpr (std::is_class_v<B> && reflect_is_object(^^B)) {
+        return reflect_lend(mrb, holder, &argument, std::is_const_v<std::remove_reference_t<A>>);
+    } else return reflect_result(mrb, holder, argument);
+}
+
+struct reflect_virtual_call {
+    mrb_state *mrb;
+    bool &running;
+    int arena;
+    mrb_value holder;
+    ~reflect_virtual_call()
+    {
+        reflect_forget(mrb, holder);
+        running = false;
+        mrb_gc_arena_restore(mrb, arena);
+    }
+};
+
+template <std::meta::info Function, class Self, class Base, class... A>
+auto reflect_call_virtual_overrider(Self &self, bool &running, const Base &base, A &...arguments) -> typename [:std::meta::return_type_of(Function):]
+{
+    if (running || self.ruby == nullptr) return base();
+    mrb_state *const mrb = self.mrb;
+    const mrb_value object = mrb_obj_value(self.ruby);
+    const mrb_sym name = reflect_intern<Function>(mrb);
+    RClass *owner = mrb_class(mrb, object);
+    const mrb_method_t method = mrb_method_search_vm(mrb, &owner, name);
+    if (MRB_METHOD_UNDEF_P(method) || MRB_METHOD_CFUNC_P(method)) return base();
+    running = true;
+    const reflect_virtual_call call{mrb, running, mrb_gc_arena_save(mrb), mrb_obj_new(mrb, mrb->object_class, 0, nullptr)};
+    const std::array<mrb_value, sizeof...(A)> argv{reflect_virtual_argument(mrb, call.holder, arguments)...};
+    const mrb_value answer = mrb_funcall_argv(mrb, object, name, static_cast<mrb_int>(argv.size()), argv.data());
+    if constexpr (std::meta::return_type_of(Function) == ^^void) return;
+    else {
+        auto held = reflect_argument<std::meta::return_type_of(Function)>(mrb, answer);
+        return reflect_pass(held);
+    }
+}
+
 template <std::meta::info Type, std::meta::info Function, std::size_t Count = std::meta::parameters_of(Function).size() - reflect_skip(Function)>
 mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
 {
@@ -945,7 +1102,14 @@ mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
         });
     } else {
         using T = [:std::meta::dealias(Type):];
-        if constexpr (std::meta::is_constructor(Function)) {
+        if constexpr (std::meta::is_constructor(Function) && requires { typename T::overridden; }) {
+            using B = typename T::overridden;
+            auto args = reflect_get_args<Function, 0, Count>(mrb);
+            return reflect_translate_exceptions(mrb, [&] {
+                reflect_adopt<B>(mrb, self, static_cast<B *>(std::apply([&](auto &...held) { return new T(reflect_pass(held)...); }, args)));
+                return self;
+            });
+        } else if constexpr (std::meta::is_constructor(Function)) {
             auto args = reflect_get_args<Function, 0, Count>(mrb);
             return reflect_translate_exceptions(mrb, [&] {
                 reflect_adopt<T>(mrb, self, std::apply([&](auto &...held) { return reflect_new<T>(mrb, reflect_pass(held)...); }, args));
@@ -1490,7 +1654,14 @@ RClass *reflect_define_class(reflect_definition &definition, RClass *const under
         reflect_class<base>(definition);
         mrb_include_module(mrb, methods, reflect_module<base>(mrb));
     }
-    if constexpr (!std::is_abstract_v<T> && reflect_constructors<Type>().size() > 0) {
+    if constexpr (Options.virtual_overriders && requires { typename reflect_virtual_overrider<std::meta::dealias(Type)>::type; } &&
+                  reflect_constructors<Type>().size() > 0) {
+        MRB_DEFINE_ALLOCATOR(klass);
+        [&]<std::size_t... I>(std::index_sequence<I...>) {
+            reflect_define_method<^^typename reflect_virtual_overrider<std::meta::dealias(Type)>::type, reflect_constructors<Type>()[I]...>(
+                mrb, klass, reflect_sym<kInitialize>(mrb));
+        }(std::make_index_sequence<reflect_constructors<Type>().size()>{});
+    } else if constexpr (!std::is_abstract_v<T> && reflect_constructors<Type>().size() > 0) {
         MRB_DEFINE_ALLOCATOR(klass);
         [&]<std::size_t... I>(std::index_sequence<I...>) {
             reflect_define_method<Type, reflect_constructors<Type>()[I]...>(mrb, klass, reflect_sym<kInitialize>(mrb));
@@ -1654,6 +1825,10 @@ RClass *reflect_define_namespace(reflect_definition &definition, RClass *const u
 template <auto Classes, reflect_options Options = reflect_options{}>
 void reflect_define(mrb_state *const mrb, RClass *const under = nullptr)
 {
+#if defined(MRB_CPP_REFLECTOR_GENERATE)
+    if constexpr (Options.virtual_overriders) std::fputs(reflect_virtual_overriders_printed<Classes>.data(), stdout);
+    return;
+#endif
     reflect_definition definition(mrb);
     template for (constexpr std::meta::info type : std::define_static_array(reflect_scopes(Classes))) {
         constexpr auto instances = reflect_instances<type, Classes, Options.templates>();
