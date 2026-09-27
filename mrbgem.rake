@@ -79,6 +79,10 @@ MRuby::Gem::Specification.new('mruby-cpp-reflection') do |spec|
   spec.add_test_dependency 'mruby-class-ext', core: 'mruby-class-ext'
   spec.add_test_dependency 'mruby-method', core: 'mruby-method'
   spec.add_test_dependency 'mruby-enumerator', core: 'mruby-enumerator'
+  if spec.build.test_enabled?
+    spec.reflect_varargs 'varargs::sum_ints', [%w[int], %w[int int], %w[int int int]]
+    spec.reflect_varargs 'varargs::describe', [['int', 'double', 'const char *']]
+  end
   reflect_presyms(spec, "#{spec.dir}/test/reflect_presyms/main.cpp")
   reflect_virtual_overriders(spec, 'test/reflection_tests.cpp')
   spec.build.enable_cxx_exception

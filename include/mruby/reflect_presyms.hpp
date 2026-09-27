@@ -112,11 +112,35 @@ consteval bool reflect_is_object(const std::meta::info type)
     return std::meta::is_class_type(bare) || std::meta::is_enum_type(bare);
 }
 
+consteval bool reflect_is_opaque_pointer(const std::meta::info type)
+{
+    const std::meta::info t = std::meta::dealias(type);
+    if (!std::meta::is_pointer_type(t)) return false;
+    const std::meta::info to = std::meta::dealias(std::meta::remove_cv(std::meta::remove_pointer(t)));
+    return std::meta::is_class_type(to) && !std::meta::is_complete_type(to);
+}
+
+consteval bool reflect_is_output_parameter(const std::meta::info type)
+{
+    const std::meta::info t = std::meta::dealias(type);
+    if (!std::meta::is_pointer_type(t)) return false;
+    const std::meta::info to = std::meta::remove_pointer(t);
+    return !std::meta::is_const_type(to) && !std::meta::is_volatile_type(to) && reflect_is_opaque_pointer(to);
+}
+
+consteval bool reflect_is_function_pointer(const std::meta::info type)
+{
+    const std::meta::info t = std::meta::dealias(type);
+    return std::meta::is_pointer_type(t) && std::meta::is_function_type(std::meta::dealias(std::meta::remove_pointer(t)));
+}
+
 consteval char reflect_get_args_letter(const std::meta::info type)
 {
     const std::meta::info t = reflect_bare(type);
     if (std::meta::is_pointer_type(t)) {
         const std::meta::info to = std::meta::dealias(std::meta::remove_cv(std::meta::remove_pointer(t)));
+        if (std::meta::is_pointer_type(to)) return reflect_is_output_parameter(type) ? 'o' : '\0';
+        if (std::meta::is_function_type(to)) return 'o';
         if (to == ^^char) return 'z';
         if (to == ^^void) return 'o';
         return std::meta::is_class_type(to) ? 'o' : '\0';
@@ -212,6 +236,7 @@ consteval bool reflect_is_variant(const std::meta::info type)
 
 consteval bool reflect_parameter_supported(const std::meta::info type)
 {
+    if (reflect_is_opaque_pointer(type) || reflect_is_output_parameter(type) || reflect_is_function_pointer(type)) return true;
     if (reflect_is_variant(type)) {
         if (reflect_mutates(type)) return false;
         for (const std::meta::info a : std::meta::template_arguments_of(reflect_bare(type)))
@@ -244,6 +269,7 @@ consteval bool reflect_parameter_supported(const std::meta::info type)
 
 consteval bool reflect_result_supported(const std::meta::info type)
 {
+    if (reflect_is_function_pointer(type) && !std::meta::is_reference_type(type)) return true;
     if (!reflect_complete(type)) return false;
     const std::meta::info bare = reflect_bare(type);
     if (reflect_is_variant(bare)) {
@@ -310,9 +336,11 @@ consteval bool reflect_call_supported(const std::meta::info function)
     if (std::meta::is_rvalue_reference_qualified(function) || std::meta::is_volatile(function)) return false;
     for (const std::meta::info p : std::meta::parameters_of(function))
         if (!reflect_parameter_supported(std::meta::type_of(p))) return false;
+    if (std::ranges::count_if(std::meta::parameters_of(function), [](const std::meta::info p) { return reflect_is_output_parameter(std::meta::type_of(p)); }) > 1)
+        return false;
     if (std::meta::is_constructor(function)) return true;
     if (reflect_is_coroutine(std::meta::return_type_of(function)) && !reflect_coroutine_parameters_supported(function)) return false;
-    return reflect_result_supported(std::meta::return_type_of(function));
+    return reflect_is_opaque_pointer(std::meta::return_type_of(function)) || reflect_result_supported(std::meta::return_type_of(function));
 }
 
 consteval bool reflect_reserved(const std::meta::info type)
@@ -509,6 +537,44 @@ template <std::meta::info... Types>
 consteval std::array<std::meta::info, sizeof...(Types)> reflect()
 {
     return {Types...};
+}
+
+consteval bool reflect_in_namespace_std(const std::meta::info type)
+{
+    for (std::meta::info scope = std::meta::parent_of(type); std::meta::has_parent(scope); scope = std::meta::parent_of(scope))
+        if (scope == ^^std) return true;
+    return false;
+}
+
+consteval std::vector<std::meta::info> reflect_signature_types(const std::span<const std::meta::info> scopes)
+{
+    std::vector<std::meta::info> types(scopes.begin(), scopes.end());
+    const auto note = [&](const std::meta::info type) {
+        std::meta::info t = reflect_bare(type);
+        while (std::meta::is_pointer_type(t)) t = reflect_bare(std::meta::remove_pointer(t));
+        if (!(std::meta::is_class_type(t) || std::meta::is_enum_type(t)) || !std::meta::has_identifier(t) || reflect_reserved(t) || reflect_in_namespace_std(t) ||
+            t == std::meta::dealias(^^mrb_value) || !std::meta::is_namespace(std::meta::parent_of(t)))
+            return;
+        if (std::ranges::find(types, t) == types.end()) types.push_back(t);
+    };
+    for (const std::meta::info scope : scopes) {
+        if (!std::meta::is_namespace(scope) && !(std::meta::is_class_type(scope) && std::meta::is_complete_type(scope))) continue;
+        for (const std::meta::info m : std::meta::members_of(scope, std::meta::access_context::current())) {
+            if (!std::meta::is_function(m) || std::meta::is_template(m) || !reflect_call_supported(m)) continue;
+            if (!std::meta::is_constructor(m)) note(std::meta::return_type_of(m));
+            for (const std::meta::info p : std::meta::parameters_of(m)) note(std::meta::type_of(p));
+        }
+    }
+    return types;
+}
+
+template <auto Scopes>
+consteval auto reflect_with_signature_types()
+{
+    constexpr auto list = std::define_static_array(reflect_signature_types(Scopes));
+    std::array<std::meta::info, list.size()> out{};
+    std::ranges::copy(list, out.begin());
+    return out;
 }
 
 consteval bool reflect_variable_supported(const std::meta::info variable)

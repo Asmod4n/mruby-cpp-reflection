@@ -4,10 +4,17 @@
 # Run with: ruby tools/reflect_varargs_test.rb
 require 'test/unit'
 
+require 'tmpdir'
+require 'ostruct'
+
 module MRuby
   module Gem
     class Specification
-      def initialize
+      attr_reader :build_dir, :cxx
+
+      def initialize(build_dir)
+        @build_dir = build_dir
+        @cxx = OpenStruct.new(include_paths: [])
       end
     end
   end
@@ -17,7 +24,36 @@ require_relative 'reflect_varargs'
 
 class ReflectVarargsTest < Test::Unit::TestCase
   def setup
-    @spec = MRuby::Gem::Specification.new
+    @dir = Dir.mktmpdir
+    @spec = MRuby::Gem::Specification.new(@dir)
+  end
+
+  def teardown
+    FileUtils.remove_entry(@dir)
+  end
+
+  # The header is what the C++ side reads: one specialization per
+  # function, one reflect_types per list, the name as C++ names it.
+  def test_reflect_varargs_writes_the_header_the_gem_reads
+    @spec.reflect_varargs('ns::sum', [%w[int], ['int', 'const char *']])
+    text = File.read(@spec.reflect_varargs_header)
+    assert_match(/reflect_varargs_lists<\^\^::ns::sum>/, text)
+    assert_match(/\^\^reflect_types<int>, \^\^reflect_types<int, const char \*>/, text)
+    assert_equal(["#{@dir}/include"], @spec.cxx.include_paths)
+  end
+
+  # An unchanged declaration leaves the header alone, so the build that
+  # follows compiles nothing again.
+  def test_an_unchanged_declaration_does_not_touch_the_header
+    @spec.reflect_varargs('sum', [%w[int]])
+    File.utime(Time.at(0), Time.at(0), @spec.reflect_varargs_header)
+    capture_output { @spec.reflect_varargs('sum', [%w[int]]) }
+    assert_equal(Time.at(0), File.mtime(@spec.reflect_varargs_header))
+  end
+
+  def test_a_list_of_something_other_than_type_names_is_refused
+    assert_raise(ArgumentError) { @spec.reflect_varargs('sum', %w[int]) }
+    assert_raise(ArgumentError) { @spec.reflect_varargs('sum', [[:int]]) }
   end
 
   def test_reflect_varargs_stores_one_declaration_per_function_name

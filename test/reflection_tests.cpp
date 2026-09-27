@@ -880,6 +880,11 @@ static mrb_value callback_after_close_q(mrb_state *mrb, mrb_value)
 }
 
 bool aborts_in_child(void (*run)());
+void lifetime_dsl_gem_test(mrb_state *mrb);
+void lifetime_allocator_gem_test(mrb_state *mrb);
+void function_pointers_gem_test(mrb_state *mrb);
+void varargs_gem_test(mrb_state *mrb);
+void attributes_gem_test(mrb_state *mrb);
 
 /* One thread owns an mrb_state. A call into Ruby from another thread
  * would race with that thread, so the process ends instead. */
@@ -913,6 +918,11 @@ extern "C" void mrb_mruby_cpp_reflection_gem_test(mrb_state *mrb)
     mrb_cpp_reflector::reflect_define<variables>(mrb);
     mrb_cpp_reflector::reflect_define<overridable, {.virtual_overriders = true}>(mrb);
     mrb_cpp_reflector::reflect_define<instantiated, {.templates = true}>(mrb);
+    lifetime_dsl_gem_test(mrb);
+    lifetime_allocator_gem_test(mrb);
+    function_pointers_gem_test(mrb);
+    varargs_gem_test(mrb);
+    attributes_gem_test(mrb);
 }
 #else
 extern "C" void mrb_mruby_cpp_reflection_gem_test(mrb_state *) {}
