@@ -102,14 +102,15 @@ struct Deep {
     int depth() const { return 1; }
     int shallow() const { return 2; }
 };
-/* An Adopter takes ownership of the Leaf it adopts and deletes it. The
- * declaration of Adopter names the Leaf, and nothing declares Leaf, so
- * mruby allocates a Leaf, and C++ may not delete it. */
-struct Leaf {
+/* An Adopter takes ownership of the AdoptedLeaf it adopts and deletes it. An AdoptedLeaf
+ * that Ruby made comes from new, so the delete in ~Adopter is valid. The
+ * name differs from Leaf in reflection_tests.cpp, so each name has one
+ * definition. */
+struct AdoptedLeaf {
     mrb_int n = 5;
 };
 class Adopter {
-    std::vector<Leaf *> leaves;
+    std::vector<AdoptedLeaf *> leaves;
 
 public:
     Adopter() = default;
@@ -117,7 +118,7 @@ public:
     Adopter &operator=(const Adopter &) = delete;
     ~Adopter()
     {
-        for (Leaf *const leaf : leaves) delete leaf;
+        for (AdoptedLeaf *const leaf : leaves) delete leaf;
     }
-    void adopt(Leaf *const leaf) { leaves.push_back(leaf); }
+    void adopt(AdoptedLeaf *const leaf) { leaves.push_back(leaf); }
 };

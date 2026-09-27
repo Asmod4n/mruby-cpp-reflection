@@ -66,7 +66,7 @@ public:
     }
 };
 
-constexpr auto lifetime_classes = mrb_cpp_reflector::reflect<^^TreeObject, ^^Resource, ^^Layout, ^^Window, ^^Device, ^^Deep, ^^Leaf, ^^Adopter, ^^Worker, ^^Blank, ^^Empty,
+constexpr auto lifetime_classes = mrb_cpp_reflector::reflect<^^TreeObject, ^^Resource, ^^Layout, ^^Window, ^^Device, ^^Deep, ^^AdoptedLeaf, ^^Adopter, ^^Worker, ^^Blank, ^^Empty,
                                                              ^^Watcher>();
 constexpr auto undeclared_classes = mrb_cpp_reflector::reflect<^^UndeclaredTree>();
 

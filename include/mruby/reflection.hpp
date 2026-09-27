@@ -533,23 +533,6 @@ consteval std::meta::info reflect_share_function(const std::meta::info function,
     return ^^void;
 }
 
-consteval bool reflect_handed_over(const std::meta::info type)
-{
-    if (!std::meta::is_complete_type(type)) return false;
-    std::vector<std::meta::info> classes = reflect_bases(type);
-    classes.insert(classes.begin(), type);
-    for (const std::meta::info klass : classes) {
-        for (const reflect_object_lifetime_word &word : reflect_words_of(klass)) {
-            if (word.word != reflect_word::takes_ownership && word.word != reflect_word::ends_lifetime) continue;
-            for (const std::meta::info function : reflect_functions_named(klass, word.function)) {
-                const int at = reflect_position(function, word.word == reflect_word::takes_ownership ? word.of : word.position);
-                if (at != reflect_nowhere && std::ranges::contains(classes, reflect_class_at(type, function, at))) return true;
-            }
-        }
-    }
-    return false;
-}
-
 consteval bool reflect_makes_handle(const std::meta::info function)
 {
     if (!std::meta::is_constructor(function) && reflect_is_opaque_pointer(std::meta::return_type_of(function))) return true;
@@ -659,7 +642,6 @@ struct reflect_lifetime_base {
     bool alive = false;
     bool owned = false;
     bool adopted = false;
-    bool made_by_new = false;
     void (*deallocator)(void *object) = nullptr;
     reflect_lifetime_base *taken_by = nullptr;
     std::vector<reflect_lifetime_base *> taken;
@@ -914,7 +896,7 @@ template <class T>
 const reflect_data_type &reflect_data_type_of()
 {
     static constexpr auto name = std::define_static_string(reflect_class_name(^^T));
-    static const reflect_data_type type{{name, [](mrb_state *const mrb, void *const p) {
+    static const reflect_data_type type{{name, [](mrb_state *, void *const p) {
                                              if (p == nullptr) return;
                                              reflect_lifetime_base *const record = static_cast<reflect_lifetime_base *>(p);
                                              const bool destroys = record->alive && record->owned;
@@ -925,17 +907,12 @@ const reflect_data_type &reflect_data_type_of()
                                                  if constexpr (std::meta::is_complete_type(^^T)) {
                                                      if constexpr (std::is_destructible_v<T>) {
                                                          if constexpr (reflect_trackable<T>) delete static_cast<reflect_tracked<T> *>(static_cast<T *>(object));
-                                                         else if (record->made_by_new) delete static_cast<T *>(object);
-                                                         else {
-                                                             std::destroy_at(static_cast<T *>(object));
-                                                             mrb_free(mrb, object);
-                                                         }
+                                                         else delete static_cast<T *>(object);
                                                      }
                                                  }
                                              }
                                              if (record->tracked != nullptr) record->tracked->record = nullptr;
-                                             std::destroy_at(record);
-                                             mrb_free(mrb, record);
+                                             delete static_cast<reflect_lifetime<T> *>(record);
                                          }},
                                         reflect_upcasts<T>()};
     return type;
@@ -946,7 +923,7 @@ reflect_lifetime_base &reflect_new_lifetime(mrb_state *const mrb, const mrb_valu
 {
     if (mrb_type(self) != MRB_TT_CDATA || DATA_PTR(self) != nullptr) [[unlikely]] mrb_raise(mrb, E_TYPE_ERROR, "the object is already initialized");
     reflect_identities &identities = reflect_identity_map(mrb);
-    reflect_lifetime<T> *const record = new (mrb_malloc(mrb, sizeof(reflect_lifetime<T>))) reflect_lifetime<T>{};
+    reflect_lifetime<T> *const record = new reflect_lifetime<T>{};
     record->children = record->owning;
     record->type = &reflect_data_type_of<T>();
     record->ruby = mrb_obj_ptr(self);
@@ -1202,32 +1179,19 @@ bool reflect_shares(mrb_state *const mrb, const mrb_value v)
     else return false;
 }
 
-template <class T>
-inline constexpr bool reflect_made_by_new = reflect_trackable<T> || reflect_handed_over(^^T);
-
 template <class T, class... A>
-T *reflect_new(mrb_state *const mrb, const bool by_new, A &&...args)
+T *reflect_new(A &&...args)
 {
     if constexpr (reflect_trackable<T>) return new reflect_tracked<T>(std::forward<A>(args)...);
-    else if (by_new) return new T(std::forward<A>(args)...);
-    else {
-        T *const kept = static_cast<T *>(mrb_malloc(mrb, sizeof(T)));
-        try {
-            return new (kept) T(std::forward<A>(args)...);
-        } catch (...) {
-            mrb_free(mrb, kept);
-            throw;
-        }
-    }
+    else return new T(std::forward<A>(args)...);
 }
 
 template <class T>
-void reflect_adopt(mrb_state *const mrb, const mrb_value self, reflect_lifetime_base &record, T *const made, const bool by_new)
+void reflect_adopt(mrb_state *const mrb, const mrb_value self, reflect_lifetime_base &record, T *const made)
 {
     record.object = made;
     record.owned = true;
     record.adopted = true;
-    record.made_by_new = by_new;
     record.alive = true;
     if constexpr (reflect_trackable<T>) {
         reflect_tracked<T> *const tracked = static_cast<reflect_tracked<T> *>(made);
@@ -1245,8 +1209,7 @@ mrb_value reflect_object(mrb_state *const mrb, T &&value, const bool frozen = fa
     RData *const data = mrb_data_object_alloc(mrb, reflect_class<std::meta::dealias(std::meta::remove_cvref(^^U))>(mrb), nullptr, &reflect_data_type_of<U>());
     const mrb_value object = mrb_obj_value(data);
     reflect_lifetime_base &record = reflect_new_lifetime<U>(mrb, object);
-    const bool by_new = reflect_made_by_new<U>;
-    reflect_adopt<U>(mrb, object, record, reflect_new<U>(mrb, by_new, std::forward<T>(value)), by_new);
+    reflect_adopt<U>(mrb, object, record, reflect_new<U>(std::forward<T>(value)));
     if (frozen) mrb_obj_freeze(mrb, object);
     return object;
 }
@@ -2014,15 +1977,14 @@ mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
             reflect_lifetime_base &record = reflect_new_lifetime<B>(mrb, self);
             return reflect_translate_exceptions(mrb, [&] {
                 auto args = reflect_get_args<Function, 0, Count>(mrb);
-                reflect_adopt<B>(mrb, self, record, static_cast<B *>(std::apply([&](auto &...held) { return new T(reflect_pass(held)...); }, args)), true);
+                reflect_adopt<B>(mrb, self, record, static_cast<B *>(std::apply([&](auto &...held) { return new T(reflect_pass(held)...); }, args)));
                 return self;
             });
         } else if constexpr (std::meta::is_constructor(Function)) {
             reflect_lifetime_base &record = reflect_new_lifetime<T>(mrb, self);
-            const bool by_new = reflect_made_by_new<T>;
             return reflect_translate_exceptions(mrb, [&] {
                 auto args = reflect_get_args<Function, 0, Count>(mrb);
-                reflect_adopt<T>(mrb, self, record, std::apply([&](auto &...held) { return reflect_new<T>(mrb, by_new, reflect_pass(held)...); }, args), by_new);
+                reflect_adopt<T>(mrb, self, record, std::apply([&](auto &...held) { return reflect_new<T>(reflect_pass(held)...); }, args));
                 return self;
             });
         } else if constexpr (std::meta::is_static_member(Function)) {
@@ -2987,9 +2949,8 @@ RClass *reflect_define_complete_class(reflect_definition &definition, RClass *co
         ::mrb_define_method_id(mrb, klass, reflect_sym<kInitialize>(mrb),
                                [](mrb_state *const mrb, const mrb_value self) {
                                    reflect_lifetime_base &record = reflect_new_lifetime<T>(mrb, self);
-                                   const bool by_new = reflect_made_by_new<T>;
                                    return reflect_translate_exceptions(mrb, [&] {
-                                       reflect_adopt<T>(mrb, self, record, reflect_new<T>(mrb, by_new), by_new);
+                                       reflect_adopt<T>(mrb, self, record, reflect_new<T>());
                                        return self;
                                    });
                                }, MRB_ARGS_NONE());
@@ -3004,11 +2965,10 @@ RClass *reflect_define_complete_class(reflect_definition &definition, RClass *co
             reflect_lifetime_base &record = reflect_new_lifetime<T>(mrb, self);
             T *const source = reflect_ptr<T>(mrb, original);
             if (source == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong original");
-            const bool by_new = reflect_made_by_new<T>;
             return reflect_translate_exceptions(mrb, [&] {
                 if constexpr (Options.virtual_overriders && requires { typename reflect_virtual_overrider<std::meta::dealias(Type)>::type; })
-                    reflect_adopt<T>(mrb, self, record, static_cast<T *>(new typename reflect_virtual_overrider<std::meta::dealias(Type)>::type(static_cast<const T &>(*source))), true);
-                else reflect_adopt<T>(mrb, self, record, reflect_new<T>(mrb, by_new, static_cast<const T &>(*source)), by_new);
+                    reflect_adopt<T>(mrb, self, record, static_cast<T *>(new typename reflect_virtual_overrider<std::meta::dealias(Type)>::type(static_cast<const T &>(*source))));
+                else reflect_adopt<T>(mrb, self, record, reflect_new<T>(static_cast<const T &>(*source)));
                 return self;
             });
         }, MRB_ARGS_REQ(1));

@@ -108,11 +108,16 @@ if Object.const_defined?(:TreeObject)
     assert_equal 0, child.child_count
   end
 
-  assert('takes_ownership refuses an object that mruby allocated') do
-    # The declaration of Adopter names a Leaf, but nothing declares that
-    # C++ deletes a Leaf, so mruby allocates it, and C++ may not delete
-    # memory that mruby allocated.
-    assert_raise(TypeError) { Adopter.new.adopt(Leaf.new) }
+  assert('takes_ownership takes an object that Ruby made') do
+    # Ruby makes an AdoptedLeaf with new, so ~Adopter may delete it. A second
+    # delete from the GC shows as a double free under ASan.
+    adopter = Adopter.new
+    leaf = AdoptedLeaf.new
+    adopter.adopt(leaf)
+    assert_equal 5, leaf.n
+    adopter = leaf = nil
+    full_gc
+    full_gc
   end
 
   assert('the end of an object ends the lifetime of what it took ownership of') do

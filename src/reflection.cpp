@@ -75,8 +75,6 @@ reflect_lifetime_base &reflect_topmost(reflect_lifetime_base &record)
 void reflect_raise_unless_handed_over(mrb_state *const mrb, const reflect_lifetime_base &record, const char *const function)
 {
     if (record.parent != nullptr) [[unlikely]] mrb_raisef(mrb, E_TYPE_ERROR, "%s cannot take a member object from the object that holds it", function);
-    if (record.adopted && record.owned && !record.made_by_new) [[unlikely]]
-        mrb_raisef(mrb, E_TYPE_ERROR, "%s takes an object that mruby allocated, and C++ cannot delete it", function);
 }
 
 void reflect_hidden_iv_set(mrb_state *const mrb, RObject *const object, const mrb_sym key, const mrb_value value)
