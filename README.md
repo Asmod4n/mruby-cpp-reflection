@@ -77,6 +77,38 @@ end
   method of a function runs, a call of the same function on the same
   object from C++ runs the C++ function.
 
+## Lifetimes that the types do not state
+
+`Klass.lifetime { ... }` declares, once per class, what the C++ types of
+the class do not say. The C++ side reads the block once and keeps the
+result; a second call raises `FrozenError`. The words:
+
+- `owns :set_parent, owner: 0` - after the call, argument 0 owns the
+  receiver and deletes it; `owned: 0` says the receiver owns argument 0.
+  A parameter is named by its number or its identifier.
+- `ends_lifetime :destroy, 0` - the call ends the lifetime of argument 0
+  (of the receiver without a number).
+- `retains :set_layout, 0` - the receiver keeps argument 0.
+- `errors :open, error: :negative, sets_errno: true`, `success: 0`,
+  `error: nil` - the answer that raises.
+- `stack_reserve :parse, 65536` - the call raises `SystemStackError` when
+  the thread stack has less left.
+- `threadsafe :start, :no` - the function takes only arguments that are
+  copies.
+- `allocator :open, output_parameter: :made`, `deallocator :close,
+  results_of: :open`, `shared_ownership increment: :ref, decrement: :unref`
+  - for a pointer to an incomplete type. A function that makes such a
+  handle raises `NotImplementedError` until its class declares these.
+
+## Generated bindings
+
+`spec.reflect headers: ['lib.h'], scopes: ['lib']` in `mrbgem.rake`
+writes the C++ of a gem: the listed namespaces and classes, and every
+class and enum their functions take or answer.
+`spec.reflect_varargs 'lib::f', [%w[int], ['int', 'const char *']]`
+declares the lists of trailing types of a function with `...`; a source
+includes `<mruby/reflect_varargs.h>` after the header of the library.
+
 ## Build
 
 A compiler with `__cpp_impl_reflection`, today g++ 16 with `-freflection`,
