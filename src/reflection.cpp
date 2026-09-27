@@ -31,10 +31,7 @@ int reflect_free_object(mrb_state *const mrb, RBasic *const object, void *)
 {
     if (mrb_object_dead_p(mrb, object) || object->tt != MRB_TT_CDATA || object->c == nullptr) return MRB_EACH_OBJ_OK;
     const mrb_value value = mrb_obj_value(object);
-    bool reflected = false;
-    for (RClass *c = mrb_obj_class(mrb, value); c != nullptr && !reflected; c = c->super)
-        reflected = mrb_obj_iv_defined(mrb, reinterpret_cast<RObject *>(c), mrb_cpp_reflector::reflect_reflected_key(mrb));
-    if (!reflected) return MRB_EACH_OBJ_OK;
+    if (!mrb_cpp_reflector::reflect_reflected(mrb, value)) return MRB_EACH_OBJ_OK;
     const mrb_data_type *const type = DATA_TYPE(value);
     void *const data = DATA_PTR(value);
     mrb_data_init(value, nullptr, nullptr);

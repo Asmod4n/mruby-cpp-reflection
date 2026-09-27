@@ -1011,3 +1011,11 @@ assert('the collector deletes a node whose parent C++ removed') do
   full_gc
   assert_equal(base, Node.alive)
 end
+
+# Ruby can include the methods of a reflected class into any class. The
+# receiver of such a method is then an object that C++ did not make, and
+# the call must refuse it instead of reading it as the reflected type.
+assert('an object of a class that includes reflected methods is not the reflected type') do
+  ConstVoidPointer.include(B::InstanceMethods)
+  assert_raise(TypeError) { D.new.b_of(Callback.new.fixed) }
+end

@@ -171,6 +171,13 @@ inline mrb_sym reflect_reflected_key(mrb_state *const mrb)
     return MRB_SYM(__reflected__);
 }
 
+inline bool reflect_reflected(mrb_state *const mrb, const mrb_value v)
+{
+    for (RClass *c = mrb_obj_class(mrb, v); c != nullptr; c = c->super)
+        if (mrb_obj_iv_defined(mrb, reinterpret_cast<RObject *>(c), reflect_reflected_key(mrb))) return true;
+    return false;
+}
+
 template <class T>
 const void *reflect_identity_of(const T *const object)
 {
@@ -532,8 +539,7 @@ T *reflect_ptr(mrb_state *const mrb, const mrb_value v)
     }
     void *const borrowed = mrb_data_check_get_ptr(mrb, v, &reflect_data_type_borrowed<T>());
     if (borrowed != nullptr || mrb_type(v) != MRB_TT_CDATA || DATA_PTR(v) == nullptr || DATA_TYPE(v) == nullptr) return static_cast<T *>(borrowed);
-    RClass *const methods = reflect_module<^^T>(mrb);
-    if (methods == nullptr || !mrb_obj_is_kind_of(mrb, v, methods)) return nullptr;
+    if (!reflect_reflected(mrb, v)) [[unlikely]] return nullptr;
     const reflect_data_type *const type = static_cast<const reflect_data_type *>(DATA_TYPE(v));
     void *const object = type->object_of != nullptr ? type->object_of(DATA_PTR(v)) : DATA_PTR(v);
     if (object == nullptr) return nullptr;
