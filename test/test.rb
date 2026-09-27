@@ -677,3 +677,10 @@ assert('a coroutine is walked one step per value') do
   assert_equal(['a', 'aa'], Counting.words(2).map(&:to_s))
   assert_false(Counting.respond_to?(:letters_of))
 end
+
+# A class that inherits the constructors of its base takes the same
+# arguments in Ruby, as C++ constructs it from them.
+assert('an inherited constructor is an overload of initialize') do
+  assert_equal(3, Shapes::Square.new(3).scale)
+  assert_raise(ArgumentError) { Shapes::Square.new }
+end

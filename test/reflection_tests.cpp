@@ -529,7 +529,7 @@ struct Shape {
     int scale;
 };
 struct Square : Shape {
-    explicit Square(int scale) : Shape(scale) {}
+    using Shape::Shape;
     int sides() const override { return 4; }
     int area(int k) const override { return scale * scale * k; }
 };

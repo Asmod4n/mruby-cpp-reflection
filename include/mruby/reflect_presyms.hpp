@@ -329,6 +329,19 @@ consteval auto reflect_constructors_computed()
     for (const std::meta::info m : std::meta::members_of(std::meta::dealias(Type), std::meta::access_context::current()))
         if (std::meta::is_constructor(m) && !std::meta::is_deleted(m) && !std::meta::is_move_constructor(m) && reflect_call_supported(m))
             constructors.push_back(m);
+    for (const std::meta::info base : reflect_direct_bases(Type))
+        for (const std::meta::info c : std::meta::members_of(base, std::meta::access_context::current())) {
+            if (!std::meta::is_constructor(c) || std::meta::is_deleted(c) || std::meta::is_copy_constructor(c) || std::meta::is_move_constructor(c) ||
+                std::meta::is_template(c) || !reflect_call_supported(c))
+                continue;
+            std::vector<std::meta::info> types;
+            for (const std::meta::info p : std::meta::parameters_of(c)) types.push_back(std::meta::type_of(p));
+            const bool own = std::ranges::any_of(constructors, [&](const std::meta::info o) {
+                const std::vector<std::meta::info> op = std::meta::parameters_of(o);
+                return op.size() == types.size() && std::ranges::equal(op, types, {}, [](const std::meta::info p) { return std::meta::type_of(p); });
+            });
+            if (!own && std::meta::is_constructible_type(std::meta::dealias(Type), types)) constructors.push_back(c);
+        }
     return std::define_static_array(constructors);
 }
 
