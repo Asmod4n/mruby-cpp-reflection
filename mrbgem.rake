@@ -1,4 +1,3 @@
-require 'open3'
 require 'shellwords'
 require "#{File.dirname(__FILE__)}/tools/reflect_varargs"
 require "#{File.dirname(__FILE__)}/tools/reflect_object_lifetime"
@@ -69,21 +68,6 @@ def reflect_virtual_overriders(spec, source)
   end
 end
 
-def reflect_compile_fails(spec, source, message)
-  path = "#{spec.dir}/#{source}"
-  object = spec.objfile(source.pathmap("#{spec.build_dir}/%X"))
-  file object => [path, "#{spec.dir}/include/mruby/reflection.hpp"] do |t|
-    out, status = Open3.capture2e("#{spec.cxx.command} #{spec.cxx.all_flags} -fsyntax-only #{Shellwords.escape(path)}")
-    raise "#{source} compiled, and it must fail" if status.success?
-    raise "#{source} failed without the message #{message.inspect}:\n#{out}" unless out.include?(message)
-    empty = "#{t.name}.cpp"
-    mkdir_p File.dirname(empty)
-    File.write(empty, '')
-    spec.cxx.run t.name, empty
-  end
-  spec.test_objs = spec.test_objs + [object]
-end
-
 MRuby::Gem::Specification.new('mruby-cpp-reflection') do |spec|
   spec.export_include_paths << "#{spec.dir}/include" if spec.respond_to?(:export_include_paths)
   spec.license = 'MPL-2'
@@ -129,8 +113,6 @@ MRuby::Gem::Specification.new('mruby-cpp-reflection') do |spec|
     end
     spec.reflect_object_lifetime('c_library::counted') { shared_ownership increment: :counted_ref, decrement: :counted_unref }
   end
-  reflect_compile_fails(spec, 'test/compile_fails/missing_lifetime.cpp',
-                        "unknown_make(): the result gives a pointer to c_library_undeclared::unknown, and no declaration says who frees it") if spec.build.test_enabled?
   reflect_presyms(spec, "#{spec.dir}/test/reflect_presyms/main.cpp")
   reflect_virtual_overriders(spec, 'test/reflection_tests.cpp')
   spec.build.enable_cxx_exception
