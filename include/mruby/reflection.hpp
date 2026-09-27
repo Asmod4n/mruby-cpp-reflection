@@ -618,6 +618,7 @@ template <class T>
 void reflect_adopt(mrb_state *const mrb, const mrb_value self, T *const made)
 {
     mrb_data_init(self, made, &reflect_data_type_owned<T>());
+    mrb_iv_remove(mrb, self, reflect_share_key(mrb));
     if constexpr (reflect_trackable<T>) {
         reflect_tracked<T> *const tracked = static_cast<reflect_tracked<T> *>(made);
         tracked->mrb = mrb;

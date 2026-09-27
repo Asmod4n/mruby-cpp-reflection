@@ -1019,3 +1019,20 @@ assert('an object of a class that includes reflected methods is not the reflecte
   ConstVoidPointer.include(B::InstanceMethods)
   assert_raise(TypeError) { D.new.b_of(Callback.new.fixed) }
 end
+
+# dup copies the instance variables of the original, and with them the
+# keeper of its shared_ptr. The copy is a new object that Ruby owns, so
+# C++ must not get a shared_ptr to it that the old keeper holds alive.
+def kept_copy_of_shared(sharer)
+  sharer.keep(sharer.make.dup)
+rescue TypeError
+  nil
+end
+
+assert('a copy of a shared object is not shared with the keeper of the original') do
+  s = PlainSharer.new
+  kept_copy_of_shared(s)
+  full_gc
+  full_gc
+  assert_equal(1, s.read)
+end
