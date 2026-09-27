@@ -1,3 +1,5 @@
+require "#{File.dirname(__FILE__)}/tools/reflect_varargs"
+
 # Presyms for the names that C++26 reflection produces. A gem calls
 #   reflect_presyms(spec, "#{spec.dir}/tools/reflect_presyms/main.cpp")
 # with a program that prints mrb_cpp_reflector::reflect_presyms_header<^^T...>()
