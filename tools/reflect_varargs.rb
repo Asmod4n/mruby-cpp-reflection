@@ -1,8 +1,8 @@
 # The API of a gem's mrbgem.rake, and of a build config's conf.gem
 # block, for a C or C++ function whose last parameter is `...`.
 #
-# reflect_format names the parameter that carries a printf or scanf
-# format string; reflect_varargs names a fixed list of trailing types
+# reflect_format declares a printf or scanf format string, with the
+# arguments of GCC's format attribute; reflect_varargs names a fixed list of trailing types
 # for a function whose varargs are not a format string. Either call
 # stores one declaration under the function's name. A second call for
 # the same function name replaces the first, and MRuby::Gem::Specification
@@ -38,17 +38,26 @@ module MRuby
         replace_reflect_declaration(reflect_varargs_declarations, function_name, trailing_types, 'reflect_varargs')
       end
 
-      # kind is :printf for a function whose format string reads its
-      # varargs by value, :scanf for one that reads them through a
-      # pointer. format_param is the 0-based index, in the function's
-      # full parameter list, of the parameter that carries the format
-      # string.
-      def reflect_format(function_name, format_param:, kind:)
-        unless %i[printf scanf].include?(kind)
-          raise ArgumentError, "reflect_format: kind is :printf or :scanf, not #{kind.inspect}"
+      # The keywords are the arguments of GCC's
+      # format(archetype, string-index, first-to-check) attribute.
+      # Both indexes count the parameters from 1. first_to_check 0
+      # names a function that takes a va_list, and the gem cannot
+      # build a va_list.
+      def reflect_format(function_name, archetype:, string_index:, first_to_check:)
+        unless %i[printf scanf].include?(archetype)
+          raise ArgumentError, "reflect_format: archetype is :printf or :scanf, not #{archetype.inspect}"
+        end
+        unless string_index.is_a?(Integer) && string_index >= 1
+          raise ArgumentError, "reflect_format: string_index counts from 1, not #{string_index.inspect}"
         end
         function_name = function_name.to_s
-        declaration = { format_param: format_param, kind: kind }
+        if first_to_check == 0
+          raise NotImplementedError, "reflect_format: #{function_name} takes a va_list (first_to_check 0), and a va_list cannot be built"
+        end
+        unless first_to_check.is_a?(Integer) && first_to_check > string_index
+          raise ArgumentError, "reflect_format: first_to_check is 0 or greater than string_index, not #{first_to_check.inspect}"
+        end
+        declaration = { archetype: archetype, string_index: string_index, first_to_check: first_to_check }
         replace_reflect_declaration(reflect_format_declarations, function_name, declaration, 'reflect_format')
       end
 
