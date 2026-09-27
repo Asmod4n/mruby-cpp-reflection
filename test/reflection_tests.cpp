@@ -8,6 +8,8 @@
  * reflection builds this; elsewhere the class is absent and test.rb
  * skips the assertions.
  */
+#include <list>
+#include <map>
 #include <variant>
 #include <generator>
 #include <mruby.h>
@@ -344,6 +346,8 @@ struct Measure {
 struct Shelf {
     std::vector<int> full{1, 2};
     std::vector<int> empty;
+    std::map<int, int> table{{1, 10}, {2, 20}};
+    std::list<int> chain{1, 2};
     std::vector<int> &items() { return full; }
     int fits(int n) const { return n; }
     int pick(int) const { return 1; }

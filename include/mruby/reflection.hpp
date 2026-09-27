@@ -1577,15 +1577,17 @@ void reflect_define_conversions(mrb_state *const mrb, RClass *const klass)
     } else if constexpr (reflect_map<T>) {
         constexpr auto to_h = [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
             T *const object = reflect_ptr<T>(mrb, self);
-            mrb_value hash;
-            if constexpr (std::ranges::sized_range<T>) hash = mrb_hash_new_capa(mrb, static_cast<mrb_int>(std::ranges::size(*object)));
-            else hash = mrb_hash_new(mrb);
+            if (object == nullptr) [[unlikely]] mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
+            const mrb_value pairs = mrb_ary_new(mrb);
             for (auto &&[key, mapped] : *object) {
                 if constexpr (reflect_bytes<std::remove_cvref_t<decltype(key)>>)
-                    mrb_hash_set(mrb, hash, mrb_str_new(mrb, std::ranges::data(key), static_cast<mrb_int>(std::ranges::size(key))), reflect_result(mrb, self, mapped));
+                    mrb_ary_push(mrb, pairs, mrb_str_new(mrb, std::ranges::data(key), static_cast<mrb_int>(std::ranges::size(key))));
                 else
-                    mrb_hash_set(mrb, hash, reflect_result(mrb, self, key), reflect_result(mrb, self, mapped));
+                    mrb_ary_push(mrb, pairs, reflect_result(mrb, self, key));
+                mrb_ary_push(mrb, pairs, reflect_result(mrb, self, mapped));
             }
+            const mrb_value hash = mrb_hash_new_capa(mrb, RARRAY_LEN(pairs) / 2);
+            for (mrb_int i = 0; i < RARRAY_LEN(pairs); i += 2) mrb_hash_set(mrb, hash, RARRAY_PTR(pairs)[i], RARRAY_PTR(pairs)[i + 1]);
             return hash;
         };
         ::mrb_define_method_id(mrb, klass, reflect_sym<kToH>(mrb), to_h, MRB_ARGS_NONE());
@@ -1630,23 +1632,30 @@ void reflect_define_conversions(mrb_state *const mrb, RClass *const klass)
         if (mrb_class_defined_id(mrb, reflect_sym<kEnumerable>(mrb)))
             mrb_include_module(mrb, klass, mrb_module_get_id(mrb, reflect_sym<kEnumerable>(mrb)));
     } else if constexpr (std::ranges::range<T>) {
-        constexpr auto each = [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
-            mrb_value block;
-            mrb_get_args(mrb, "&!", &block);
-            T *const object = reflect_ptr<T>(mrb, self);
-            for (auto &&element : *object) mrb_yield(mrb, block, reflect_result(mrb, self, element));
-            return self;
-        };
         constexpr auto to_a = [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
             T *const object = reflect_ptr<T>(mrb, self);
+            if (object == nullptr) [[unlikely]] mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
             const mrb_value array = mrb_ary_new(mrb);
             for (auto &&element : *object) mrb_ary_push(mrb, array, reflect_result(mrb, self, element));
             return array;
         };
-        ::mrb_define_method_id(mrb, klass, reflect_sym<kEach>(mrb), each, MRB_ARGS_BLOCK());
         ::mrb_define_method_id(mrb, klass, reflect_sym<kToA>(mrb), to_a, MRB_ARGS_NONE());
-        if (mrb_class_defined_id(mrb, reflect_sym<kEnumerable>(mrb)))
-            mrb_include_module(mrb, klass, mrb_module_get_id(mrb, reflect_sym<kEnumerable>(mrb)));
+        if constexpr (std::ranges::random_access_range<T> && std::ranges::sized_range<T>) {
+            constexpr auto each = [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+                mrb_value block;
+                mrb_get_args(mrb, "&", &block);
+                if (mrb_nil_p(block)) return mrb_funcall_id(mrb, self, mrb_intern_lit(mrb, "to_enum"), 1, mrb_symbol_value(reflect_sym<kEach>(mrb)));
+                for (std::size_t i = 0;; ++i) {
+                    T *const object = reflect_ptr<T>(mrb, self);
+                    if (object == nullptr) [[unlikely]] mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
+                    if (i >= std::ranges::size(*object)) return self;
+                    mrb_yield(mrb, block, reflect_result(mrb, self, std::ranges::begin(*object)[i]));
+                }
+            };
+            ::mrb_define_method_id(mrb, klass, reflect_sym<kEach>(mrb), each, MRB_ARGS_BLOCK());
+            if (mrb_class_defined_id(mrb, reflect_sym<kEnumerable>(mrb)))
+                mrb_include_module(mrb, klass, mrb_module_get_id(mrb, reflect_sym<kEnumerable>(mrb)));
+        }
     }
 }
 

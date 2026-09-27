@@ -738,6 +738,25 @@ assert('a class whose == <=> and std::hash are not members compares as in C++') 
   assert_raise(ArgumentError) { m < Measure.new }
 end
 
+# each holds no iterator while the block runs. A container with random
+# access and size() is walked by index, and the size is read at each
+# step, as Array#each does, so the block may change the container. A
+# container that each could walk only through a copy has no each.
+assert('each walks a container by index and nothing else') do
+  shelf = Shelf.new
+  v = shelf.full
+  seen = []
+  v.each { |x| seen << x; v.push_back(9) if seen.size < 3 }
+  assert_equal([1, 2, 9, 9], seen)
+  assert_same(v, v.each {})
+  assert_equal([1, 2, 9, 9], v.each.to_a)
+  assert_equal([2, 4, 18, 18], v.map { |x| x * 2 })
+  assert_false(shelf.table.respond_to?(:each))
+  assert_false(shelf.chain.respond_to?(:each))
+  assert_equal({1 => 10, 2 => 20}, shelf.table.to_h)
+  assert_equal([1, 2], shelf.chain.to_a)
+end
+
 # C++ calls a virtual function through the object. For an object that
 # Ruby made from a subclass, the overrider calls the Ruby method of the
 # same name, and super reaches the C++ function it overrides. Without a
