@@ -359,6 +359,15 @@ assert('an element assignment converts the value before it takes the element') d
   assert_equal([1, 2], sets[0].to_a)
 end
 
+assert('a callback that outlives its mrb_state returns without Ruby') do
+  assert_true(callback_after_close?)
+end
+
+assert('a callback that C++ calls from another thread ends the process') do
+  Callback.keep_outside(->(n) { n })
+  assert_true(callback_from_other_thread_aborts?)
+end
+
 assert('a callback C++ keeps survives a full collection') do
   c = Callback.new
   c.keep(->(n) { n * 10 })

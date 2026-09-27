@@ -41,6 +41,7 @@ extern const struct mrb_data_type mrb_const_void_pointer_type;
 #include <new>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <optional>
 #include <variant>
 #include <ranges>
@@ -51,6 +52,7 @@ extern const struct mrb_data_type mrb_const_void_pointer_type;
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -105,6 +107,29 @@ struct reflect_upcast {
 
 struct reflect_lifetime_base;
 struct reflect_tracked_base;
+struct reflect_gc_root;
+
+struct reflect_callbacks {
+    std::thread::id thread;
+    std::unordered_set<reflect_gc_root *> roots;
+    bool closed = false;
+};
+
+inline mrb_sym reflect_callbacks_key(mrb_state *const mrb)
+{
+    return MRB_SYM(__reflected_callbacks__);
+}
+
+inline reflect_callbacks &reflect_callbacks_of(mrb_state *const mrb)
+{
+    return *static_cast<reflect_callbacks *>(mrb_cptr(mrb_iv_get(mrb, mrb_obj_value(mrb->object_class), reflect_callbacks_key(mrb))));
+}
+
+[[noreturn]] inline void reflect_abort_from_other_thread()
+{
+    std::fputs("mruby-cpp-reflection: C++ called Ruby from a thread that is not the thread of the mrb_state\n", stderr);
+    std::abort();
+}
 
 using reflect_identities = std::unordered_multimap<const void *, reflect_lifetime_base *>;
 
@@ -122,6 +147,7 @@ struct reflect_lifetime_base {
     RObject *ruby = nullptr;
     mrb_state *mrb = nullptr;
     reflect_identities *identities = nullptr;
+    reflect_callbacks *callbacks = nullptr;
 };
 
 struct reflect_data_type : mrb_data_type {
@@ -378,6 +404,7 @@ reflect_lifetime_base &reflect_new_lifetime(mrb_state *const mrb, const mrb_valu
     record->ruby = mrb_obj_ptr(self);
     record->mrb = mrb;
     record->identities = &identities;
+    record->callbacks = &reflect_callbacks_of(mrb);
     mrb_data_init(self, record, &reflect_data_type_of<T>());
     return *record;
 }
@@ -728,10 +755,22 @@ struct reflect_holder {
 struct reflect_gc_root {
     mrb_state *mrb;
     mrb_value object;
-    reflect_gc_root(mrb_state *const state, const mrb_value v) : mrb(state), object(v) { mrb_gc_register(mrb, object); }
+    std::thread::id thread;
+    reflect_callbacks *callbacks;
+    reflect_gc_root(mrb_state *const state, const mrb_value v) : mrb(state), object(v), thread(reflect_callbacks_of(state).thread), callbacks(&reflect_callbacks_of(state))
+    {
+        callbacks->roots.insert(this);
+        mrb_gc_register(mrb, object);
+    }
     reflect_gc_root(const reflect_gc_root &) = delete;
     reflect_gc_root &operator=(const reflect_gc_root &) = delete;
-    ~reflect_gc_root() { mrb_gc_unregister(mrb, object); }
+    ~reflect_gc_root()
+    {
+        if (std::this_thread::get_id() != thread) [[unlikely]] reflect_abort_from_other_thread();
+        if (callbacks == nullptr) return;
+        callbacks->roots.erase(this);
+        mrb_gc_unregister(mrb, object);
+    }
 };
 
 template <class R>
@@ -760,6 +799,12 @@ struct reflect_callable<R(A...)> {
     std::shared_ptr<reflect_gc_root> root;
     R operator()(A... args) const
     {
+        if (std::this_thread::get_id() != root->thread) [[unlikely]] reflect_abort_from_other_thread();
+        if (root->callbacks == nullptr) [[unlikely]] {
+            if constexpr (std::is_void_v<R>) return;
+            else if constexpr (std::is_default_constructible_v<R>) return R{};
+            else throw std::bad_function_call();
+        }
         mrb_state *const mrb = root->mrb;
         const std::array<mrb_value, sizeof...(A)> argv{reflect_result(mrb, mrb_nil_value(), std::forward<A>(args))...};
         const mrb_value answer = mrb_proc_p(root->object) ? mrb_yield_argv(mrb, root->object, static_cast<mrb_int>(argv.size()), argv.data())
@@ -1243,6 +1288,8 @@ template <std::meta::info Function, class Self, class Base, class... A>
 auto reflect_call_virtual_overrider(Self &self, bool &running, const Base &base, A &...arguments) -> typename [:std::meta::return_type_of(Function):]
 {
     if (running || self.record == nullptr || !self.record->alive) return base();
+    if (std::this_thread::get_id() != self.record->callbacks->thread) [[unlikely]] reflect_abort_from_other_thread();
+    if (self.record->callbacks->closed) return base();
     mrb_state *const mrb = self.record->mrb;
     if (mrb->gc.collecting || mrb_object_dead_p(mrb, reinterpret_cast<RBasic *>(self.record->ruby))) return base();
     const mrb_value object = mrb_obj_value(self.record->ruby);

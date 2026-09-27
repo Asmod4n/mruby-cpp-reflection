@@ -57,13 +57,24 @@ extern "C" void mrb_mruby_cpp_reflection_gem_init(mrb_state *const mrb)
     mrb_define_class_id(mrb, MRB_SYM(CppCoroutineError), E_STANDARD_ERROR);
     mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), mrb_cpp_reflector::reflect_identities_key(mrb),
                mrb_cptr_value(mrb, new mrb_cpp_reflector::reflect_identities()));
+    mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), mrb_cpp_reflector::reflect_callbacks_key(mrb),
+               mrb_cptr_value(mrb, new mrb_cpp_reflector::reflect_callbacks{std::this_thread::get_id()}));
 }
 
 extern "C" void mrb_mruby_cpp_reflection_gem_final(mrb_state *const mrb)
 {
+    mrb_cpp_reflector::reflect_callbacks &callbacks = mrb_cpp_reflector::reflect_callbacks_of(mrb);
+    callbacks.closed = true;
+    for (mrb_cpp_reflector::reflect_gc_root *const root : callbacks.roots) {
+        mrb_gc_unregister(mrb, root->object);
+        root->callbacks = nullptr;
+    }
+    callbacks.roots.clear();
     mrb_objspace_each_objects(mrb, mrb_cpp_reflector::reflect_free_object, nullptr);
     delete &mrb_cpp_reflector::reflect_identity_map(mrb);
     mrb_iv_remove(mrb, mrb_obj_value(mrb->object_class), mrb_cpp_reflector::reflect_identities_key(mrb));
+    delete &callbacks;
+    mrb_iv_remove(mrb, mrb_obj_value(mrb->object_class), mrb_cpp_reflector::reflect_callbacks_key(mrb));
 }
 #else
 extern "C" void mrb_mruby_cpp_reflection_gem_init(mrb_state *const mrb)

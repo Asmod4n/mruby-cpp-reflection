@@ -21,6 +21,7 @@
 #include <compare>
 #include <functional>
 #include <pthread.h>
+#include <thread>
 #include <stdexcept>
 #include <new>
 #include <system_error>
@@ -193,12 +194,18 @@ struct Thrower {
  * std::function that came from Ruby goes back to Ruby as the object it
  * was made from. */
 using number = mrb_int;
+static std::function<number(number)> &kept_outside()
+{
+    static std::function<number(number)> f;
+    return f;
+}
 struct Callback {
     std::function<number(number)> kept;
     mrb_int apply(const std::function<number(number)> &f, mrb_int n) const { return f(n); }
     mrb_int each_twice(mrb_int n, std::function<number(number)> f) const { return f(f(n)); }
     void keep(std::function<number(number)> f) { kept = std::move(f); }
     mrb_int call_kept(mrb_int n) const { return kept(n); }
+    static void keep_outside(std::function<number(number)> f) { kept_outside() = std::move(f); }
     const std::function<number(number)> &given() const { return kept; }
     std::function<number(number)> times(mrb_int k) const { return [k](mrb_int n) { return n * k; }; }
     auto plus(mrb_int k) const { return [k](mrb_int n) { return n + k; }; }
@@ -853,8 +860,40 @@ static mrb_value undefined_after_other_state_m(mrb_state *mrb, mrb_value)
     return mrb_load_string(mrb, "begin; Declared.new.undefined; rescue NotImplementedError; :raised_here; end");
 }
 
+/* A std::function made from Ruby can outlive its mrb_state in C++
+ * memory. A call after mrb_close must not reach the freed state, and
+ * neither must its destructor. */
+static mrb_value callback_after_close_q(mrb_state *mrb, mrb_value)
+{
+    mrb_state *const other = mrb_open();
+    mrb_cpp_reflector::reflect_define<classes>(other);
+    mrb_load_string(other, "Callback.keep_outside(->(n) { n * 2 })");
+    const bool raised = other->exc != nullptr;
+    const bool called = kept_outside()(3) == 6;
+    mrb_close(other);
+    const bool dead = kept_outside()(3) == 0;
+    kept_outside() = nullptr;
+    return mrb_bool_value(!raised && called && dead);
+}
+
+bool aborts_in_child(void (*run)());
+
+/* One thread owns an mrb_state. A call into Ruby from another thread
+ * would race with that thread, so the process ends instead. */
+static mrb_value callback_from_other_thread_aborts_q(mrb_state *mrb, mrb_value)
+{
+    const bool aborted = aborts_in_child([] {
+        std::thread other([] { kept_outside()(1); });
+        other.join();
+    });
+    kept_outside() = nullptr;
+    return mrb_bool_value(aborted);
+}
+
 extern "C" void mrb_mruby_cpp_reflection_gem_test(mrb_state *mrb)
 {
+    mrb_define_module_function(mrb, mrb->kernel_module, "callback_after_close?", callback_after_close_q, MRB_ARGS_NONE());
+    mrb_define_module_function(mrb, mrb->kernel_module, "callback_from_other_thread_aborts?", callback_from_other_thread_aborts_q, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "undefined_after_other_state", undefined_after_other_state_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "full_gc", full_gc_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "tree_freed_at_close?", tree_freed_at_close_q, MRB_ARGS_NONE());
