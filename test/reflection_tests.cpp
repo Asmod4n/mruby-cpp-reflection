@@ -204,6 +204,10 @@ struct Callback {
     bool compare(const std::function<bool(const void *, void *)> &f) const { return f(this, const_cast<Callback *>(this)); }
     std::function<void *(void *)> address() const { return [](void *p) { return p; }; }
     bool same(const void *const a, const void *b) const { return a == b; }
+    bool same_text(const std::function<std::string_view()> &f) const { return f() == f(); }
+    bool same_label(const std::function<const std::string &()> &f) const { return f() == f(); }
+    bool same_plain(const std::function<const Plain *()> &f) const { return f() == f(); }
+    bool same_void(const std::function<void *()> &f) const { return f() == f(); }
     const void *const fixed() const { return this; }
     void *place = nullptr;
     static inline void *anywhere = nullptr;

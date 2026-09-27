@@ -219,6 +219,10 @@ consteval bool reflect_parameter_supported(const std::meta::info type)
         return true;
     }
     if (!reflect_complete(type)) return false;
+    if (reflect_is_function(type)) {
+        const std::meta::info r = std::meta::return_type_of(std::meta::template_arguments_of(reflect_bare(type))[0]);
+        if (std::meta::is_reference_type(r) || std::meta::is_pointer_type(std::meta::dealias(r)) || reflect_is_view(reflect_bare(r))) return false;
+    }
     if (reflect_is_view(reflect_bare(type)) && reflect_bare(type) != std::meta::dealias(^^std::string_view) &&
         reflect_bare(type) != std::meta::dealias(^^std::span<const mrb_value>))
         return false;

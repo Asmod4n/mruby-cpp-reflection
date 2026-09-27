@@ -241,6 +241,18 @@ assert('a void pointer crosses as VoidPointer or ConstVoidPointer') do
   assert_raise(NoMethodError) { ConstVoidPointer.new }
 end
 
+# What a Ruby callable answers lives in Ruby memory, and the collector
+# may free it as soon as the call returns. A std::function that answers
+# a reference, a pointer or a view would keep an address into that
+# memory, so a function that takes one is not defined.
+assert('a std::function parameter that answers a reference, a pointer or a view is refused') do
+  c = Callback.new
+  assert_false(c.respond_to?(:same_text))
+  assert_false(c.respond_to?(:same_label))
+  assert_false(c.respond_to?(:same_plain))
+  assert_false(c.respond_to?(:same_void))
+end
+
 assert('a callback C++ keeps survives a full collection') do
   c = Callback.new
   c.keep(->(n) { n * 10 })
