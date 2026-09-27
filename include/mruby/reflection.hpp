@@ -1588,11 +1588,15 @@ void reflect_define_replace(mrb_state *const mrb, RClass *const klass)
 }
 
 template <std::meta::info Member>
-void reflect_define_static_data_member(mrb_state *const mrb, RClass *const singleton)
+void reflect_define_static_data_member(mrb_state *const mrb, RClass *const scope, RClass *const singleton)
 {
+    using G = [:reflect_bare(std::meta::type_of(Member)):];
+    if constexpr (std::is_class_v<G>)
+        ::mrb_define_const_id(mrb, scope, reflect_intern<Member>(mrb),
+                              reflect_borrowed<G>(mrb, const_cast<G *>(&[:Member:]), mrb_obj_value(scope), std::meta::is_const_type(std::meta::type_of(Member))));
     ::mrb_define_method_id(mrb, singleton, reflect_intern<Member>(mrb), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
         using F = [:reflect_bare(std::meta::type_of(Member)):];
-        if constexpr (std::is_class_v<F>) return reflect_borrowed<F>(mrb, const_cast<F *>(&[:Member:]), self, std::meta::is_const_type(std::meta::type_of(Member)));
+        if constexpr (std::is_class_v<F>) return mrb_const_get(mrb, self, reflect_intern<Member>(mrb));
         else return reflect_result(mrb, self, [:Member:]);
     }, MRB_ARGS_NONE());
     if constexpr (!std::meta::is_const_type(std::meta::type_of(Member)) && std::is_copy_assignable_v<typename [:reflect_bare(std::meta::type_of(Member)):]>) {
@@ -1878,7 +1882,7 @@ RClass *reflect_define_class(reflect_definition &definition, RClass *const under
         }
     }
     template for (constexpr std::meta::info member : reflect_static_data_members<Type>())
-        reflect_define_static_data_member<member>(mrb, singleton);
+        reflect_define_static_data_member<member>(mrb, klass, singleton);
     mrb_include_module(mrb, klass, methods);
     if constexpr (std::ranges::any_of(reflect_members<Type>(), [](const std::meta::info m) {
                       return std::meta::is_operator_function(m) && std::meta::operator_of(m) == std::meta::operators::op_parentheses;
@@ -1957,7 +1961,7 @@ RClass *reflect_define_namespace(reflect_definition &definition, RClass *const u
         return all;
     }());
     template for (constexpr std::meta::info variable : variables)
-        reflect_define_static_data_member<variable>(mrb, singleton);
+        reflect_define_static_data_member<variable>(mrb, module, singleton);
     template for (constexpr std::meta::info function : functions) {
         if constexpr (reflect_first_of_its_name(functions, function)) {
             static constexpr auto overloads = std::define_static_array(reflect_overloads_in(functions, function));

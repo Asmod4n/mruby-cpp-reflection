@@ -519,6 +519,9 @@ inline Counter shared;
 inline const Counter fixed{};
 inline int read_counter() { return counter; }
 inline int read_shared() { return shared.n; }
+struct Registry {
+    static inline Counter first{};
+};
 }
 namespace only_one {
 inline int picked = 5;
@@ -622,7 +625,7 @@ constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();
 constexpr auto nested = mrb_cpp_reflector::reflect<^^Holder>();
 constexpr auto named = mrb_cpp_reflector::reflect<^^fruit::Basket::count<fruit::Apple>>();
 constexpr auto operators = mrb_cpp_reflector::reflect<^^ops, ^^ops::Vec, ^^ops::Log>();
-constexpr auto variables = mrb_cpp_reflector::reflect<^^globals, ^^only_one::picked>();
+constexpr auto variables = mrb_cpp_reflector::reflect<^^globals, ^^globals::Registry, ^^only_one::picked>();
 constexpr auto overridable = mrb_cpp_reflector::reflect<^^shapes::Shape, ^^shapes::Square>();
 constexpr auto instantiated = mrb_cpp_reflector::reflect<^^fruit, ^^fruit::Apple, ^^fruit::Pear, ^^fruit::Kind, ^^fruit::Scale>();
 

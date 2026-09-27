@@ -622,6 +622,20 @@ assert('a namespace variable is a module function of its namespace') do
   assert_false(OnlyOne.respond_to?(:skipped_function))
 end
 
+# C++ has one object per variable, so Ruby has one too. The module or
+# class keeps it under the C++ name, where Ruby code cannot reach it,
+# and each read returns it.
+assert('a variable of class type is the same object on each read') do
+  a = Globals.shared
+  GC.start
+  assert_same(a, Globals.shared)
+  assert_same(a, Globals::shared)
+  assert_same(Globals.fixed, Globals.fixed)
+  assert_same(Globals::Registry.first, Globals::Registry.first)
+  assert_equal([], Globals.constants.select { |c| c.to_s == 'shared' })
+  assert_raise(NameError) { Globals.const_get(:shared) }
+end
+
 # C++ calls a virtual function through the object. For an object that
 # Ruby made from a subclass, the overrider calls the Ruby method of the
 # same name, and super reaches the C++ function it overrides. Without a
