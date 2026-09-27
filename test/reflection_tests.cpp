@@ -342,6 +342,10 @@ struct Shelf {
     std::vector<int> empty;
     std::vector<int> &items() { return full; }
     int fits(int n) const { return n; }
+    int pick(int) const { return 1; }
+    int pick(double) const { return 2; }
+    int pick_back(double) const { return 2; }
+    int pick_back(int) const { return 1; }
     float fits_float(float f) const { return f; }
     std::size_t count_shorts(const std::vector<short> &v) const { return v.size(); }
 };

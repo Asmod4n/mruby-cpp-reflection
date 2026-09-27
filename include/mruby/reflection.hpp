@@ -1340,6 +1340,27 @@ mrb_value reflect_call_given(mrb_state *const mrb, const mrb_value self)
     }
 }
 
+template <std::meta::info Function>
+bool reflect_get_args_exact(mrb_state *const mrb, const std::span<const mrb_value> argv)
+{
+    constexpr std::size_t total = std::meta::parameters_of(Function).size() - reflect_skip(Function);
+    if constexpr (reflect_rest(Function) || reflect_takes_block(Function)) return false;
+    else {
+        if (argv.size() < reflect_required(Function) || argv.size() > total) return false;
+        bool exact = true;
+        template for (constexpr std::size_t I : std::views::iota(std::size_t{0}, total)) {
+            using A = [:reflect_bare(std::meta::type_of(std::meta::parameters_of(Function)[I + reflect_skip(Function)])):];
+            if (I < argv.size()) {
+                if constexpr (std::same_as<A, mrb_value>) {}
+                else if constexpr (std::is_pointer_v<A> && std::is_class_v<std::remove_cv_t<std::remove_pointer_t<A>>>)
+                    exact = exact && (mrb_nil_p(argv[I]) || reflect_ptr<std::remove_cv_t<std::remove_pointer_t<A>>>(mrb, argv[I]) != nullptr);
+                else exact = exact && reflect_variant_exact<A>(mrb, argv[I]);
+            }
+        }
+        return exact;
+    }
+}
+
 template <std::meta::info Type, std::meta::info... Overloads>
 mrb_value reflect_dispatch(mrb_state *const mrb, const mrb_value self)
 {
@@ -1347,6 +1368,11 @@ mrb_value reflect_dispatch(mrb_state *const mrb, const mrb_value self)
     else {
         const std::span<const mrb_value> argv(mrb_get_argv(mrb), static_cast<std::size_t>(mrb_get_argc(mrb)));
         mrb_value answer = mrb_undef_value();
+        template for (constexpr std::meta::info Function : std::array{Overloads...}) {
+            if (mrb_undef_p(answer) && (std::meta::is_const(Function) || !mrb_frozen_p(mrb_obj_ptr(self))) &&
+                reflect_get_args_exact<Function>(mrb, argv) && reflect_get_args_match<Function>(mrb, argv))
+                answer = reflect_call_given<Type, Function>(mrb, self);
+        }
         template for (constexpr std::meta::info Function : std::array{Overloads...}) {
             if (mrb_undef_p(answer) && (std::meta::is_const(Function) || !mrb_frozen_p(mrb_obj_ptr(self))) &&
                 reflect_get_args_match<Function>(mrb, argv))

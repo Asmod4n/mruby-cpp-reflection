@@ -684,6 +684,16 @@ assert('a number that does not fit its C++ type raises RangeError') do
   assert_raise(RangeError) { shelf.count_shorts([1, 2**20]) }
 end
 
+# C++ takes the overload whose parameter types match exactly before one
+# that needs a conversion, whatever the order of declaration.
+assert('an exact overload is taken before one that converts') do
+  shelf = Shelf.new
+  assert_equal(1, shelf.pick(1))
+  assert_equal(2, shelf.pick(1.5))
+  assert_equal(1, shelf.pick_back(1))
+  assert_equal(2, shelf.pick_back(1.5))
+end
+
 # C++ calls a virtual function through the object. For an object that
 # Ruby made from a subclass, the overrider calls the Ruby method of the
 # same name, and super reaches the C++ function it overrides. Without a
