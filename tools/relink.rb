@@ -1,18 +1,61 @@
 # The linker command of a build that reflects C++. A reflected class may
 # name a function that its headers declare and no linked library
 # defines: an extern template, a C++23 member a shared library built
-# earlier lacks, a marker only ever named in sizeof. The first link
-# names what is missing; the second points each at
-# mrb_cpp_reflector::reflect_undefined, which raises NotImplementedError
-# when Ruby calls it.
+# earlier lacks, a marker only ever named in decltype. Before the link,
+# nm -P lists what the objects need and what the objects and libraries of
+# the link define. Each C++ function that nothing defines gets a
+# definition that calls mrb_cpp_reflector::reflect_undefined, which raises
+# NotImplementedError when Ruby calls it.
 require 'open3'
-command = ARGV
-output, status = Open3.capture2e({ 'LC_ALL' => 'C' }, *command, '-Wl,--no-demangle')
-exit 0 if status.success?
-missing = output.scan(/undefined reference to [`']([^']+)'/).flatten.uniq
-if missing.empty?
-  $stderr.print output
-  exit status.exitstatus || 1
+require 'tmpdir'
+
+driver = ARGV.first
+arguments = ARGV.drop(1)
+link = ->(*extra) { system("#{driver} #{(arguments + extra).map { |a| %("#{a}") }.join(' ')}") ? exit(0) : exit($?.exitstatus || 1) }
+nm = [ENV['NM'], 'llvm-nm', 'nm'].compact.find { |tool| system(tool, '--version', out: File::NULL, err: File::NULL) }
+link.() if nm.nil?
+
+def symbols(nm, file, kind)
+  output, status = Open3.capture2e(nm, '-P', '-g', file)
+  return [] unless status.success?
+  output.each_line.filter_map do |line|
+    name, type = line.split(' ', 3)
+    next if name.nil? || type.nil? || name.end_with?(':')
+    case kind
+    when :needed then name if type == 'U'
+    when :defined then name unless %w[U w v].include?(type)
+    end
+  end
 end
+
+def found_by(driver, file)
+  path = IO.popen("#{driver} -print-file-name=#{file}", &:read).strip
+  File.file?(path) ? path : nil
+end
+
+library_names = %w[so dylib a]
+search = arguments.filter_map { |a| a.delete_prefix('-L') if a.start_with?('-L') && a.size > 2 }
+libraries = arguments.filter_map do |argument|
+  next unless argument.start_with?('-l') && argument.size > 2
+  name = argument.delete_prefix('-l')
+  search.product(library_names).map { |dir, ext| "#{dir}/lib#{name}.#{ext}" }.find { |path| File.file?(path) } ||
+    library_names.filter_map { |ext| found_by(driver, "lib#{name}.#{ext}") }.first
+end
+implicit = %w[libstdc++ libc++ libc++abi libgcc_s].product(library_names).filter_map { |name, ext| found_by(driver, "#{name}.#{ext}") }
+inputs = arguments.select { |argument| !argument.start_with?('-') && File.file?(argument) && argument.match?(/\.(o|obj|a|lib|so|dylib)\z|\.so\.\d/) }
+
+needed = inputs.grep(/\.(o|obj|a|lib)\z/).flat_map { |file| symbols(nm, file, :needed) }.uniq
+defined = (inputs + libraries + implicit).flat_map { |file| symbols(nm, file, :defined) }.to_h { |name| [name, true] }
+missing = needed.reject { |name| defined[name] }.select { |name| name.match?(/\A_{1,2}Z/) && !name.match?(/\A_{1,2}ZT[VIST]/) }
+link.() if missing.empty?
+
 $stderr.puts "relink: #{missing.size} undefined"
-exec(*command, *missing.map { |symbol| "-Wl,--defsym=#{symbol}=_ZN17mrb_cpp_reflector17reflect_undefinedEv" })
+Dir.mktmpdir do |dir|
+  source = "#{dir}/reflect_missing.cpp"
+  object = "#{dir}/reflect_missing.o"
+  File.write(source, "namespace mrb_cpp_reflector {\n[[noreturn]] void reflect_undefined();\nextern \"C\" {\n" +
+                     missing.each_with_index.map { |name, i| "[[noreturn]] void reflect_missing_#{i}() __asm__(\"#{name}\");\nvoid reflect_missing_#{i}() { reflect_undefined(); }\n" }.join +
+                     "}\n}\n")
+  system(%(#{driver} -c "#{source}" -o "#{object}")) or abort "relink: #{source} did not compile"
+  link.(object)
+end

@@ -80,5 +80,5 @@ MRuby::Gem::Specification.new('mruby-cpp-reflection') do |spec|
   reflect_virtual_overriders(spec, 'test/reflection_tests.cpp')
   spec.build.enable_cxx_exception
   relink = "#{spec.dir}/tools/relink.rb"
-  spec.build.linker.command = "#{RbConfig.ruby} #{relink} #{spec.build.linker.command}" unless spec.build.linker.command.include?(relink)
+  spec.build.linker.command = %("#{RbConfig.ruby}" "#{relink}" "#{spec.build.linker.command}") unless spec.build.linker.command.include?(relink)
 end
