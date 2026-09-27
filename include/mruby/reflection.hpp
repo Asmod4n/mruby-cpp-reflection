@@ -1124,6 +1124,19 @@ void reflect_raise_on_hardened_precondition(mrb_state *const mrb, const T &objec
             constexpr std::string_view name = std::meta::identifier_of(Function);
             if constexpr (name == "front" || name == "back" || name == "pop_front" || name == "pop_back") {
                 if (object.empty()) [[unlikely]] mrb_raise(mrb, E_INDEX_ERROR, "empty container");
+            } else if constexpr ((name == "remove_prefix" || name == "remove_suffix" || name == "first" || name == "last") && sizeof...(A) == 1 &&
+                                 (std::is_integral_v<A> && ...) && requires { object.size(); }) {
+                if (((std::cmp_less(arguments, 0) || std::cmp_greater(arguments, object.size())) || ...)) [[unlikely]]
+                    mrb_raise(mrb, E_INDEX_ERROR, "count out of range");
+            } else if constexpr (name == "subspan" && (sizeof...(A) == 1 || sizeof...(A) == 2) && (std::is_integral_v<A> && ...) && requires { object.size(); }) {
+                const std::tuple<const A &...> given(arguments...);
+                const auto offset = std::get<0>(given);
+                if (std::cmp_less(offset, 0) || std::cmp_greater(offset, object.size())) [[unlikely]] mrb_raise(mrb, E_INDEX_ERROR, "offset out of range");
+                if constexpr (sizeof...(A) == 2) {
+                    const auto count = std::get<1>(given);
+                    if (std::cmp_not_equal(count, std::dynamic_extent) && (std::cmp_less(count, 0) || std::cmp_greater(count, object.size() - static_cast<std::size_t>(offset))))
+                        [[unlikely]] mrb_raise(mrb, E_INDEX_ERROR, "count out of range");
+                }
             }
         }
     }

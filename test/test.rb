@@ -1036,3 +1036,24 @@ assert('a copy of a shared object is not shared with the keeper of the original'
   full_gc
   assert_equal(1, s.read)
 end
+
+# C++26 lists the preconditions of these members of string_view and span
+# as hardened. A call that breaks one reads outside the view, so the call
+# must raise IndexError before it reaches C++.
+assert('a member of a standard view refuses a count past its end') do
+  v = Reflected.new.name
+  assert_raise(IndexError) { v.remove_prefix(100) }
+  assert_raise(IndexError) { v.remove_suffix(100) }
+  v.remove_prefix(2)
+  v.remove_suffix(2)
+  assert_equal('flect', v.to_s)
+  w = Shelf.new.window
+  assert_raise(IndexError) { w.first(3) }
+  assert_raise(IndexError) { w.last(3) }
+  assert_raise(IndexError) { w.subspan(3) }
+  assert_raise(IndexError) { w.subspan(1, 2) }
+  assert_equal([2], w.subspan(1, 1).to_a)
+  assert_equal([], w.subspan(2).to_a)
+  assert_equal([1, 2], w.first(2).to_a)
+  assert_equal([2], w.last(1).to_a)
+end

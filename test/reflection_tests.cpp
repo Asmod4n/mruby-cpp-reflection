@@ -365,6 +365,7 @@ struct Shelf {
     std::map<int, int> table{{1, 10}, {2, 20}};
     std::list<int> chain{1, 2};
     std::vector<int> &items() { return full; }
+    std::span<int> window() { return full; }
     bool is_ready() const { return true; }
     int fits(int n) const { return n; }
     int pick(int) const { return 1; }
