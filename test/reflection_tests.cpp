@@ -372,9 +372,6 @@ struct Lender {
     void add(mrb_int n) { items.push_back(n); }
 };
 
-struct Groups {
-    std::vector<std::set<int>> sets{{1}};
-};
 struct Link {
     int v = 0;
     Link *next = this;
@@ -674,6 +671,10 @@ struct Counting {
     {
         for (int i = 0; i < n; i++) co_yield std::string(static_cast<std::size_t>(i + 1), 'a');
     }
+};
+struct Groups {
+    std::vector<std::set<int>> sets{{1}};
+    Counting counting;
 };
 struct Grid {
     int cells[3] = {1, 2, 3};

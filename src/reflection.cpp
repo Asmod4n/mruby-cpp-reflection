@@ -54,6 +54,7 @@ extern "C" void mrb_mruby_cpp_reflection_gem_init(mrb_state *const mrb)
 {
     mrb_cpp_reflector::reflect_define_void_pointer(mrb, MRB_SYM(VoidPointer));
     mrb_cpp_reflector::reflect_define_void_pointer(mrb, MRB_SYM(ConstVoidPointer));
+    mrb_define_class_id(mrb, MRB_SYM(CppCoroutineError), E_STANDARD_ERROR);
     mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), mrb_cpp_reflector::reflect_identities_key(mrb),
                mrb_cptr_value(mrb, new mrb_cpp_reflector::reflect_identities()));
 }

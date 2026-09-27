@@ -1313,14 +1313,30 @@ assert('a C++ exception from an argument conversion is the Ruby exception for it
   assert_equal('no assign', assert_raise(RuntimeError) { Fragile.new.replace(f) }.message)
 end
 
-# A block that the coroutine calls can call next on the same coroutine.
-# A coroutine that runs cannot be resumed, so the call must raise, and
-# the coroutine must answer again after the raise.
+# A coroutine follows the rules of a Fiber of mruby. A block that the
+# coroutine calls runs while the coroutine runs, so next there raises
+# CppCoroutineError with the message of a Fiber, and the coroutine answers
+# again after the raise. The block of each runs while the coroutine is
+# suspended, so next there takes the next value.
 assert('a coroutine refuses to be resumed while it runs') do
+  assert_equal(StandardError, CppCoroutineError.superclass)
   g = nil
   g = Counting.filtered(3, ->(i) { g.next if i == 1; true })
-  assert_raise(RuntimeError) { g.to_a }
+  assert_raise_with_message(CppCoroutineError, 'double resume') { g.to_a }
   assert_equal([], g.to_a)
+  seen = []
+  g = Counting.up_to(4)
+  g.each { |i| seen << i; seen << g.next if i == 1 }
+  assert_equal([1, 2, 3, 4], seen)
+  assert_raise(StopIteration) { g.next }
+end
+
+# A member coroutine keeps the address of its receiver in its frame. Ruby
+# keeps a receiver alive only when Ruby owns it, so a member coroutine of
+# an object that C++ owns raises.
+assert('a member coroutine needs a receiver that Ruby owns') do
+  assert_equal([1, 2], Counting.new.from_start(2).to_a)
+  assert_raise(TypeError) { Groups.new.counting.from_start(2) }
 end
 
 # A lent argument lives for the call. Ruby may keep its object, which

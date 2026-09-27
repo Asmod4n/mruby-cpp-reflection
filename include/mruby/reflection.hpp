@@ -1333,6 +1333,10 @@ mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
                 if constexpr (!std::meta::is_const(Function)) mrb_check_frozen(mrb, mrb_obj_ptr(self));
                 T *const object = reflect_ptr<T>(mrb, self);
                 if (object == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
+                if constexpr (reflect_is_coroutine(std::meta::return_type_of(Function))) {
+                    if (!static_cast<reflect_lifetime_base *>(DATA_PTR(self))->owned) [[unlikely]]
+                        mrb_raise(mrb, E_TYPE_ERROR, "a member coroutine needs a receiver that Ruby owns");
+                }
                 std::apply([&](auto &...held) { reflect_raise_on_hardened_precondition<Function>(mrb, *object, reflect_pass(held)...); }, args);
                 if constexpr (std::meta::return_type_of(Function) == ^^void) {
                     std::apply([&](auto &...held) { object->[:Function:](reflect_pass(held)...); }, args);
@@ -1770,7 +1774,7 @@ reflect_single_pass<T> &reflect_iteration(mrb_state *const mrb, const mrb_value 
     const mrb_value held = mrb_iv_get(mrb, self, key);
     if (void *const p = mrb_data_check_get_ptr(mrb, held, &type); p != nullptr) [[likely]] {
         reflect_single_pass<T> &pass = *static_cast<reflect_single_pass<T> *>(p);
-        if (pass.running) [[unlikely]] mrb_raise(mrb, E_RUNTIME_ERROR, "the coroutine runs and cannot be resumed");
+        if (pass.running) [[unlikely]] mrb_raise(mrb, mrb_class_get_id(mrb, MRB_SYM(CppCoroutineError)), "double resume");
         return pass;
     }
     mrb_check_frozen(mrb, mrb_obj_ptr(self));
@@ -1824,7 +1828,10 @@ void reflect_define_conversions(mrb_state *const mrb, RClass *const klass)
                 while (pass.at && *pass.at != pass.range.end()) {
                     std::ranges::range_value_t<T> value(**pass.at);
                     ++*pass.at;
-                    mrb_yield(mrb, block, reflect_result(mrb, mrb_nil_value(), std::move(value)));
+                    const mrb_value yielded = reflect_result(mrb, mrb_nil_value(), std::move(value));
+                    pass.running = false;
+                    mrb_yield(mrb, block, yielded);
+                    pass.running = true;
                 }
                 return self;
             });
