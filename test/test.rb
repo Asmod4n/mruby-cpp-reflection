@@ -18,8 +18,11 @@ if Object.const_defined?(:Reflected)
     assert_equal(3, r.total)
     assert_equal([4], r.history.to_a)
     copy = r.history
-    assert_false(copy.frozen?)
-    copy.push_back(1)
+    assert_true(copy.frozen?)
+    assert_raise(FrozenError) { copy.push_back(1) }
+    own = copy.dup
+    own.push_back(1)
+    assert_equal([4, 1], own.to_a)
     assert_equal([4], r.history.to_a)
     assert_equal(2, r.count([1, 2]))
     assert_equal(1, r.count(r.history))
@@ -45,7 +48,7 @@ if Object.const_defined?(:Reflected)
     source.add(7)
     assert_equal([7], r.seen.replace(source.history).to_a)
     assert_equal('y', r.label.replace('y').to_s)
-    assert_equal([], r.history.replace([]).to_a)
+    assert_raise(FrozenError) { r.history.replace([]) }
     assert_equal([7], r.history.to_a)
     assert_raise(TypeError) { r.seen.replace('no') }
     other = Reflected.new
@@ -355,12 +358,28 @@ assert('an object C++ deleted raises through its guard') do
   assert_raise(TypeError) { watched.v }
 end
 
+# A reference that a method returns can end before the Ruby object
+# does, so Ruby gets a copy. The copy is frozen, so a write to it raises
+# and is not lost. A method that returns *this returns the receiver.
+assert('a reference to another object is a frozen copy, and *this is self') do
+  a = Link.new
+  b = Link.new
+  b.v = 7
+  a.attach(b)
+  other = a.follow
+  assert_false(other.equal?(a))
+  assert_equal(7, other.v)
+  assert_true(other.frozen?)
+  assert_raise(FrozenError) { other.v = 1 }
+  assert_same(a, a.itself)
+end
+
 assert('a reference from a method is a copy, and a field is lent') do
   lender = Lender.new
   view = lender.view
   lender.add(3)
   assert_equal([1, 2], view.to_a)
-  assert_false(view.frozen?)
+  assert_true(view.frozen?)
   assert_equal([1, 2, 3], lender.items.to_a)
   assert_raise(TypeError) { lender.alone }
 end
@@ -641,14 +660,15 @@ end
 # raises out_of_range in C++.
 assert('a standard container checks what its operator[], front and back need') do
   shelf = Shelf.new
-  assert_equal(2, shelf.items[1])
+  assert_equal(2, shelf.full[1])
+  assert_raise(IndexError) { shelf.full[2] }
+  assert_raise(IndexError) { shelf.full[-1] }
+  assert_raise(IndexError) { shelf.full[2] = 5 }
+  assert_raise(IndexError) { shelf.empty.front }
+  assert_raise(IndexError) { shelf.empty.back }
+  assert_raise(IndexError) { shelf.empty.pop_back }
+  assert_equal(1, shelf.full.front)
   assert_raise(IndexError) { shelf.items[2] }
-  assert_raise(IndexError) { shelf.items[-1] }
-  assert_raise(IndexError) { shelf.items[2] = 5 }
-  assert_raise(IndexError) { shelf.none.front }
-  assert_raise(IndexError) { shelf.none.back }
-  assert_raise(IndexError) { shelf.none.pop_back }
-  assert_equal(1, shelf.items.front)
 end
 
 # C++ calls a virtual function through the object. For an object that

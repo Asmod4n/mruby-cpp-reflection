@@ -949,7 +949,7 @@ mrb_value reflect_reference(mrb_state *const mrb, P *const object)
         if constexpr (reflect_ownership_class<Q>() != ^^void) {
             if (RObject *const known = reflect_identity(mrb, reflect_identity_of(object)); known != nullptr) return mrb_obj_value(known);
         }
-        if constexpr (std::is_copy_constructible_v<Q> && !std::is_abstract_v<Q>) return reflect_object(mrb, static_cast<const Q &>(*object));
+        if constexpr (std::is_copy_constructible_v<Q> && !std::is_abstract_v<Q>) return reflect_object(mrb, static_cast<const Q &>(*object), true);
         else {
             mrb_raisef(mrb, E_TYPE_ERROR, "%s is kept by C++ and cannot be kept alive from Ruby", std::define_static_string(reflect_class_name(^^Q)));
             std::unreachable();
@@ -1177,8 +1177,8 @@ mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
                 return mrb_nil_value();
             } else if constexpr (std::meta::is_reference_type(std::meta::return_type_of(Function)) &&
                                  reflect_bare(std::meta::return_type_of(Function)) == std::meta::dealias(^^O)) {
-                std::apply([&](auto &...held) { [:Function:](*object, reflect_pass(held)...); }, args);
-                return self;
+                auto &answer = std::apply([&](auto &...held) -> decltype(auto) { return [:Function:](*object, reflect_pass(held)...); }, args);
+                return &answer == object ? self : reflect_result(mrb, self, answer);
             } else {
                 return std::apply([&](auto &...held) -> mrb_value { return reflect_result(mrb, self, [:Function:](*object, reflect_pass(held)...)); }, args);
             }
@@ -1230,8 +1230,8 @@ mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
                     return mrb_nil_value();
                 } else if constexpr (std::meta::is_reference_type(std::meta::return_type_of(Function)) &&
                                      reflect_bare(std::meta::return_type_of(Function)) == std::meta::dealias(^^T)) {
-                    std::apply([&](auto &...held) { object->[:Function:](reflect_pass(held)...); }, args);
-                    return self;
+                    auto &answer = std::apply([&](auto &...held) -> decltype(auto) { return object->[:Function:](reflect_pass(held)...); }, args);
+                    return &answer == object ? self : reflect_result(mrb, self, answer);
                 } else {
                     const mrb_value answer = std::apply([&](auto &...held) -> mrb_value { return reflect_result(mrb, self, object->[:Function:](reflect_pass(held)...)); }, args);
                     if constexpr (reflect_is_coroutine(std::meta::return_type_of(Function))) mrb_iv_set(mrb, answer, mrb_intern_lit(mrb, "reflected receiver"), self);
