@@ -388,8 +388,8 @@ end
 
 # Ruby has no templates, and a template has no name at runtime. A
 # specialization is a class. The alias C++ gives it is its constant, and
-# one without an alias has no constant and carries the name C++ spells.
-assert('a specialization is a class named by its alias or its C++ spelling') do
+# one without an alias has no constant and carries the name display_string_of gives.
+assert('a specialization is a class named by its alias or the name C++ displays for it') do
   r = Reflected.new
   assert_same(Std::String, r.label.class)
   assert_equal('Std::String', Std::String.name)

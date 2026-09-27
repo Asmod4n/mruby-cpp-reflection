@@ -417,10 +417,10 @@ consteval std::string reflect_virtual_overriders_text(const std::span<const std:
     for (const std::meta::info c : classes) {
         if (!std::meta::is_type(c) || !reflect_overridable(c)) continue;
         const std::meta::info t = std::meta::dealias(c);
-        const std::string spelled = std::string(std::meta::display_string_of(t));
+        const std::string display = std::string(std::meta::display_string_of(t));
         const std::vector<std::meta::info> functions = reflect_virtual_functions(t);
-        text += "template <> struct mrb_cpp_reflector::reflect_virtual_overrider<^^" + spelled + "> {\n";
-        text += "    using base = " + spelled + ";\n";
+        text += "template <> struct mrb_cpp_reflector::reflect_virtual_overrider<^^" + display + "> {\n";
+        text += "    using base = " + display + ";\n";
         text += "    static constexpr auto functions = std::define_static_array(mrb_cpp_reflector::reflect_virtual_functions(^^base));\n";
         text += "    struct type final : mrb_cpp_reflector::reflect_tracked<base> {\n";
         text += "        using overridden = base;\n";
@@ -1674,8 +1674,8 @@ void reflect_register_specialization(reflect_definition &definition, RClass *con
 {
     mrb_state *const mrb = definition.mrb;
     constexpr std::meta::info t = std::meta::dealias(Type);
-    static constexpr std::string_view spelling = std::define_static_string(std::meta::display_string_of(t));
-    mrb_obj_iv_set(mrb, reinterpret_cast<RObject *>(klass), MRB_SYM(__classname__), mrb_str_new_static(mrb, spelling.data(), spelling.size()));
+    static constexpr std::string_view display = std::define_static_string(std::meta::display_string_of(t));
+    mrb_obj_iv_set(mrb, reinterpret_cast<RObject *>(klass), MRB_SYM(__classname__), mrb_str_new_static(mrb, display.data(), display.size()));
     bool named_by_alias = false;
     template for (constexpr std::meta::info scope : std::define_static_array(reflect_alias_scopes(t))) {
         template for (constexpr std::meta::info alias : reflect_type_aliases_cached<scope>) {
