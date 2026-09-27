@@ -684,3 +684,17 @@ assert('an inherited constructor is an overload of initialize') do
   assert_equal(3, Shapes::Square.new(3).scale)
   assert_raise(ArgumentError) { Shapes::Square.new }
 end
+
+# A C array has no address Ruby may keep, so a field of array type reads
+# as a Ruby Array copy and is written from an Array of the same length.
+assert('a C array field reads as a copy and writes from an Array of its length') do
+  g = Grid.new
+  assert_equal([1, 2, 3], g.cells)
+  g.cells = [4, 5, 6]
+  assert_equal(15, g.sum)
+  g.cells[0] = 100
+  assert_equal(15, g.sum)
+  assert_raise(ArgumentError) { g.cells = [1, 2] }
+  assert_equal([0.5, 1.5], g.fixed)
+  assert_false(g.respond_to?(:fixed=))
+end

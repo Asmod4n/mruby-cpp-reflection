@@ -1318,12 +1318,17 @@ void reflect_define_field(mrb_state *const mrb, RClass *const klass)
         T *const object = reflect_ptr<T>(mrb, self);
         if (object == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
         using F = [:reflect_bare(std::meta::type_of(Field)):];
-        if constexpr (std::is_class_v<F> && (reflect_guard_class<T>() == ^^void) && !std::same_as<F, std::string_view>)
+        if constexpr (std::is_array_v<F>) {
+            const mrb_value array = mrb_ary_new_capa(mrb, static_cast<mrb_int>(std::extent_v<F>));
+            for (const auto &element : object->[:Field:]) mrb_ary_push(mrb, array, reflect_result(mrb, mrb_nil_value(), std::remove_cvref_t<decltype(element)>(element)));
+            return array;
+        } else if constexpr (std::is_class_v<F> && (reflect_guard_class<T>() == ^^void) && !std::same_as<F, std::string_view>)
             return reflect_lend(mrb, self, &object->[:Field:], std::meta::is_const_type(std::meta::type_of(Field)) || mrb_frozen_p(mrb_obj_ptr(self)));
         else if constexpr (std::meta::is_bit_field(Field)) return reflect_result(mrb, self, static_cast<F>(object->[:Field:]));
         else return reflect_result(mrb, self, object->[:Field:]);
     }, MRB_ARGS_NONE());
-    if constexpr (!std::meta::is_const_type(std::meta::type_of(Field)) && std::is_copy_assignable_v<typename [:reflect_bare(std::meta::type_of(Field)):]>) {
+    if constexpr (!std::meta::is_const_type(std::meta::type_of(Field)) &&
+                  (std::is_copy_assignable_v<typename [:reflect_bare(std::meta::type_of(Field)):]> || std::is_array_v<typename [:reflect_bare(std::meta::type_of(Field)):]>)) {
         constexpr std::string_view name = std::meta::identifier_of(Field);
         constexpr auto setter = std::define_static_string(std::string(name) + "=");
         constexpr mrb_sym presym = reflect_presym(setter);
@@ -1335,7 +1340,19 @@ void reflect_define_field(mrb_state *const mrb, RClass *const klass)
             mrb_value v;
             mrb_get_args(mrb, "o", &v);
             using F = [:reflect_bare(std::meta::type_of(Field)):];
-            if constexpr (std::is_pointer_v<F> && std::is_void_v<std::remove_pointer_t<F>>) object->[:Field:] = reflect_void_ptr<std::remove_pointer_t<F>>(mrb, v);
+            if constexpr (std::is_array_v<F>) {
+                using E = std::remove_extent_t<F>;
+                if (!mrb_array_p(v) || RARRAY_LEN(v) != static_cast<mrb_int>(std::extent_v<F>)) [[unlikely]]
+                    mrb_raisef(mrb, E_ARGUMENT_ERROR, "an Array of %d elements wanted", static_cast<int>(std::extent_v<F>));
+                std::array<E, std::extent_v<F>> converted{};
+                for (std::size_t i = 0; i < converted.size(); i++) {
+                    const mrb_value element = RARRAY_PTR(v)[i];
+                    if (E *const p = reflect_ptr<E>(mrb, element); p != nullptr) converted[i] = *p;
+                    else if constexpr (reflect_from_mrb<E>) converted[i] = mrb_value_to<E>(mrb, element);
+                    else mrb_raise(mrb, E_TYPE_ERROR, "wrong type");
+                }
+                std::ranges::copy(converted, std::ranges::begin(object->[:Field:]));
+            } else if constexpr (std::is_pointer_v<F> && std::is_void_v<std::remove_pointer_t<F>>) object->[:Field:] = reflect_void_ptr<std::remove_pointer_t<F>>(mrb, v);
             else if (F *const p = reflect_ptr<F>(mrb, v); p != nullptr) object->[:Field:] = *p;
             else if constexpr (reflect_from_mrb<F>) object->[:Field:] = mrb_value_to<F>(mrb, v);
             else mrb_raise(mrb, E_TYPE_ERROR, "wrong type");

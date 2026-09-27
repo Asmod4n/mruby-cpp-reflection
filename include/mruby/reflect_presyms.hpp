@@ -222,6 +222,8 @@ consteval bool reflect_result_supported(const std::meta::info type)
 {
     if (!reflect_complete(type)) return false;
     const std::meta::info bare = reflect_bare(type);
+    if (std::meta::is_array_type(bare))
+        return std::meta::extent(bare) > 0 && !std::meta::is_array_type(std::meta::remove_extent(bare)) && reflect_result_supported(std::meta::remove_extent(bare));
     if (bare == ^^void || bare == std::meta::dealias(^^mrb_value) || bare == ^^bool || std::meta::is_arithmetic_type(bare) || std::meta::is_enum_type(bare)) return true;
     if (std::meta::is_pointer_type(bare)) {
         const std::meta::info to = std::meta::dealias(std::meta::remove_cv(std::meta::remove_pointer(bare)));
