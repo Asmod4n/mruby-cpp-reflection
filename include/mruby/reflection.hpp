@@ -256,7 +256,11 @@ const reflect_data_type &reflect_data_type_owned()
                                                  if (p == nullptr) return;
                                                  reflect_tracked<T> *const tracked = static_cast<reflect_tracked<T> *>(static_cast<T *>(p));
                                                  tracked->ruby = nullptr;
-                                                 if constexpr (reflect_ownership_class<T>() != ^^void) reflect_identity_erase(mrb, reflect_identity_of(static_cast<T *>(p)));
+                                                 if constexpr (reflect_ownership_class<T>() != ^^void) {
+                                                     reflect_identity_erase(mrb, reflect_identity_of(static_cast<T *>(p)));
+                                                     using O = [:reflect_ownership_class<T>():];
+                                                     if (reflect_ownership_traits<O>::parent(*static_cast<T *>(p)) != nullptr) return;
+                                                 }
                                                  delete tracked;
                                              }},
                                             reflect_upcasts<T>(), &reflect_data_type_tracked<T>()};
@@ -265,6 +269,8 @@ const reflect_data_type &reflect_data_type_owned()
         static const reflect_data_type type{{name, [](mrb_state *const mrb, void *const p) {
                                                  if (p == nullptr) return;
                                                  reflect_identity_erase(mrb, reflect_identity_of(static_cast<T *>(p)));
+                                                 using O = [:reflect_ownership_class<T>():];
+                                                 if (reflect_ownership_traits<O>::parent(*static_cast<T *>(p)) != nullptr) return;
                                                  delete static_cast<T *>(p);
                                              }},
                                             reflect_upcasts<T>(), &reflect_data_type_borrowed<T>()};
@@ -569,9 +575,6 @@ void reflect_attach(mrb_state *const mrb, const mrb_value object)
     if (cpp == nullptr) return;
     const O *const parent = reflect_ownership_traits<O>::parent(*cpp);
     if (parent == nullptr) return;
-    RData *const data = RDATA(object);
-    const mrb_data_type *const cpp_owned = static_cast<const reflect_data_type *>(data->type)->owned_by_cpp;
-    if (cpp_owned != nullptr) data->type = cpp_owned;
     RObject *const holder = reflect_identity(mrb, parent);
     if (holder == nullptr) return;
     const mrb_sym key = mrb_intern_lit(mrb, "reflected children");

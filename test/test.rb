@@ -729,3 +729,39 @@ assert('a variant is the value it holds') do
   assert_equal(0, c.take(2.5))
   assert_equal(1, c.take('2'))
 end
+
+# Who deletes a node is decided when the collector frees its Ruby object:
+# a node that has a parent in C++ at that moment belongs to that parent,
+# whichever parent it had when Ruby made it. One without a parent belongs
+# to Ruby again.
+def reparented_child_under(new_parent)
+  old_parent = Node.new
+  child = Node.new(old_parent)
+  child.set_parent(new_parent)
+  nil
+end
+
+def child_released_by_its_parent
+  parent = Node.new
+  child = Node.new(parent)
+  child.set_parent(nil)
+  nil
+end
+
+assert('the collector leaves a node that C++ moved to another parent') do
+  keeper = Node.new
+  reparented_child_under(keeper)
+  full_gc
+  full_gc
+  assert_equal(1, keeper.child_count)
+end
+
+assert('the collector deletes a node whose parent C++ removed') do
+  full_gc
+  full_gc
+  base = Node.alive
+  child_released_by_its_parent
+  full_gc
+  full_gc
+  assert_equal(base, Node.alive)
+end
