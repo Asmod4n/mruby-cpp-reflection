@@ -209,49 +209,88 @@ struct Callback {
     static inline void *anywhere = nullptr;
     const void *const where = this;
 };
-/* Node deletes the nodes it owns in its destructor, as a tree of
- * objects in a GUI library does. reflect_ownership_traits names the
- * parent, so the collector frees a node only while it has none, and the
- * Ruby object of a node with a parent lives as long as its parent's, with its
- * instance variables. Whatever deletes a node that Ruby made, the Ruby
- * object then raises instead of reaching freed memory. alive counts the
- * nodes C++ has. */
+/* Node owns its children through std::unique_ptr and its tag by value,
+ * so its types say who deletes what. Node has a virtual destructor, so a
+ * Node that Ruby made tells its Ruby object when C++ deletes it. alive
+ * counts the nodes C++ has, so a test sees a node deleted twice or never. */
 static mrb_int &nodes_alive()
 {
     static mrb_int n = 0;
     return n;
 }
 struct Node {
-    Node *parent = nullptr;
     Plain tag;
-    std::vector<Node *> children;
+    std::unique_ptr<Node> first;
+    std::unique_ptr<Node> second;
     Node() { ++nodes_alive(); }
-    explicit Node(Node *p) : Node() { set_parent(p); }
     Node(const Node &) = delete;
     Node &operator=(const Node &) = delete;
-    virtual ~Node()
+    virtual ~Node() { --nodes_alive(); }
+    void grow()
     {
-        for (Node *c : children) {
-            c->parent = nullptr;
-            delete c;
-        }
-        if (parent != nullptr) std::erase(parent->children, this);
-        --nodes_alive();
+        if (first == nullptr) first = std::make_unique<Node>();
+        else if (second == nullptr) second = std::make_unique<Node>();
     }
-    void set_parent(Node *p)
-    {
-        if (parent != nullptr) std::erase(parent->children, this);
-        parent = p;
-        if (p != nullptr) p->children.push_back(this);
-    }
-    Node *child_at(mrb_int i) const { return children.at(static_cast<std::size_t>(i)); }
-    void delete_child(mrb_int i) { delete children.at(static_cast<std::size_t>(i)); }
-    mrb_int child_count() const { return static_cast<mrb_int>(children.size()); }
+    void cut_first() { first.reset(); }
+    void swap_children() { std::swap(first, second); }
+    mrb_int child_count() const { return (first != nullptr ? 1 : 0) + (second != nullptr ? 1 : 0); }
     static mrb_int alive() { return nodes_alive(); }
 };
-template <>
-struct mrb_cpp_reflector::reflect_ownership_traits<Node> {
-    static Node *parent(const Node &n) { return n.parent; }
+/* Leaf is a Node without a virtual destructor. C++ cannot tell Ruby
+ * when it deletes a Leaf, so only the types of its fields can. */
+static mrb_int &leaves_alive()
+{
+    static mrb_int n = 0;
+    return n;
+}
+struct Leaf {
+    Plain tag;
+    std::unique_ptr<Leaf> child;
+    Leaf() { ++leaves_alive(); }
+    Leaf(const Leaf &) = delete;
+    Leaf &operator=(const Leaf &) = delete;
+    ~Leaf() { --leaves_alive(); }
+    void grow()
+    {
+        if (child == nullptr) child = std::make_unique<Leaf>();
+    }
+    void cut() { child.reset(); }
+    static void cut_child_of(Leaf &leaf) { leaf.child.reset(); }
+    static mrb_int alive() { return leaves_alive(); }
+};
+/* The elements of a container of std::unique_ptr belong to the
+ * container, and no field names them. */
+class Forest {
+    std::vector<std::unique_ptr<Leaf>> leaves;
+    std::vector<std::unique_ptr<Plain>> plains;
+
+public:
+    Forest() = default;
+    Forest(const Forest &) = delete;
+    Forest &operator=(const Forest &) = delete;
+    void plant()
+    {
+        leaves.push_back(std::make_unique<Leaf>());
+        plains.push_back(std::make_unique<Plain>(Plain{static_cast<mrb_int>(plains.size()) + 1}));
+    }
+    Leaf *leaf(mrb_int i) const { return leaves.at(static_cast<std::size_t>(i)).get(); }
+    Plain *plain(mrb_int i) const { return plains.at(static_cast<std::size_t>(i)).get(); }
+    void clear()
+    {
+        leaves.clear();
+        plains.clear();
+    }
+};
+/* Hand deletes what it holds in its destructor, and no type says so. */
+class Hand {
+    Leaf *held = new Leaf();
+
+public:
+    Hand() = default;
+    Hand(const Hand &) = delete;
+    Hand &operator=(const Hand &) = delete;
+    ~Hand() { delete held; }
+    Leaf &item() const { return *held; }
 };
 /* An object C++ hands over in a std::shared_ptr lives as long as the
  * Ruby object that holds it, even after C++ lets go of its own share;
@@ -293,31 +332,10 @@ struct SelfSharer {
     SelfShare &ref() const { return *held; }
     void drop() { held.reset(); }
 };
-/* Watched is made and deleted by C++ alone. Like QPointer, a WatchGuard
- * turns to null when what it watches is deleted, and
- * reflect_ownership_traits names it as the guard, so the Ruby object of
- * a Watched raises once C++ deleted it instead of reaching freed memory. */
-struct WatchGuard;
+/* WatchedHolder owns a Watched through std::unique_ptr, and reset
+ * deletes it. */
 struct Watched {
     mrb_int v = 3;
-    std::vector<WatchGuard *> guards;
-    ~Watched();
-};
-struct WatchGuard {
-    Watched *watched;
-    explicit WatchGuard(Watched *w) : watched(w) { w->guards.push_back(this); }
-    WatchGuard(const WatchGuard &) = delete;
-    WatchGuard &operator=(const WatchGuard &) = delete;
-    ~WatchGuard() { if (watched != nullptr) std::erase(watched->guards, this); }
-    Watched *get() const { return watched; }
-};
-Watched::~Watched()
-{
-    for (WatchGuard *g : guards) g->watched = nullptr;
-}
-template <>
-struct mrb_cpp_reflector::reflect_ownership_traits<Watched> {
-    using guard = WatchGuard;
 };
 struct WatchedHolder {
     std::unique_ptr<Watched> held = std::make_unique<Watched>();
@@ -597,6 +615,12 @@ struct Shape {
         const Point p{5};
         return measure(p);
     }
+    virtual int look(const Node &n) const { return static_cast<int>(n.child_count()); }
+    int probe_node() const
+    {
+        const Node n;
+        return look(n);
+    }
     int ask(int k) const { return area(k); }
     std::string told() const { return name(); }
     int counted() const { return sides(); }
@@ -696,7 +720,7 @@ struct TakesFragile {
 struct FragileHolder {
     Fragile item;
 };
-constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Sharer, ^^SelfSharer, ^^WatchedHolder, ^^Lender, ^^Shelf, ^^PlainSharer, ^^Fragile, ^^TakesFragile, ^^FragileHolder, ^^Scored, ^^Measure, ^^Link, ^^free_functions, ^^Odd, ^^Converts, ^^Outer, ^^Diamond, ^^TakesRvalues, ^^Flags, ^^Declared, ^^Unbuilt, ^^Held<long>, ^^Color, ^^Flag, ^^Palette, ^^Mark, ^^Choices, ^^Grid, ^^Counting, ^^Keeper, ^^ConvertsExplicitly, ^^std::pair<const std::string, int>, ^^std::pair<std::string, int>>();
+constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Leaf, ^^Forest, ^^Hand, ^^Sharer, ^^SelfSharer, ^^WatchedHolder, ^^Lender, ^^Shelf, ^^PlainSharer, ^^Fragile, ^^TakesFragile, ^^FragileHolder, ^^Scored, ^^Measure, ^^Link, ^^free_functions, ^^Odd, ^^Converts, ^^Outer, ^^Diamond, ^^TakesRvalues, ^^Flags, ^^Declared, ^^Unbuilt, ^^Held<long>, ^^Color, ^^Flag, ^^Palette, ^^Mark, ^^Choices, ^^Grid, ^^Counting, ^^Keeper, ^^ConvertsExplicitly, ^^std::pair<const std::string, int>, ^^std::pair<std::string, int>>();
 constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();
 constexpr auto nested = mrb_cpp_reflector::reflect<^^Holder>();
 constexpr auto named = mrb_cpp_reflector::reflect<^^fruit::Basket::count<fruit::Apple>>();
@@ -760,10 +784,41 @@ static mrb_value cancelled_m(mrb_state *mrb, mrb_value)
     return mrb_bool_value(result == PTHREAD_CANCELED);
 }
 
+/* mrb_close frees every object. A tree whose parents and children are
+ * all alive then must lose each C++ object once, children before their
+ * parents, and no free may read an mruby object that is already freed. */
+static mrb_value tree_freed_at_close_q(mrb_state *mrb, mrb_value)
+{
+    const mrb_int nodes = nodes_alive();
+    const mrb_int leaves = leaves_alive();
+    mrb_state *const other = mrb_open();
+    mrb_cpp_reflector::reflect_define<classes>(other);
+    mrb_load_string(other, "$kept = []\n"
+                           "30.times do\n"
+                           "  r = Node.new; r.grow; r.grow; r.first.grow\n"
+                           "  $kept << r.first.first << r.first.tag << r << r.second << r.first\n"
+                           "  l = Leaf.new; l.grow; l.child.grow\n"
+                           "  $kept << l.child.child.tag << l << l.child << l.child.child\n"
+                           "end\n");
+    const bool raised = other->exc != nullptr;
+    const bool grown = nodes_alive() == nodes + 120 && leaves_alive() == leaves + 90;
+    mrb_close(other);
+    return mrb_bool_value(!raised && grown && nodes_alive() == nodes && leaves_alive() == leaves);
+}
+
 static mrb_value full_gc_m(mrb_state *mrb, mrb_value)
 {
     mrb_full_gc(mrb);
     return mrb_nil_value();
+}
+
+/* The number of live objects after a full collection tells whether
+ * something grows with the number of calls. */
+static mrb_value live_objects_m(mrb_state *mrb, mrb_value)
+{
+    mrb_full_gc(mrb);
+    mrb_full_gc(mrb);
+    return mrb_int_value(mrb, static_cast<mrb_int>(mrb->gc.live));
 }
 
 /* reflect_undefined raises in the state whose call reached it, even
@@ -782,6 +837,8 @@ extern "C" void mrb_mruby_cpp_reflection_gem_test(mrb_state *mrb)
 {
     mrb_define_module_function(mrb, mrb->kernel_module, "undefined_after_other_state", undefined_after_other_state_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "full_gc", full_gc_m, MRB_ARGS_NONE());
+    mrb_define_module_function(mrb, mrb->kernel_module, "tree_freed_at_close?", tree_freed_at_close_q, MRB_ARGS_NONE());
+    mrb_define_module_function(mrb, mrb->kernel_module, "live_objects", live_objects_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "cancelled_through_a_call?", cancelled_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "second_state", second_state_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "constructed", constructed_m, MRB_ARGS_NONE());

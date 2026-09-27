@@ -30,13 +30,23 @@ namespace mrb_cpp_reflector {
 int reflect_free_object(mrb_state *const mrb, RBasic *const object, void *)
 {
     if (mrb_object_dead_p(mrb, object) || object->tt != MRB_TT_CDATA || object->c == nullptr) return MRB_EACH_OBJ_OK;
-    const mrb_value value = mrb_obj_value(object);
-    if (!mrb_cpp_reflector::reflect_reflected(mrb, value)) return MRB_EACH_OBJ_OK;
-    const mrb_data_type *const type = DATA_TYPE(value);
-    void *const data = DATA_PTR(value);
-    mrb_data_init(value, nullptr, nullptr);
-    if (type != nullptr && type->dfree != nullptr && data != nullptr) type->dfree(mrb, data);
-    return MRB_EACH_OBJ_OK;
+    reflect_lifetime_base *const top = reflect_record(mrb, mrb_obj_value(object));
+    if (top == nullptr) return MRB_EACH_OBJ_OK;
+    reflect_lifetime_base *at = top;
+    for (;;) {
+        const auto child = std::ranges::find_if(at->children, [](const reflect_lifetime_base *const c) { return c != nullptr; });
+        if (child != at->children.end()) {
+            at = *child;
+            continue;
+        }
+        reflect_lifetime_base *const up = at->parent;
+        const mrb_value value = mrb_obj_value(at->ruby);
+        const mrb_data_type *const type = DATA_TYPE(value);
+        mrb_data_init(value, nullptr, nullptr);
+        type->dfree(mrb, at);
+        if (at == top) return MRB_EACH_OBJ_OK;
+        at = up;
+    }
 }
 }
 

@@ -269,32 +269,59 @@ assert('a std::function made from Ruby goes back as the object it was made from'
   assert_same(l, c.given)
 end
 
-def node_tree_without_a_reference
+# A node owns its children through std::unique_ptr and its tag by value.
+# While the Ruby object of a field lives, a second read gives it again.
+assert('a field read twice is the same object') do
+  n = Node.new
+  n.grow
+  assert_same(n.tag, n.tag)
+  assert_same(n.first, n.first)
+  assert_true(n.first.equal?(n.first))
+  assert_nil(n.second)
+  assert_same(n.first.tag, n.first.tag)
+end
+
+# The Ruby object of a child refers to its parent, so a child that Ruby
+# holds keeps its parent and works after a collection.
+def child_of_a_dropped_root
   root = Node.new
-  Node.new(root)
-  Node.new(root)
+  root.grow
+  root.first
+end
+
+assert('a child keeps its parent alive') do
+  child = child_of_a_dropped_root
+  full_gc
+  assert_equal(0, child.child_count)
+  assert_equal(1, child.tag.n)
+end
+
+# When the Ruby object of a child is collected first, the C++ child stays
+# with its parent, and a later read gives a Ruby object that works.
+def first_child_read_and_dropped(root)
+  root.first.tag
   nil
 end
 
-assert('an object with a parent lives as long as its parent') do
-  full_gc
-  base = Node.alive
+assert('a child collected before its parent leaves the C++ child to the parent') do
   root = Node.new
-  child = Node.new
-  child.set_parent(root)
-  child.instance_variable_set(:@tag, 5)
-  child = nil
+  root.grow
+  first_child_read_and_dropped(root)
   full_gc
-  assert_equal(base + 2, Node.alive)
-  assert_equal(5, root.child_at(0).instance_variable_get(:@tag))
-  assert_same(root.child_at(0), root.child_at(0))
-  Node.new(root)
-  full_gc
-  assert_equal(2, root.child_count)
-  assert_equal(base + 3, Node.alive)
+  assert_equal(1, root.child_count)
+  assert_equal(0, root.first.child_count)
 end
 
-assert('an object without a parent is freed with its children') do
+def node_tree_without_a_reference
+  root = Node.new
+  root.grow
+  root.grow
+  root.first.tag
+  root.second
+  nil
+end
+
+assert('a node that Ruby made is freed with its children') do
   full_gc
   base = Node.alive
   node_tree_without_a_reference
@@ -302,19 +329,153 @@ assert('an object without a parent is freed with its children') do
   assert_equal(base, Node.alive)
 end
 
-def node_child_of_a_dropped_root
-  Node.new(Node.new)
+# C++ deletes a child when its unique_ptr is reset or given another
+# object. The Ruby object of the old child then raises instead of reading
+# freed memory, for a type with a virtual destructor and for one without.
+assert('a child that C++ replaced raises when used') do
+  root = Node.new
+  root.grow
+  child = root.first
+  tag = child.tag
+  root.cut_first
+  assert_raise(TypeError) { child.child_count }
+  assert_raise(TypeError) { tag.n }
+  leaf = Leaf.new
+  leaf.grow
+  kid = leaf.child
+  kid_tag = kid.tag
+  leaf.cut
+  assert_raise(TypeError) { kid.grow }
+  assert_raise(TypeError) { kid_tag.n }
+  leaf.grow
+  kid = leaf.child
+  Leaf.cut_child_of(leaf)
+  assert_raise(TypeError) { kid.tag }
+  root.grow
+  root.grow
+  a = root.first
+  b = root.second
+  root.swap_children
+  assert_raise(TypeError) { a.child_count }
+  assert_raise(TypeError) { b.child_count }
+  assert_equal(2, root.child_count)
 end
 
-assert('a Ruby object whose C++ object C++ deleted raises when used') do
+assert('the children of a deleted child raise when used') do
   root = Node.new
-  child = Node.new(root)
-  root.delete_child(0)
-  assert_equal(0, root.child_count)
-  assert_raise(TypeError) { child.child_count }
-  orphan = node_child_of_a_dropped_root
+  root.grow
+  root.first.grow
+  root.first.first.grow
+  middle = root.first
+  low = middle.first
+  lowest = low.first
+  tag = lowest.tag
+  root.cut_first
+  [middle, low, lowest].each { |n| assert_raise(TypeError) { n.child_count } }
+  assert_raise(TypeError) { tag.n }
+end
+
+# The collector frees the Ruby objects of a tree in the order of their
+# addresses, and frees a page whose objects are all dead. The parent can
+# go before its child or after it, in one sweep, and a destructor deletes
+# a chain of children while their Ruby objects wait for the same sweep.
+# Each C++ object must then be deleted once.
+def node_trees(count)
+  Array.new(count) do
+    t = Node.new
+    t.grow
+    t.first.grow
+    [t, t.first, t.first.first, t.first.tag]
+  end
+  nil
+end
+
+def leaf_trees(count)
+  Array.new(count) do
+    t = Leaf.new
+    t.grow
+    t.child.grow
+    [t, t.child, t.child.child, t.child.tag]
+  end
+  nil
+end
+
+def roots_then_children(count)
+  roots = Array.new(count) do
+    t = Leaf.new
+    t.grow
+    t
+  end
+  Array.new(count * 2) { Object.new }
   full_gc
-  assert_raise(TypeError) { orphan.child_count }
+  roots.reverse.map(&:child)
+  nil
+end
+
+assert('the collector deletes each object of a tree once, in any order, in one sweep') do
+  full_gc
+  nodes = Node.alive
+  leaves = Leaf.alive
+  node_trees(10000)
+  leaf_trees(10000)
+  full_gc
+  assert_equal(nodes, Node.alive)
+  assert_equal(leaves, Leaf.alive)
+  roots_then_children(10000)
+  full_gc
+  assert_equal(leaves, Leaf.alive)
+end
+
+# allocate makes an object without a C++ object, and initialize gives it
+# one. A copy made by dup or clone is a new C++ object that Ruby owns.
+assert('allocate, dup and clone make objects that are safe to use') do
+  a = Node.allocate
+  assert_raise(TypeError) { a.child_count }
+  a.send(:initialize)
+  assert_equal(0, a.child_count)
+  n = Node.new
+  assert_raise(TypeError) { n.dup }
+  assert_raise(TypeError) { n.clone }
+  s = S.new(4)
+  d = s.dup
+  c = s.clone
+  s.v = 5
+  assert_equal([5, 4, 4], [s.v, d.v, c.v])
+  label = Reflected.new.label.dup
+  full_gc
+  assert_equal('l', label.to_s)
+end
+
+# The elements of a container of std::unique_ptr have no field of their
+# own, so a pointer to one is a frozen copy, or refused when the type
+# cannot be copied. The copy outlives the container.
+assert('an element of a container of unique_ptr is copied or refused') do
+  f = Forest.new
+  f.plant
+  f.plant
+  plain = f.plain(1)
+  assert_true(plain.frozen?)
+  assert_equal(2, plain.n)
+  assert_raise(TypeError) { f.leaf(0) }
+  f.clear
+  assert_equal(2, plain.n)
+  assert_raise(IndexError) { f.plain(0) }
+end
+
+# No type says that Hand deletes what it holds, so Ruby gets no object
+# for it, and the destructor deletes it once.
+def hand_dropped
+  Hand.new.item
+rescue TypeError
+  nil
+end
+
+assert('an object that a destructor deletes by hand is refused') do
+  full_gc
+  base = Leaf.alive
+  hand_dropped
+  full_gc
+  assert_equal(base, Leaf.alive)
 end
 
 def share_made_and_dropped(sharer)
@@ -355,27 +516,38 @@ assert('a pointer to an object that shares from itself keeps a share') do
   sharer = nil
 end
 
-assert('an object C++ deleted raises through its guard') do
+# The field of a std::unique_ptr is the object it holds, and a pointer
+# to that object is the same Ruby object. After reset the object raises.
+assert('an object that C++ deleted through a unique_ptr raises') do
   holder = WatchedHolder.new
-  watched = holder.get
+  watched = holder.held
   assert_equal(3, watched.v)
+  assert_same(watched, holder.get)
   holder.reset
   assert_raise(TypeError) { watched.v }
+  assert_nil(holder.get)
+  assert_nil(holder.held)
 end
 
-# A reference that a method returns can end before the Ruby object
-# does, so Ruby gets a copy. The copy is frozen, so a write to it raises
-# and is not lost. A method that returns *this returns the receiver.
-assert('a reference to another object is a frozen copy, and *this is self') do
+# A std::shared_ptr field gives a share of its object to Ruby, so the
+# object lives while Ruby holds it.
+assert('a shared_ptr field gives Ruby a share') do
+  sharer = Sharer.new
+  sharer.keep(4)
+  held = sharer.held
+  sharer.drop
+  full_gc
+  assert_equal(4, held.v)
+end
+
+# A reference to an object that Ruby holds is that object, and a method
+# that returns *this returns the receiver.
+assert('a reference to an object Ruby holds is that object, and *this is self') do
   a = Link.new
   b = Link.new
   b.v = 7
   a.attach(b)
-  other = a.follow
-  assert_false(other.equal?(a))
-  assert_equal(7, other.v)
-  assert_true(other.frozen?)
-  assert_raise(FrozenError) { other.v = 1 }
+  assert_same(b, a.follow)
   assert_same(a, a.itself)
 end
 
@@ -387,15 +559,6 @@ assert('a reference from a method is a copy, and a field is lent') do
   assert_true(view.frozen?)
   assert_equal([1, 2, 3], lender.items.to_a)
   assert_raise(TypeError) { lender.alone }
-end
-
-assert('a field goes with the object it belongs to') do
-  root = Node.new
-  child = Node.new(root)
-  tag = child.tag
-  assert_equal(1, tag.n)
-  root.delete_child(0)
-  assert_raise(TypeError) { tag.n }
 end
 
 assert('dup and clone copy the C++ object with its copy constructor') do
@@ -767,7 +930,7 @@ end
 # and none reads the missing object or answers without it.
 $allocated = []
 assert('an object without its C++ object raises on every method that needs it') do
-  [Color, Flag, Std::String, Shelf, Operand, Measure, Link, Reflected, Node, Lender, D, S, Z, X, Y, F, Static, Thrower, Callback,
+  [Color, Flag, Std::String, Shelf, Operand, Measure, Link, Reflected, Node, Leaf, Forest, Hand, Lender, D, S, Z, X, Y, F, Static, Thrower, Callback,
    Sharer, SelfSharer, WatchedHolder, Odd, Converts, Outer, Diamond, TakesRvalues, Flags, Declared, Palette, Mark, Choices,
    Grid, Counting, Keeper, ConvertsExplicitly, Shapes::Square, Ops::Vec, Ops::Log, Scored].each do |klass|
     empty = klass.allocate
@@ -795,7 +958,7 @@ end
 # UndefinedBehaviorSanitizer, which stop the process at such a read.
 assert('wrong arguments never make C++ read memory it must not') do
   wrong = [nil, true, -1, 2**62, -2**62, 1.5, Float::NAN, 1e300, 'x', :x, [], {}, Object.new, Operand.new(1), Shelf.new]
-  [Shelf, Operand, Measure, Link, Reflected, Node, Lender, D, S, Z, F, Static, Callback, Sharer, SelfSharer,
+  [Shelf, Operand, Measure, Link, Reflected, Node, Leaf, Forest, Hand, Lender, D, S, Z, F, Static, Callback, Sharer, SelfSharer,
    WatchedHolder, Palette, Keeper, Ops::Log].each do |klass|
     object = begin; klass.new; rescue StandardError; next; end
     klass.instance_methods.each do |name|
@@ -976,42 +1139,6 @@ assert('a variant is the value it holds') do
   assert_equal(1, c.take('2'))
 end
 
-# Who deletes a node is decided when the collector frees its Ruby object:
-# a node that has a parent in C++ at that moment belongs to that parent,
-# whichever parent it had when Ruby made it. One without a parent belongs
-# to Ruby again.
-def reparented_child_under(new_parent)
-  old_parent = Node.new
-  child = Node.new(old_parent)
-  child.set_parent(new_parent)
-  nil
-end
-
-def child_released_by_its_parent
-  parent = Node.new
-  child = Node.new(parent)
-  child.set_parent(nil)
-  nil
-end
-
-assert('the collector leaves a node that C++ moved to another parent') do
-  keeper = Node.new
-  reparented_child_under(keeper)
-  full_gc
-  full_gc
-  assert_equal(1, keeper.child_count)
-end
-
-assert('the collector deletes a node whose parent C++ removed') do
-  full_gc
-  full_gc
-  base = Node.alive
-  child_released_by_its_parent
-  full_gc
-  full_gc
-  assert_equal(base, Node.alive)
-end
-
 # Ruby can include the methods of a reflected class into any class. The
 # receiver of such a method is then an object that C++ did not make, and
 # the call must refuse it instead of reading it as the reflected type.
@@ -1075,4 +1202,72 @@ assert('a coroutine refuses to be resumed while it runs') do
   g = Counting.filtered(3, ->(i) { g.next if i == 1; true })
   assert_raise(RuntimeError) { g.to_a }
   assert_equal([], g.to_a)
+end
+
+# A lent argument lives for the call. Ruby may keep its object, which
+# then raises. The call adds nothing that outlives it, so many calls
+# leave as many objects as one.
+assert('a lent argument ends with the call, and calls do not grow memory') do
+  r = RubyShape.new(1)
+  r.probe
+  n = Node.new
+  n.grow
+  n.tag
+  before = live_objects
+  100000.times do
+    r.probe
+    n.tag
+    n.first
+  end
+  after = live_objects
+  assert_true(after - before < 100, "#{after - before} objects more")
+  assert_raise(TypeError) { r.kept.x }
+end
+
+# A C++ object at the address of an ended one is a new object. The Ruby
+# object of the old one must not stand for it.
+class Peeker < Shapes::Shape
+  def sides = 1
+
+  def look(n)
+    @kept = n
+    n.child_count + 10
+  end
+end
+
+assert('an object at the address of an ended one is a new Ruby object') do
+  pk = Peeker.new(1)
+  assert_equal(10, pk.probe_node)
+  first = pk.instance_variable_get(:@kept)
+  assert_raise(TypeError) { first.child_count }
+  pk.instance_variable_set(:@kept, nil)
+  first = nil
+  full_gc
+  10.times { Object.new }
+  assert_equal(10, pk.probe_node)
+  assert_raise(TypeError) { pk.instance_variable_get(:@kept).child_count }
+end
+
+# initialize again would put a second C++ object under a Ruby object that
+# C++ or other Ruby objects may already refer to, so it raises.
+assert('initialize on an object that holds a C++ object raises') do
+  root = Node.new
+  root.grow
+  child = root.first
+  assert_raise(TypeError) { root.send(:initialize) }
+  full_gc
+  10.times { Object.new }
+  assert_equal(0, child.child_count)
+  assert_equal(1, root.child_count)
+  s = S.new(1)
+  assert_raise(TypeError) { s.send(:initialize, 2) }
+  assert_raise(TypeError) { s.send(:initialize_copy, S.new(3)) }
+  assert_equal(1, s.v)
+  square = RubySquare.new(2)
+  assert_raise(TypeError) { square.send(:initialize, 3) }
+  assert_equal(80, square.ask(2))
+end
+
+assert('mrb_close deletes a live tree once, children before parents') do
+  assert_true(tree_freed_at_close?)
 end
