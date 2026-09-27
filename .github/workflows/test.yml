@@ -50,3 +50,4 @@ jobs:
           ruby tools/relink.rb "g++" -o main.exe main.o undefined.o || exit /b 1
           main.exe
           if %errorlevel% neq 42 exit /b 1
+          exit /b 0
