@@ -698,3 +698,34 @@ assert('a C array field reads as a copy and writes from an Array of its length')
   assert_equal([0.5, 1.5], g.fixed)
   assert_false(g.respond_to?(:fixed=))
 end
+
+# A variant holds one of its alternatives and knows which. In Ruby it is
+# the value it holds. From Ruby, the first alternative of the value's own
+# type is taken. Else a Ruby number goes to the first number alternative,
+# as a Ruby user passes a Numeric, and a value answering to_str, to_ary or
+# to_hash to the first alternative of that kind. A String is no number.
+assert('a variant is the value it holds') do
+  c = Choices.new
+  assert_equal(5, c.value)
+  c.value = 'x'
+  assert_equal('x', c.value.to_s)
+  c.value = Mark.new
+  assert_equal(Mark, c.value.class)
+  assert_raise(TypeError) { c.value = :symbol }
+  assert_raise(TypeError) { c.value = nil }
+  assert_raise(TypeError) { c.take(RuntimeError.new('x')) }
+  text = Object.new
+  def text.to_str = 'like a string'
+  assert_equal(1, c.take(text))
+  assert_equal(7, c.which(0))
+  assert_equal('text', c.which(1).to_s)
+  assert_equal(3, c.which(2).n)
+  assert_equal(0, c.take(5))
+  assert_equal(1, c.take('x'))
+  assert_equal(2, c.take(Mark.new))
+  c.measure = 2
+  assert_equal(2.0, c.measure)
+  assert_raise(TypeError) { c.measure = :x }
+  assert_equal(0, c.take(2.5))
+  assert_equal(1, c.take('2'))
+end

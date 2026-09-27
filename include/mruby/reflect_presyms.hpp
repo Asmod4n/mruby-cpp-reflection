@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <variant>
 #include <mruby/common.h>
 struct mrb_state;
 typedef struct mrb_state mrb_state;
@@ -199,8 +200,20 @@ consteval bool reflect_complete(const std::meta::info type)
     return true;
 }
 
+consteval bool reflect_is_variant(const std::meta::info type)
+{
+    const std::meta::info t = reflect_bare(type);
+    return std::meta::is_class_type(t) && std::meta::has_template_arguments(t) && std::meta::template_of(t) == ^^std::variant;
+}
+
 consteval bool reflect_parameter_supported(const std::meta::info type)
 {
+    if (reflect_is_variant(type)) {
+        if (reflect_mutates(type)) return false;
+        for (const std::meta::info a : std::meta::template_arguments_of(reflect_bare(type)))
+            if (!reflect_parameter_supported(a)) return false;
+        return true;
+    }
     if (!reflect_complete(type)) return false;
     if (reflect_get_args_letter(type) == '\0') return false;
     const bool class_pointer = std::meta::is_pointer_type(reflect_bare(type)) &&
@@ -222,6 +235,11 @@ consteval bool reflect_result_supported(const std::meta::info type)
 {
     if (!reflect_complete(type)) return false;
     const std::meta::info bare = reflect_bare(type);
+    if (reflect_is_variant(bare)) {
+        for (const std::meta::info a : std::meta::template_arguments_of(bare))
+            if (!reflect_result_supported(a)) return false;
+        return true;
+    }
     if (std::meta::is_array_type(bare))
         return std::meta::extent(bare) > 0 && !std::meta::is_array_type(std::meta::remove_extent(bare)) && reflect_result_supported(std::meta::remove_extent(bare));
     if (bare == ^^void || bare == std::meta::dealias(^^mrb_value) || bare == ^^bool || std::meta::is_arithmetic_type(bare) || std::meta::is_enum_type(bare)) return true;

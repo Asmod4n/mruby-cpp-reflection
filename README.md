@@ -83,6 +83,13 @@ type is defined with its class only where a member uses it.
   constant, and a value that is no enumerator is a frozen instance of its
   own. A parameter takes only an instance. `to_i` gives the value, and a
   plain `enum` also answers `to_int`. Instances compare by value.
+- A `std::variant` is the value it holds, converted by `std::visit`. From
+  Ruby, the first alternative of the value's own type is taken. Else a Ruby
+  number goes to the first number alternative, and a value that answers
+  `to_str`, `to_ary` or `to_hash` to the first alternative of that kind.
+  A String is no number. Anything else raises `TypeError`.
+- Left out: raw function pointers, pointers to members, arrays of more
+  than one dimension. `std::any` is an object with its C++ methods.
 - A conversion function to an integer, a floating point type or text
   answers `to_i`, `to_f` or `to_s`, and `to_int` or `to_str` where it is
   not `explicit`.

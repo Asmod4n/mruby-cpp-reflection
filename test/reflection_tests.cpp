@@ -8,6 +8,7 @@
  * reflection builds this; elsewhere the class is absent and test.rb
  * skips the assertions.
  */
+#include <variant>
 #include <generator>
 #include <mruby.h>
 #if defined(__cpp_impl_reflection)
@@ -558,6 +559,20 @@ struct Grid {
     const double fixed[2] = {0.5, 1.5};
     int sum() const { return cells[0] + cells[1] + cells[2]; }
 };
+struct Mark {
+    int n = 1;
+};
+struct Choices {
+    std::variant<int, std::string, Mark> value = 5;
+    std::variant<double, std::string> measure = 0.5;
+    std::variant<int, std::string, Mark> which(int kind) const
+    {
+        if (kind == 0) return 7;
+        if (kind == 1) return std::string("text");
+        return Mark{3};
+    }
+    std::size_t take(const std::variant<int, std::string, Mark> &v) const { return v.index(); }
+};
 struct Converts {
     operator int() const { return 7; }
     operator double() const { return 2.5; }
@@ -585,7 +600,7 @@ mrb_int twice(mrb_int n, mrb_int m) { return n * m * 2; }
 mrb_int scaled(mrb_int n, mrb_int by = 3) { return n * by; }
 Plain made(mrb_int n) { return Plain{n}; }
 }
-constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Sharer, ^^SelfSharer, ^^WatchedHolder, ^^Lender, ^^free_functions, ^^Odd, ^^Converts, ^^Outer, ^^Diamond, ^^TakesRvalues, ^^Flags, ^^Declared, ^^Color, ^^Flag, ^^Palette, ^^Grid, ^^Counting, ^^Keeper, ^^ConvertsExplicitly, ^^std::pair<const std::string, int>, ^^std::pair<std::string, int>>();
+constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Sharer, ^^SelfSharer, ^^WatchedHolder, ^^Lender, ^^free_functions, ^^Odd, ^^Converts, ^^Outer, ^^Diamond, ^^TakesRvalues, ^^Flags, ^^Declared, ^^Color, ^^Flag, ^^Palette, ^^Mark, ^^Choices, ^^Grid, ^^Counting, ^^Keeper, ^^ConvertsExplicitly, ^^std::pair<const std::string, int>, ^^std::pair<std::string, int>>();
 constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();
 constexpr auto nested = mrb_cpp_reflector::reflect<^^Holder>();
 constexpr auto named = mrb_cpp_reflector::reflect<^^fruit::Basket::count<fruit::Apple>>();

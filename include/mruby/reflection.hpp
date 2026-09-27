@@ -41,6 +41,7 @@ extern const struct mrb_data_type mrb_const_void_pointer_type;
 #include <memory>
 #include <unordered_map>
 #include <optional>
+#include <variant>
 #include <ranges>
 #include <span>
 #include <filesystem>
@@ -742,11 +743,65 @@ bool reflect_implicitly_converts(mrb_state *mrb, mrb_value v);
 template <std::meta::info Function, bool Converting = true>
 bool reflect_get_args_match(mrb_state *mrb, std::span<const mrb_value> argv);
 
+template <class A>
+bool reflect_variant_exact(mrb_state *const mrb, const mrb_value v)
+{
+    if constexpr (std::same_as<A, bool>) return mrb_true_p(v) || mrb_false_p(v);
+    else if constexpr (std::integral<A>) return mrb_integer_p(v);
+    else if constexpr (std::floating_point<A>) return mrb_float_p(v);
+    else if constexpr (std::same_as<A, std::string> || std::same_as<A, std::string_view>) return mrb_string_p(v);
+    else if constexpr (std::is_class_v<A> || std::is_enum_v<A>) return reflect_ptr<A>(mrb, v) != nullptr;
+    else return false;
+}
+
+template <class A>
+A reflect_variant_alternative(mrb_state *const mrb, const mrb_value v)
+{
+    if constexpr ((std::is_class_v<A> || std::is_enum_v<A>) && !std::same_as<A, std::string> && !std::same_as<A, std::string_view>) return *reflect_ptr<A>(mrb, v);
+    else return mrb_value_to<A>(mrb, v);
+}
+
+template <class T>
+std::optional<T> reflect_variant_from(mrb_state *const mrb, const mrb_value v)
+{
+    std::optional<T> made;
+    [&]<std::size_t... I>(std::index_sequence<I...>) {
+        const auto exact = [&]<std::size_t J>() {
+            using A = std::variant_alternative_t<J, T>;
+            if (!made && reflect_variant_exact<A>(mrb, v)) made.emplace(std::in_place_index<J>, reflect_variant_alternative<A>(mrb, v));
+        };
+        const auto converted = [&]<std::size_t J>() {
+            using A = std::variant_alternative_t<J, T>;
+            namespace vc = mrbcpp::value_converter;
+            if (made) return;
+            mrb_value c = mrb_nil_value();
+            const bool numeric = mrb_obj_is_kind_of(mrb, v, mrb_class_get(mrb, "Numeric"));
+            if constexpr (std::integral<A> && !std::same_as<A, bool>) {
+                if (numeric) c = mrb_ensure_integer_type(mrb, v);
+            } else if constexpr (std::floating_point<A>) {
+                if (numeric) c = mrb_ensure_float_type(mrb, v);
+            } else if constexpr (std::same_as<A, std::string>) c = mrb_type_convert_check(mrb, v, MRB_TT_STRING, mrb_intern_lit(mrb, "to_str"));
+            else if constexpr (vc::is_std_vector<A>::value && reflect_from_mrb<A>) c = mrb_type_convert_check(mrb, v, MRB_TT_ARRAY, mrb_intern_lit(mrb, "to_ary"));
+            else if constexpr (vc::is_map_like_v<A> && reflect_from_mrb<A>) c = mrb_type_convert_check(mrb, v, MRB_TT_HASH, mrb_intern_lit(mrb, "to_hash"));
+            if constexpr (reflect_from_mrb<A>)
+                if (!mrb_nil_p(c)) made.emplace(std::in_place_index<J>, mrb_value_to<A>(mrb, c));
+        };
+        (exact.template operator()<I>(), ...);
+        (converted.template operator()<I>(), ...);
+    }(std::make_index_sequence<std::variant_size_v<T>>{});
+    return made;
+}
+
 template <std::meta::info ParameterType, bool Converting = true>
 auto reflect_argument(mrb_state *const mrb, const mrb_value v)
 {
     constexpr std::meta::info type = ParameterType;
     using T = [:reflect_bare(type):];
+    if constexpr (reflect_is_variant(type)) {
+        std::optional<T> made = reflect_variant_from<T>(mrb, v);
+        if (!made) [[unlikely]] mrb_raisef(mrb, E_TYPE_ERROR, "%T fits no alternative of the variant", v);
+        return std::move(*made);
+    } else
     if constexpr (std::meta::is_pointer_type(std::meta::dealias(type))) {
         using P = [:std::meta::dealias(std::meta::remove_cv(std::meta::remove_pointer(std::meta::dealias(type)))):];
         if constexpr (std::is_void_v<P>) return reflect_void_ptr<typename [:std::meta::remove_pointer(std::meta::dealias(type)):]>(mrb, v);
@@ -925,6 +980,8 @@ mrb_value reflect_result(mrb_state *const mrb, const mrb_value self, R &&value)
         if (const reflect_callable<Signature> *const made = value.template target<reflect_callable<Signature>>(); made != nullptr) return made->root->object;
     }
     if constexpr (std::same_as<T, mrb_value>) return value;
+    else if constexpr (reflect_is_variant(^^T))
+        return std::visit([&](const auto &held) { return reflect_result(mrb, mrb_nil_value(), std::remove_cvref_t<decltype(held)>(held)); }, value);
     else if constexpr (std::is_enum_v<T>) return reflect_enumerator(mrb, static_cast<T>(value));
     else if constexpr (std::same_as<T, bool> || std::is_arithmetic_v<T>) return cpp_to_mrb_value(mrb, value);
     else if constexpr (std::same_as<T, std::strong_ordering> || std::same_as<T, std::weak_ordering> || std::same_as<T, std::partial_ordering>)
@@ -1179,6 +1236,8 @@ bool reflect_get_args_match(mrb_state *const mrb, const std::span<const mrb_valu
                 fits = mrb_nil_p(v) || mrb_data_check_get_ptr(mrb, v, &mrb_void_pointer_type) != nullptr;
                 if constexpr (std::meta::is_const_type(std::meta::remove_pointer(reflect_bare(std::meta::type_of(P)))))
                     fits = fits || mrb_data_check_get_ptr(mrb, v, &mrb_const_void_pointer_type) != nullptr;
+            } else if constexpr (letter == 'o' && reflect_is_variant(std::meta::type_of(P))) {
+                fits = reflect_variant_from<typename [:reflect_bare(std::meta::type_of(P)):]>(mrb, v).has_value();
             } else if constexpr (letter == 'o' && reflect_is_object(std::meta::type_of(P))) {
                 using T = [:reflect_bare(std::meta::type_of(P)):];
                 fits = reflect_ptr<T>(mrb, v) != nullptr || ((!reflect_mutates(std::meta::type_of(P)) && reflect_from_mrb<T>) ||
@@ -1318,7 +1377,8 @@ void reflect_define_field(mrb_state *const mrb, RClass *const klass)
         T *const object = reflect_ptr<T>(mrb, self);
         if (object == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
         using F = [:reflect_bare(std::meta::type_of(Field)):];
-        if constexpr (std::is_array_v<F>) {
+        if constexpr (reflect_is_variant(^^F)) return reflect_result(mrb, self, object->[:Field:]);
+        else if constexpr (std::is_array_v<F>) {
             const mrb_value array = mrb_ary_new_capa(mrb, static_cast<mrb_int>(std::extent_v<F>));
             for (const auto &element : object->[:Field:]) mrb_ary_push(mrb, array, reflect_result(mrb, mrb_nil_value(), std::remove_cvref_t<decltype(element)>(element)));
             return array;
@@ -1340,7 +1400,11 @@ void reflect_define_field(mrb_state *const mrb, RClass *const klass)
             mrb_value v;
             mrb_get_args(mrb, "o", &v);
             using F = [:reflect_bare(std::meta::type_of(Field)):];
-            if constexpr (std::is_array_v<F>) {
+            if constexpr (reflect_is_variant(^^F)) {
+                std::optional<F> made = reflect_variant_from<F>(mrb, v);
+                if (!made) [[unlikely]] mrb_raisef(mrb, E_TYPE_ERROR, "%T fits no alternative of the variant", v);
+                object->[:Field:] = std::move(*made);
+            } else if constexpr (std::is_array_v<F>) {
                 using E = std::remove_extent_t<F>;
                 if (!mrb_array_p(v) || RARRAY_LEN(v) != static_cast<mrb_int>(std::extent_v<F>)) [[unlikely]]
                     mrb_raisef(mrb, E_ARGUMENT_ERROR, "an Array of %d elements wanted", static_cast<int>(std::extent_v<F>));
