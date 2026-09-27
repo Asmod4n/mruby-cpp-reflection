@@ -722,7 +722,8 @@ struct reflect_callable<R(A...)> {
     {
         mrb_state *const mrb = root->mrb;
         const std::array<mrb_value, sizeof...(A)> argv{reflect_result(mrb, mrb_nil_value(), std::forward<A>(args))...};
-        const mrb_value answer = mrb_funcall_argv(mrb, root->object, mrb_intern_lit(mrb, "call"), static_cast<mrb_int>(argv.size()), argv.data());
+        const mrb_value answer = mrb_proc_p(root->object) ? mrb_yield_argv(mrb, root->object, static_cast<mrb_int>(argv.size()), argv.data())
+                                                          : mrb_funcall_argv(mrb, root->object, MRB_SYM(call), static_cast<mrb_int>(argv.size()), argv.data());
         if constexpr (std::is_void_v<R>) return;
         else if constexpr (std::is_pointer_v<R> && std::is_void_v<std::remove_pointer_t<R>>) return reflect_void_ptr<std::remove_pointer_t<R>>(mrb, answer);
         else if constexpr (std::is_class_v<std::remove_cvref_t<R>> && !reflect_from_mrb<std::remove_cvref_t<R>>) {
@@ -736,7 +737,7 @@ struct reflect_callable<R(A...)> {
 template <class T>
 std::unique_ptr<T> reflect_function_from(mrb_state *const mrb, const mrb_value v)
 {
-    if (!mrb_respond_to(mrb, v, mrb_intern_lit(mrb, "call"))) return nullptr;
+    if (!mrb_respond_to(mrb, v, MRB_SYM(call))) return nullptr;
     using Signature = [:std::meta::template_arguments_of(std::meta::dealias(^^T))[0]:];
     return std::make_unique<T>(reflect_callable<Signature>{std::make_shared<reflect_gc_root>(mrb, v)});
 }
@@ -787,9 +788,9 @@ std::optional<T> reflect_variant_from(mrb_state *const mrb, const mrb_value v)
                 if (numeric) c = mrb_ensure_integer_type(mrb, v);
             } else if constexpr (std::floating_point<A>) {
                 if (numeric) c = mrb_ensure_float_type(mrb, v);
-            } else if constexpr (std::same_as<A, std::string>) c = mrb_type_convert_check(mrb, v, MRB_TT_STRING, mrb_intern_lit(mrb, "to_str"));
-            else if constexpr (vc::is_std_vector<A>::value && reflect_from_mrb<A>) c = mrb_type_convert_check(mrb, v, MRB_TT_ARRAY, mrb_intern_lit(mrb, "to_ary"));
-            else if constexpr (vc::is_map_like_v<A> && reflect_from_mrb<A>) c = mrb_type_convert_check(mrb, v, MRB_TT_HASH, mrb_intern_lit(mrb, "to_hash"));
+            } else if constexpr (std::same_as<A, std::string>) c = mrb_type_convert_check(mrb, v, MRB_TT_STRING, MRB_SYM(to_str));
+            else if constexpr (vc::is_std_vector<A>::value && reflect_from_mrb<A>) c = mrb_type_convert_check(mrb, v, MRB_TT_ARRAY, MRB_SYM(to_ary));
+            else if constexpr (vc::is_map_like_v<A> && reflect_from_mrb<A>) c = mrb_type_convert_check(mrb, v, MRB_TT_HASH, MRB_SYM(to_hash));
             if constexpr (reflect_from_mrb<A>)
                 if (!mrb_nil_p(c)) made.emplace(std::in_place_index<J>, mrb_value_to<A>(mrb, c));
         };
@@ -1285,7 +1286,7 @@ bool reflect_get_args_match(mrb_state *const mrb, const std::span<const mrb_valu
                 using T = [:reflect_bare(std::meta::type_of(P)):];
                 fits = reflect_ptr<T>(mrb, v) != nullptr || ((!reflect_mutates(std::meta::type_of(P)) && reflect_from_mrb<T>) ||
                                                         (Converting && !reflect_mutates(std::meta::type_of(P)) && reflect_implicitly_converts<T>(mrb, v)) ||
-                                                        (reflect_is_function(std::meta::type_of(P)) && mrb_respond_to(mrb, v, mrb_intern_lit(mrb, "call"))) ||
+                                                        (reflect_is_function(std::meta::type_of(P)) && mrb_respond_to(mrb, v, MRB_SYM(call))) ||
                                                         reflect_shares<T>(mrb, v));
                 if (fits && reflect_mutates(std::meta::type_of(P))) fits = !mrb_frozen_p(mrb_obj_ptr(v));
             }
@@ -1702,7 +1703,7 @@ void reflect_define_conversions(mrb_state *const mrb, RClass *const klass)
             constexpr auto each = [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
                 mrb_value block;
                 mrb_get_args(mrb, "&", &block);
-                if (mrb_nil_p(block)) return mrb_funcall_id(mrb, self, mrb_intern_lit(mrb, "to_enum"), 1, mrb_symbol_value(reflect_sym<kEach>(mrb)));
+                if (mrb_nil_p(block)) return mrb_funcall_id(mrb, self, MRB_SYM(to_enum), 1, mrb_symbol_value(reflect_sym<kEach>(mrb)));
                 for (std::size_t i = 0;; ++i) {
                     T *const object = reflect_ptr<T>(mrb, self);
                     if (object == nullptr) [[unlikely]] mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
@@ -1776,7 +1777,7 @@ consteval mrb_aspec reflect_call_aspec()
 template <std::meta::info Type, std::meta::info Subscript>
 void reflect_define_element_assignment(mrb_state *const mrb, RClass *const methods)
 {
-    ::mrb_define_method_id(mrb, methods, mrb_intern_lit(mrb, "[]="), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+    ::mrb_define_method_id(mrb, methods, MRB_OPSYM(aset), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
         using T = [:std::meta::dealias(Type):];
         using E = [:reflect_bare(std::meta::return_type_of(Subscript)):];
         mrb_check_frozen(mrb, mrb_obj_ptr(self));
@@ -2036,7 +2037,7 @@ RClass *reflect_define_class(reflect_definition &definition, RClass *const under
         MRB_UNDEF_ALLOCATOR(klass);
     }
     if constexpr (std::is_copy_constructible_v<T> && std::is_destructible_v<T> && !std::is_abstract_v<T>) {
-        ::mrb_define_method_id(mrb, klass, mrb_intern_lit(mrb, "initialize_copy"), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+        ::mrb_define_method_id(mrb, klass, MRB_SYM(initialize_copy), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
             mrb_value original;
             mrb_get_args(mrb, "o", &original);
             T *const source = reflect_ptr<T>(mrb, original);
@@ -2049,7 +2050,7 @@ RClass *reflect_define_class(reflect_definition &definition, RClass *const under
             });
         }, MRB_ARGS_REQ(1));
     } else {
-        ::mrb_define_method_id(mrb, klass, mrb_intern_lit(mrb, "initialize_copy"), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+        ::mrb_define_method_id(mrb, klass, MRB_SYM(initialize_copy), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
             mrb_raisef(mrb, E_TYPE_ERROR, "can't copy %s", std::define_static_string(reflect_class_name(std::meta::dealias(Type))));
             std::unreachable();
         }, MRB_ARGS_REQ(1));
@@ -2103,12 +2104,12 @@ RClass *reflect_define_class(reflect_definition &definition, RClass *const under
     if constexpr (std::ranges::any_of(reflect_members<Type>(), [](const std::meta::info m) {
                       return std::meta::is_operator_function(m) && std::meta::operator_of(m) == std::meta::operators::op_parentheses;
                   })) {
-        ::mrb_define_method_id(mrb, methods, mrb_intern_lit(mrb, "to_proc"), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+        ::mrb_define_method_id(mrb, methods, MRB_SYM(to_proc), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
             RProc *const proc = mrb_proc_new_cfunc_with_env(mrb, [](mrb_state *const mrb, const mrb_value) -> mrb_value {
                 mrb_value *argv;
                 mrb_int argc;
                 mrb_get_args(mrb, "*", &argv, &argc);
-                return mrb_funcall_argv(mrb, mrb_cfunc_env_get(mrb, 0), mrb_intern_lit(mrb, "call"), argc, argv);
+                return mrb_funcall_argv(mrb, mrb_cfunc_env_get(mrb, 0), MRB_SYM(call), argc, argv);
             }, 1, &self);
             proc->flags |= MRB_PROC_STRICT;
             mrb_proc_set_cfunc_aspec(proc, reflect_call_aspec<Type>());

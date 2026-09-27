@@ -197,6 +197,11 @@ assert('a std::function parameter takes anything that answers call') do
   assert_equal(12, c.apply(Operand.new(4), 3))
   assert_equal(7, c.each_twice(3) { |n| n + 2 })
   assert_raise(TypeError) { c.apply(5, 3) }
+  # C++ runs a Proc as a block, so a call that Ruby redefines on it is
+  # not asked.
+  doubled = proc { |n| n * 2 }
+  def doubled.call(*) = raise('not asked')
+  assert_equal(6, c.apply(doubled, 3))
 end
 
 # A void pointer has no type that Ruby can check, so Ruby gets an object
