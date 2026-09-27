@@ -141,7 +141,7 @@ using reflect_identities = std::unordered_map<const void *, RObject *>;
 
 inline mrb_sym reflect_identities_key(mrb_state *const mrb)
 {
-    return mrb_intern_lit(mrb, "reflected identities");
+    return MRB_SYM(__reflected_identities__);
 }
 
 inline reflect_identities &reflect_identity_map(mrb_state *const mrb)
@@ -168,7 +168,7 @@ inline void reflect_identity_erase(mrb_state *const mrb, const void *const objec
 
 inline mrb_sym reflect_reflected_key(mrb_state *const mrb)
 {
-    return mrb_intern_lit(mrb, "reflected");
+    return MRB_SYM(__reflected__);
 }
 
 template <class T>
@@ -183,7 +183,7 @@ constexpr bool reflect_trackable = std::is_class_v<T> && std::has_virtual_destru
 
 inline mrb_sym reflect_lent_key(mrb_state *const mrb)
 {
-    return mrb_intern_lit(mrb, "reflected lent");
+    return MRB_SYM(__reflected_lent__);
 }
 
 inline void reflect_forget(mrb_state *const mrb, const mrb_value object)
@@ -550,7 +550,7 @@ inline const mrb_data_type &reflect_data_type_share()
 
 inline mrb_sym reflect_share_key(mrb_state *const mrb)
 {
-    return mrb_intern_lit(mrb, "reflected share");
+    return MRB_SYM(__reflected_share__);
 }
 
 template <class E>
@@ -581,7 +581,7 @@ void reflect_attach(mrb_state *const mrb, const mrb_value object)
     if (parent == nullptr) return;
     RObject *const holder = reflect_identity(mrb, parent);
     if (holder == nullptr) return;
-    const mrb_sym key = mrb_intern_lit(mrb, "reflected children");
+    const mrb_sym key = MRB_SYM(__reflected_children__);
     mrb_value held = mrb_iv_get(mrb, mrb_obj_value(holder), key);
     if (mrb_nil_p(held)) {
         held = mrb_ary_new(mrb);
@@ -1241,7 +1241,7 @@ mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
                     return &answer == object ? self : reflect_result(mrb, self, answer);
                 } else {
                     const mrb_value answer = std::apply([&](auto &...held) -> mrb_value { return reflect_result(mrb, self, object->[:Function:](reflect_pass(held)...)); }, args);
-                    if constexpr (reflect_is_coroutine(std::meta::return_type_of(Function))) mrb_iv_set(mrb, answer, mrb_intern_lit(mrb, "reflected receiver"), self);
+                    if constexpr (reflect_is_coroutine(std::meta::return_type_of(Function))) mrb_iv_set(mrb, answer, MRB_SYM(__reflected_receiver__), self);
                     return answer;
                 }
             });
@@ -1602,7 +1602,7 @@ template <class T>
 reflect_single_pass<T> &reflect_iteration(mrb_state *const mrb, const mrb_value self)
 {
     static constexpr mrb_data_type type{"iteration", [](mrb_state *, void *const p) { delete static_cast<reflect_single_pass<T> *>(p); }};
-    const mrb_sym key = mrb_intern_lit(mrb, "reflected iteration");
+    const mrb_sym key = MRB_SYM(__reflected_iteration__);
     const mrb_value held = mrb_iv_get(mrb, self, key);
     if (void *const p = mrb_data_check_get_ptr(mrb, held, &type); p != nullptr) [[likely]] return *static_cast<reflect_single_pass<T> *>(p);
     mrb_check_frozen(mrb, mrb_obj_ptr(self));
