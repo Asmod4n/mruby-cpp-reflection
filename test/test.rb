@@ -1066,3 +1066,13 @@ assert('a C++ exception from an argument conversion is the Ruby exception for it
   assert_equal('no assign', assert_raise(RuntimeError) { FragileHolder.new.item = f }.message)
   assert_equal('no assign', assert_raise(RuntimeError) { Fragile.new.replace(f) }.message)
 end
+
+# A block that the coroutine calls can call next on the same coroutine.
+# A coroutine that runs cannot be resumed, so the call must raise, and
+# the coroutine must answer again after the raise.
+assert('a coroutine refuses to be resumed while it runs') do
+  g = nil
+  g = Counting.filtered(3, ->(i) { g.next if i == 1; true })
+  assert_raise(RuntimeError) { g.to_a }
+  assert_equal([], g.to_a)
+end
