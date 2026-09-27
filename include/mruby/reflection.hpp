@@ -104,7 +104,6 @@ struct reflect_upcast {
 
 struct reflect_data_type : mrb_data_type {
     std::span<const reflect_upcast> upcasts;
-    const mrb_data_type *owned_by_cpp;
     void *(*object_of)(void *data) = nullptr;
 };
 
@@ -249,7 +248,7 @@ const reflect_data_type &reflect_data_type_owned()
 {
     static constexpr auto name = std::define_static_string(reflect_class_name(^^T));
     if constexpr (!std::is_destructible_v<T>) {
-        static const reflect_data_type type{{name, nullptr}, reflect_upcasts<T>(), nullptr};
+        static const reflect_data_type type{{name, nullptr}, reflect_upcasts<T>()};
         return type;
     } else if constexpr (reflect_trackable<T>) {
         static const reflect_data_type type{{name, [](mrb_state *const mrb, void *const p) {
@@ -263,7 +262,7 @@ const reflect_data_type &reflect_data_type_owned()
                                                  }
                                                  delete tracked;
                                              }},
-                                            reflect_upcasts<T>(), &reflect_data_type_tracked<T>()};
+                                            reflect_upcasts<T>()};
         return type;
     } else if constexpr (reflect_ownership_class<T>() != ^^void) {
         static const reflect_data_type type{{name, [](mrb_state *const mrb, void *const p) {
@@ -273,7 +272,7 @@ const reflect_data_type &reflect_data_type_owned()
                                                  if (reflect_ownership_traits<O>::parent(*static_cast<T *>(p)) != nullptr) return;
                                                  delete static_cast<T *>(p);
                                              }},
-                                            reflect_upcasts<T>(), &reflect_data_type_borrowed<T>()};
+                                            reflect_upcasts<T>()};
         return type;
     } else {
         static const reflect_data_type type{{name, [](mrb_state *const mrb, void *const p) {
@@ -281,7 +280,7 @@ const reflect_data_type &reflect_data_type_owned()
                                                  static_cast<T *>(p)->~T();
                                                  mrb_free(mrb, p);
                                              }},
-                                            reflect_upcasts<T>(), nullptr};
+                                            reflect_upcasts<T>()};
         return type;
     }
 }
@@ -295,7 +294,7 @@ const reflect_data_type &reflect_data_type_tracked()
                                              static_cast<reflect_tracked<T> *>(static_cast<T *>(p))->ruby = nullptr;
                                              if constexpr (reflect_ownership_class<T>() != ^^void) reflect_identity_erase(mrb, reflect_identity_of(static_cast<T *>(p)));
                                          }},
-                                        reflect_upcasts<T>(), nullptr};
+                                        reflect_upcasts<T>()};
     return type;
 }
 
@@ -307,10 +306,10 @@ const reflect_data_type &reflect_data_type_borrowed()
         static const reflect_data_type type{{name, [](mrb_state *const mrb, void *const p) {
                                                  if (p != nullptr) reflect_identity_erase(mrb, reflect_identity_of(static_cast<T *>(p)));
                                              }},
-                                            reflect_upcasts<T>(), nullptr};
+                                            reflect_upcasts<T>()};
         return type;
     } else {
-        static const reflect_data_type type{{name, nullptr}, reflect_upcasts<T>(), nullptr};
+        static const reflect_data_type type{{name, nullptr}, reflect_upcasts<T>()};
         return type;
     }
 }
@@ -322,7 +321,7 @@ const reflect_data_type &reflect_data_type_guarded()
     using G = typename reflect_ownership_traits<O>::guard;
     static constexpr auto name = std::define_static_string(reflect_class_name(^^T));
     static const reflect_data_type type{{name, [](mrb_state *, void *const g) { delete static_cast<G *>(g); }},
-                                        reflect_upcasts<T>(), nullptr, [](void *const g) -> void * {
+                                        reflect_upcasts<T>(), [](void *const g) -> void * {
                                             O *const watched = static_cast<G *>(g)->get();
                                             return watched == nullptr ? nullptr : static_cast<T *>(watched);
                                         }};
