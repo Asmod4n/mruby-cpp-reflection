@@ -402,7 +402,7 @@ assert('dup and clone copy the C++ object with its copy constructor') do
   assert_true(s.clone.frozen?)
   assert_false(s.dup.frozen?)
   assert_equal(7, s.clone.v)
-  assert_raise(TypeError) { Node.new.dup }
+  assert_raise_with_message(TypeError, "can't copy Node") { Node.new.dup }
 end
 
 # Ruby has no templates, and a template has no name at runtime. A
@@ -713,6 +713,9 @@ assert('a Ruby method overrides a virtual function that C++ calls') do
   # A Ruby exception cannot leave a noexcept function, and a reference
   # that C++ keeps cannot point into a Ruby object that the collector
   # frees. So C++ calls its own function for both.
+  # A copy is the same Ruby class, so it overrides the same functions.
+  assert_equal(80, r.dup.ask(2))
+  assert_equal(80, r.clone.ask(2))
   assert_equal(1, r.ask_quiet)
   assert_equal('c++', r.ask_label.to_s)
   plain = Shapes::Square.new(2)

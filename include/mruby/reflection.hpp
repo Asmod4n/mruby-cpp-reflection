@@ -1904,13 +1904,15 @@ RClass *reflect_define_class(reflect_definition &definition, RClass *const under
             T *const source = reflect_ptr<T>(mrb, original);
             if (source == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong original");
             return reflect_translate_exceptions(mrb, [&] {
-                reflect_adopt<T>(mrb, self, reflect_new<T>(mrb, static_cast<const T &>(*source)));
+                if constexpr (Options.virtual_overriders && requires { typename reflect_virtual_overrider<std::meta::dealias(Type)>::type; })
+                    reflect_adopt<T>(mrb, self, static_cast<T *>(new typename reflect_virtual_overrider<std::meta::dealias(Type)>::type(static_cast<const T &>(*source))));
+                else reflect_adopt<T>(mrb, self, reflect_new<T>(mrb, static_cast<const T &>(*source)));
                 return self;
             });
         }, MRB_ARGS_REQ(1));
     } else {
         ::mrb_define_method_id(mrb, klass, mrb_intern_lit(mrb, "initialize_copy"), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
-            mrb_raisef(mrb, E_TYPE_ERROR, "can't copy %s", std::define_static_string(reflect_class_name(^^T)));
+            mrb_raisef(mrb, E_TYPE_ERROR, "can't copy %s", std::define_static_string(reflect_class_name(std::meta::dealias(Type))));
             std::unreachable();
         }, MRB_ARGS_REQ(1));
     }
