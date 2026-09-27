@@ -125,8 +125,19 @@ for the value conversions.
 Every reflected name is a presym. `mrbgem.rake` builds and runs a small
 program before the presym scan and writes the names to
 `build/<name>/include/mruby/presym/reflect.h`. Nothing of it is in the tree.
-A gem calls `reflect_presyms(spec, "#{spec.dir}/tools/reflect_presyms/main.cpp")`
+A gem calls `reflect_presyms(spec, "#{spec.dir}/tools/reflect_presyms/reflect_presyms.cpp")`
 with a program that prints `reflect_presyms_header<^^A, ^^B>()`.
+
+## Tests
+
+The C++ classes that the tests reflect are the gem
+`mruby-cpp-reflection-test_fixtures` in `test_fixtures/`. The tests in
+`test/` run only in a build that loads that gem, as
+`test_fixtures/build_config.rb` does:
+
+    MRUBY_CONFIG=<this gem>/test_fixtures/build_config.rb rake test
+
+`bintest/` tests the Rake API of `mrbgem.rake` in CRuby.
 
 ## Ideas not taken
 

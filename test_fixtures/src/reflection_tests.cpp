@@ -898,7 +898,7 @@ static mrb_value callback_from_other_thread_aborts_q(mrb_state *mrb, mrb_value)
     return mrb_bool_value(aborted);
 }
 
-extern "C" void mrb_mruby_cpp_reflection_gem_test(mrb_state *mrb)
+extern "C" void mrb_mruby_cpp_reflection_test_fixtures_gem_init(mrb_state *mrb)
 {
     mrb_define_module_function(mrb, mrb->kernel_module, "callback_after_close?", callback_after_close_q, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "callback_from_other_thread_aborts?", callback_from_other_thread_aborts_q, MRB_ARGS_NONE());
@@ -925,5 +925,7 @@ extern "C" void mrb_mruby_cpp_reflection_gem_test(mrb_state *mrb)
     attributes_gem_test(mrb);
 }
 #else
-extern "C" void mrb_mruby_cpp_reflection_gem_test(mrb_state *) {}
+extern "C" void mrb_mruby_cpp_reflection_test_fixtures_gem_init(mrb_state *) {}
 #endif
+
+extern "C" void mrb_mruby_cpp_reflection_test_fixtures_gem_final(mrb_state *) {}

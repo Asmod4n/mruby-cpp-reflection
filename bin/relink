@@ -1,3 +1,4 @@
+#!/usr/bin/env ruby
 # The linker command of a build that reflects C++. A reflected class may
 # name a function that its headers declare and no linked library
 # defines: an extern template, a C++23 member a shared library built
