@@ -1408,16 +1408,60 @@ mrb_value reflect_dispatch(mrb_state *const mrb, const mrb_value self)
     }
 }
 
+consteval std::string_view reflect_standard_name(const std::meta::info function)
+{
+    if (!std::meta::is_operator_function(function)) return {};
+    switch (std::meta::operator_of(function)) {
+    case std::meta::operators::op_spaceship: return "compare_three_way";
+    case std::meta::operators::op_equals_equals: return "equal_to";
+    case std::meta::operators::op_exclamation_equals: return "not_equal_to";
+    case std::meta::operators::op_less: return "less";
+    case std::meta::operators::op_greater: return "greater";
+    case std::meta::operators::op_less_equals: return "less_equal";
+    case std::meta::operators::op_greater_equals: return "greater_equal";
+    default: return {};
+    }
+}
+
+consteval bool reflect_answers_as_ruby(const std::meta::info function)
+{
+    const std::meta::info r = std::meta::dealias(std::meta::remove_cv(std::meta::return_type_of(function)));
+    if (std::meta::operator_of(function) == std::meta::operators::op_spaceship)
+        return r == std::meta::dealias(^^std::strong_ordering) || r == std::meta::dealias(^^std::weak_ordering) || r == std::meta::dealias(^^std::partial_ordering);
+    return r == ^^bool;
+}
+
+consteval bool reflect_predicate(const std::meta::info function)
+{
+    return !std::meta::is_operator_function(function) && !std::meta::is_constructor(function) && std::meta::has_identifier(function) &&
+           std::meta::dealias(std::meta::remove_cv(std::meta::return_type_of(function))) == ^^bool;
+}
+
+consteval std::string reflect_predicate_name(const std::meta::info function)
+{
+    std::string_view name = std::meta::identifier_of(function);
+    if (name.starts_with("is_") && name.size() > 3) name.remove_prefix(3);
+    return std::string(name) + "?";
+}
+
 template <std::meta::info Type, std::meta::info... Overloads>
 void reflect_define_method(mrb_state *const mrb, RClass *const klass, const mrb_sym name)
 {
     constexpr std::meta::info first = std::array{Overloads...}[0];
+    constexpr std::string_view standard = reflect_standard_name(first);
+    mrb_sym defined = name;
+    if constexpr (!standard.empty()) {
+        constexpr mrb_sym presym = reflect_presym(standard.data());
+        defined = presym != 0 ? presym : mrb_intern_static(mrb, standard.data(), standard.size());
+    }
     static constexpr std::array arities{(reflect_takes_block(Overloads) ? std::meta::parameters_of(Overloads).size() : std::size_t{0})...};
     if constexpr (std::meta::is_operator_function(first) && (std::meta::operator_of(first) == std::meta::operators::op_equals_equals ||
                                                              std::meta::operator_of(first) == std::meta::operators::op_exclamation_equals ||
                                                              std::meta::operator_of(first) == std::meta::operators::op_spaceship)) {
-        ::mrb_define_method_id(mrb, klass, name, [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+        ::mrb_define_method_id(mrb, klass, defined, [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
             const std::span<const mrb_value> argv(mrb_get_argv(mrb), static_cast<std::size_t>(mrb_get_argc(mrb)));
+            using R = [:reflect_skip(first) == 1 ? reflect_bare(std::meta::type_of(std::meta::parameters_of(first)[0])) : std::meta::dealias(Type):];
+            if (reflect_ptr<R>(mrb, self) == nullptr) [[unlikely]] mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
             if (argv.size() == 1 && !(reflect_get_args_match<Overloads>(mrb, argv) || ...)) {
                 if constexpr (std::meta::operator_of(first) == std::meta::operators::op_equals_equals) return mrb_false_value();
                 else if constexpr (std::meta::operator_of(first) == std::meta::operators::op_exclamation_equals) return mrb_true_value();
@@ -1426,7 +1470,7 @@ void reflect_define_method(mrb_state *const mrb, RClass *const klass, const mrb_
             return reflect_dispatch<Type, Overloads...>(mrb, self);
         }, MRB_ARGS_REQ(1));
     } else if constexpr (std::ranges::any_of(arities, [](const std::size_t n) { return n > 0; })) {
-        ::mrb_define_method_id(mrb, klass, name, [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+        ::mrb_define_method_id(mrb, klass, defined, [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
             mrb_value *argv;
             mrb_int argc;
             mrb_value block;
@@ -1442,11 +1486,17 @@ void reflect_define_method(mrb_state *const mrb, RClass *const klass, const mrb_
         constexpr std::size_t total = std::meta::parameters_of(first).size() - reflect_skip(first);
         constexpr mrb_aspec aspec = reflect_rest(first) ? (MRB_ARGS_REQ(total - 1) | MRB_ARGS_REST())
                                                         : (MRB_ARGS_REQ(reflect_required(first)) | MRB_ARGS_OPT(total - reflect_required(first)));
-        ::mrb_define_method_id(mrb, klass, name,
+        ::mrb_define_method_id(mrb, klass, defined,
                                [](mrb_state *const mrb, const mrb_value self) { return reflect_call_given<Type, first>(mrb, self); }, aspec);
     } else {
-        ::mrb_define_method_id(mrb, klass, name, [](mrb_state *const mrb, const mrb_value self) { return reflect_dispatch<Type, Overloads...>(mrb, self); },
+        ::mrb_define_method_id(mrb, klass, defined, [](mrb_state *const mrb, const mrb_value self) { return reflect_dispatch<Type, Overloads...>(mrb, self); },
                                MRB_ARGS_ANY());
+    }
+    if constexpr (!standard.empty() && (reflect_answers_as_ruby(Overloads) && ...)) ::mrb_define_alias_id(mrb, klass, name, defined);
+    if constexpr ((reflect_predicate(Overloads) && ...)) {
+        constexpr auto predicate = std::define_static_string(reflect_predicate_name(first));
+        constexpr mrb_sym presym = reflect_presym(predicate);
+        ::mrb_define_alias_id(mrb, klass, presym != 0 ? presym : mrb_intern_static(mrb, predicate, std::string_view(predicate).size()), defined);
     }
 }
 
@@ -2021,7 +2071,10 @@ RClass *reflect_define_class(reflect_definition &definition, RClass *const under
     constexpr auto declares = [](const std::meta::operators op) consteval {
         return std::ranges::any_of(instance_methods, [op](const std::meta::info m) { return std::meta::is_operator_function(m) && std::meta::operator_of(m) == op; });
     };
-    if constexpr (declares(std::meta::operators::op_spaceship)) mrb_include_module(mrb, methods, mrb_module_get_id(mrb, MRB_SYM(Comparable)));
+    if constexpr (std::ranges::any_of(instance_methods, [](const std::meta::info m) {
+                      return std::meta::is_operator_function(m) && std::meta::operator_of(m) == std::meta::operators::op_spaceship && reflect_answers_as_ruby(m);
+                  }))
+        mrb_include_module(mrb, methods, mrb_module_get_id(mrb, MRB_SYM(Comparable)));
     reflect_define_comparisons<Type, declares(std::meta::operators::op_equals_equals), declares(std::meta::operators::op_spaceship)>(mrb, methods);
     template for (constexpr std::meta::info member : reflect_members<Type>()) {
         if constexpr (std::meta::is_operator_function(member) && std::meta::operator_of(member) == std::meta::operators::op_square_brackets &&

@@ -9,6 +9,7 @@
  * skips the assertions.
  */
 #include <list>
+#include <stdckdint.h>
 #include <map>
 #include <variant>
 #include <generator>
@@ -31,12 +32,12 @@ struct Plain {
 struct Reflected {
     mrb_int total = 0;
     std::vector<mrb_int> seen;
-    bool same(std::string_view a, mrb_int n) { total += n; return static_cast<mrb_int>(a.size()) == n; }
-    mrb_int same(mrb_int n) { return n * 2; }
+    bool same(std::string_view a, mrb_int n) { mrb_int t; const bool overflowed = ckd_add(&t, total, n); total = checked(overflowed, t); return static_cast<mrb_int>(a.size()) == n; }
+    mrb_int same(mrb_int n) { mrb_int r; const bool overflowed = ckd_mul(&r, n, mrb_int{2}); return checked(overflowed, r); }
     mrb_value rest(mrb_value first, std::span<const mrb_value> more) { return more.empty() ? first : more.back(); }
-    void add(mrb_int n) { total += n; seen.push_back(n); }
+    void add(mrb_int n) { mrb_int t; const bool overflowed = ckd_add(&t, total, n); total = checked(overflowed, t); seen.push_back(n); }
     mrb_int sum() const { return total; }
-    mrb_int scaled_by(mrb_int n, mrb_int factor = 2) const { return n * factor; }
+    mrb_int scaled_by(mrb_int n, mrb_int factor = 2) const { mrb_int r; const bool overflowed = ckd_mul(&r, n, factor); return checked(overflowed, r); }
     std::string_view name() const { return "reflected"; }
     const std::vector<mrb_int> &history() const { return seen; }
     mrb_int count(const std::vector<mrb_int> &v) const { return static_cast<mrb_int>(v.size()); }
@@ -47,6 +48,11 @@ struct Reflected {
     std::vector<mrb_int *> raw_longs;
     mrb_int length_of(const std::string &s) const { return static_cast<mrb_int>(s.size()); }
     std::string echo(std::string s) const { return s; }
+    static mrb_int checked(const bool overflowed, const mrb_int n)
+    {
+        if (overflowed) throw std::overflow_error("overflow");
+        return n;
+    }
 };
 
 
@@ -130,7 +136,11 @@ struct Operand {
     Operand operator-(const Operand &o) const { return v - o.v; }
     Operand operator-() const { return -v; }
     Operand operator*(const Operand &o) const { return v * o.v; }
-    Operand operator<<(mrb_int n) const { return v << n; }
+    Operand operator<<(mrb_int n) const
+    {
+        if (n < 0 || n >= 63 || v < 0 || v > (INT64_MAX >> n)) throw std::out_of_range("shift");
+        return v << n;
+    }
     bool operator==(const Operand &o) const { return v == o.v; }
     bool operator<(const Operand &o) const { return v < o.v; }
     std::strong_ordering operator<=>(const Operand &o) const { return v <=> o.v; }
@@ -339,6 +349,12 @@ struct Link {
     Link &follow() const { return *next; }
     Link &itself() { return *this; }
 };
+struct Scored {
+    int v = 0;
+    int operator<=>(const Scored &o) const { return (v - o.v) * 5; }
+    int operator==(const Scored &o) const { return v == o.v ? 7 : 0; }
+    int operator<(const Scored &o) const { return v < o.v ? 3 : 0; }
+};
 struct Measure {
     double v = 0;
     auto operator<=>(const Measure &) const = default;
@@ -349,6 +365,7 @@ struct Shelf {
     std::map<int, int> table{{1, 10}, {2, 20}};
     std::list<int> chain{1, 2};
     std::vector<int> &items() { return full; }
+    bool is_ready() const { return true; }
     int fits(int n) const { return n; }
     int pick(int) const { return 1; }
     int pick(double) const { return 2; }
@@ -655,7 +672,7 @@ mrb_int twice(mrb_int n, mrb_int m) { return n * m * 2; }
 mrb_int scaled(mrb_int n, mrb_int by = 3) { return n * by; }
 Plain made(mrb_int n) { return Plain{n}; }
 }
-constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Sharer, ^^SelfSharer, ^^WatchedHolder, ^^Lender, ^^Shelf, ^^Measure, ^^Link, ^^free_functions, ^^Odd, ^^Converts, ^^Outer, ^^Diamond, ^^TakesRvalues, ^^Flags, ^^Declared, ^^Unbuilt, ^^Held<long>, ^^Color, ^^Flag, ^^Palette, ^^Mark, ^^Choices, ^^Grid, ^^Counting, ^^Keeper, ^^ConvertsExplicitly, ^^std::pair<const std::string, int>, ^^std::pair<std::string, int>>();
+constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Sharer, ^^SelfSharer, ^^WatchedHolder, ^^Lender, ^^Shelf, ^^Scored, ^^Measure, ^^Link, ^^free_functions, ^^Odd, ^^Converts, ^^Outer, ^^Diamond, ^^TakesRvalues, ^^Flags, ^^Declared, ^^Unbuilt, ^^Held<long>, ^^Color, ^^Flag, ^^Palette, ^^Mark, ^^Choices, ^^Grid, ^^Counting, ^^Keeper, ^^ConvertsExplicitly, ^^std::pair<const std::string, int>, ^^std::pair<std::string, int>>();
 constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();
 constexpr auto nested = mrb_cpp_reflector::reflect<^^Holder>();
 constexpr auto named = mrb_cpp_reflector::reflect<^^fruit::Basket::count<fruit::Apple>>();

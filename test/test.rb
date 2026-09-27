@@ -758,23 +758,90 @@ assert('each walks a container by index and nothing else') do
 end
 
 # allocate makes an object that holds no C++ object. Every method that
-# Ruby calls on it raises, and none reads the missing object.
-assert('an object without its C++ object raises on every method') do
+# needs the object raises TypeError, or ArgumentError for a wrong count,
+# and none reads the missing object or answers without it.
+$allocated = []
+assert('an object without its C++ object raises on every method that needs it') do
   [Color, Flag, Std::String, Shelf, Operand, Measure, Link, Reflected, Node, Lender, D, S, Z, X, Y, F, Static, Thrower, Callback,
    Sharer, SelfSharer, WatchedHolder, Odd, Converts, Outer, Diamond, TakesRvalues, Flags, Declared, Palette, Mark, Choices,
-   Grid, Counting, Keeper, ConvertsExplicitly, Shapes::Square, Ops::Vec, Ops::Log].each do |klass|
+   Grid, Counting, Keeper, ConvertsExplicitly, Shapes::Square, Ops::Vec, Ops::Log, Scored].each do |klass|
     empty = klass.allocate
     klass.instance_methods.each do |name|
-      next if Object.instance_methods.include?(name) && ![:==, :!=, :<=>, :eql?, :hash, :to_s, :inspect].include?(name)
+      next if Object.instance_methods.include?(name) || name == :to_proc
       [[], [nil], [1], [empty]].each do |args|
-        begin
+        answer = begin
           empty.__send__(name, *args)
-        rescue StandardError
+          :returned
+        rescue TypeError, ArgumentError
+          nil
+        rescue StandardError => e
+          e.class
+        end
+        $allocated << "#{klass}##{name}(#{args.size}) #{answer.inspect}" if answer
+      end
+    end
+  end
+  assert_equal('', $allocated.join("\n"))
+end
+
+# Wrong arguments of every kind reach every method of a real object. The
+# test asks one question: whether a call reads memory it must not. It
+# answers that only in a build with AddressSanitizer and
+# UndefinedBehaviorSanitizer, which stop the process at such a read.
+assert('wrong arguments never make C++ read memory it must not') do
+  wrong = [nil, true, -1, 2**62, -2**62, 1.5, Float::NAN, 1e300, 'x', :x, [], {}, Object.new, Operand.new(1), Shelf.new]
+  [Shelf, Operand, Measure, Link, Reflected, Node, Lender, D, S, Z, F, Static, Callback, Sharer, SelfSharer,
+   WatchedHolder, Palette, Keeper, Ops::Log].each do |klass|
+    object = begin; klass.new; rescue StandardError; next; end
+    klass.instance_methods.each do |name|
+      next if Object.instance_methods.include?(name) && ![:==, :!=, :<=>, :eql?, :hash].include?(name)
+      wrong.each do |a|
+        [[a], [a, a], [a, a, a]].each do |args|
+          begin
+            object.__send__(name, *args)
+          rescue StandardError
+          end
         end
       end
     end
   end
   assert_true(true)
+end
+
+# A comparison has the name the standard gives its function object, and
+# answers what C++ answers. The operator name is an alias to it only when
+# the answer is what Ruby expects from that operator: an ordering from
+# <=>, a bool from == and <. Otherwise Ruby keeps the operator of Object.
+assert('a comparison has its standard name, and its operator name when the answer fits') do
+  a = Scored.new
+  b = Scored.new
+  b.v = 3
+  assert_equal(-15, a.compare_three_way(b))
+  assert_equal(7, a.equal_to(Scored.new))
+  assert_equal(3, a.less(b))
+  assert_nil(a <=> b)
+  assert_false(a == Scored.new)
+  assert_false(Scored.method_defined?(:<))
+  two = Operand.new(2)
+  assert_equal(-1, two.compare_three_way(Operand.new(3)))
+  assert_equal(-1, two <=> Operand.new(3))
+  assert_true(two.equal_to(Operand.new(2)))
+  assert_true(two == Operand.new(2))
+  assert_true(two.less(Operand.new(3)))
+  assert_true(two < Operand.new(3))
+end
+
+# A function that returns bool keeps its C++ name and gets name? as an
+# alias, with a leading is_ dropped, as Ruby names a predicate.
+assert('a function that returns bool has a predicate alias') do
+  shelf = Shelf.new
+  assert_true(shelf.empty.empty)
+  assert_true(shelf.empty.empty?)
+  assert_false(shelf.full.empty?)
+  assert_true(shelf.is_ready)
+  assert_true(shelf.ready?)
+  assert_false(shelf.respond_to?(:is_ready?))
+  assert_true(shelf.table.contains?(1))
 end
 
 # C++ calls a virtual function through the object. For an object that
