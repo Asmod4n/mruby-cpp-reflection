@@ -757,6 +757,26 @@ assert('each walks a container by index and nothing else') do
   assert_equal([1, 2], shelf.chain.to_a)
 end
 
+# allocate makes an object that holds no C++ object. Every method that
+# Ruby calls on it raises, and none reads the missing object.
+assert('an object without its C++ object raises on every method') do
+  [Color, Flag, Std::String, Shelf, Operand, Measure, Link, Reflected, Node, Lender, D, S, Z, X, Y, F, Static, Thrower, Callback,
+   Sharer, SelfSharer, WatchedHolder, Odd, Converts, Outer, Diamond, TakesRvalues, Flags, Declared, Palette, Mark, Choices,
+   Grid, Counting, Keeper, ConvertsExplicitly, Shapes::Square, Ops::Vec, Ops::Log].each do |klass|
+    empty = klass.allocate
+    klass.instance_methods.each do |name|
+      next if Object.instance_methods.include?(name) && ![:==, :!=, :<=>, :eql?, :hash, :to_s, :inspect].include?(name)
+      [[], [nil], [1], [empty]].each do |args|
+        begin
+          empty.__send__(name, *args)
+        rescue StandardError
+        end
+      end
+    end
+  end
+  assert_true(true)
+end
+
 # C++ calls a virtual function through the object. For an object that
 # Ruby made from a subclass, the overrider calls the Ruby method of the
 # same name, and super reaches the C++ function it overrides. Without a

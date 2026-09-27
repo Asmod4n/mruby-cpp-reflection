@@ -1566,12 +1566,20 @@ reflect_single_pass<T> &reflect_iteration(mrb_state *const mrb, const mrb_value 
 }
 
 template <class T>
+T &reflect_receiver_or_raise(mrb_state *const mrb, const mrb_value self)
+{
+    T *const object = reflect_ptr<T>(mrb, self);
+    if (object == nullptr) [[unlikely]] mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
+    return *object;
+}
+
+template <class T>
 void reflect_define_conversions(mrb_state *const mrb, RClass *const klass)
 {
     if constexpr (reflect_bytes<T>) {
         constexpr auto to_s = [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
-            const T *const object = reflect_ptr<T>(mrb, self);
-            return mrb_str_new(mrb, std::ranges::data(*object), static_cast<mrb_int>(std::ranges::size(*object)));
+            const T &object = reflect_receiver_or_raise<T>(mrb, self);
+            return mrb_str_new(mrb, std::ranges::data(object), static_cast<mrb_int>(std::ranges::size(object)));
         };
         ::mrb_define_method_id(mrb, klass, reflect_sym<kToS>(mrb), to_s, MRB_ARGS_NONE());
     } else if constexpr (reflect_map<T>) {
@@ -1818,11 +1826,11 @@ RClass *reflect_define_enum(reflect_definition &definition, RClass *const under)
     mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), reflect_class_key<std::meta::dealias(Type)>(mrb), mrb_obj_value(klass));
     RClass *const methods = ::mrb_define_module_under_id(mrb, klass, reflect_sym<kInstanceMethods>(mrb));
     mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), reflect_module_key<std::meta::dealias(Type)>(mrb), mrb_obj_value(methods));
-    constexpr auto to_i = [](mrb_state *const mrb, const mrb_value self) -> mrb_value { return mrb_convert_number(mrb, *reflect_ptr<E>(mrb, self)); };
+    constexpr auto to_i = [](mrb_state *const mrb, const mrb_value self) -> mrb_value { return mrb_convert_number(mrb, reflect_receiver_or_raise<E>(mrb, self)); };
     ::mrb_define_method(mrb, methods, "to_i", to_i, MRB_ARGS_NONE());
     if constexpr (!std::meta::is_scoped_enum_type(std::meta::dealias(Type))) ::mrb_define_method(mrb, methods, "to_int", to_i, MRB_ARGS_NONE());
     ::mrb_define_method(mrb, methods, "<=>", [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
-        const E value = *reflect_ptr<E>(mrb, self);
+        const E value = reflect_receiver_or_raise<E>(mrb, self);
         if constexpr (!std::meta::is_scoped_enum_type(std::meta::dealias(Type))) {
             if (const mrb_value n = mrb_get_arg1(mrb); mrb_integer_p(n)) {
                 const std::underlying_type_t<E> u = std::to_underlying(value);
@@ -1835,21 +1843,21 @@ RClass *reflect_define_enum(reflect_definition &definition, RClass *const under)
     }, MRB_ARGS_REQ(1));
     constexpr auto equal = [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
         const E *const other = reflect_ptr<E>(mrb, mrb_get_arg1(mrb));
-        return mrb_bool_value(other != nullptr && *other == *reflect_ptr<E>(mrb, self));
+        return mrb_bool_value(other != nullptr && *other == reflect_receiver_or_raise<E>(mrb, self));
     };
     ::mrb_define_method(mrb, methods, "==", [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
         if constexpr (!std::meta::is_scoped_enum_type(std::meta::dealias(Type))) {
-            if (const mrb_value n = mrb_get_arg1(mrb); mrb_integer_p(n)) return mrb_bool_value(std::cmp_equal(std::to_underlying(*reflect_ptr<E>(mrb, self)), mrb_integer(n)));
+            if (const mrb_value n = mrb_get_arg1(mrb); mrb_integer_p(n)) return mrb_bool_value(std::cmp_equal(std::to_underlying(reflect_receiver_or_raise<E>(mrb, self)), mrb_integer(n)));
         }
         const E *const other = reflect_ptr<E>(mrb, mrb_get_arg1(mrb));
-        return mrb_bool_value(other != nullptr && *other == *reflect_ptr<E>(mrb, self));
+        return mrb_bool_value(other != nullptr && *other == reflect_receiver_or_raise<E>(mrb, self));
     }, MRB_ARGS_REQ(1));
     ::mrb_define_method(mrb, methods, "eql?", equal, MRB_ARGS_REQ(1));
     ::mrb_define_method(mrb, methods, "hash", [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
-        return mrb_int_value(mrb, static_cast<mrb_int>(std::hash<E>{}(*reflect_ptr<E>(mrb, self))));
+        return mrb_int_value(mrb, static_cast<mrb_int>(std::hash<E>{}(reflect_receiver_or_raise<E>(mrb, self))));
     }, MRB_ARGS_NONE());
     ::mrb_define_method(mrb, methods, "to_s", [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
-        const E value = *reflect_ptr<E>(mrb, self);
+        const E value = reflect_receiver_or_raise<E>(mrb, self);
         template for (constexpr std::meta::info enumerator : std::define_static_array(std::meta::enumerators_of(std::meta::dealias(Type)))) {
             if (value == [:enumerator:]) return mrb_str_new_static(mrb, std::meta::identifier_of(enumerator).data(), std::meta::identifier_of(enumerator).size());
         }
@@ -1898,7 +1906,7 @@ void reflect_define_comparisons(mrb_state *const mrb, RClass *const methods)
             mrb_get_args(mrb, "o", &v);
             std::optional<T> made;
             const T *const other = reflect_comparable_operand<T>(mrb, v, made);
-            return mrb_bool_value(other != nullptr && *reflect_ptr<T>(mrb, self) == *other);
+            return mrb_bool_value(other != nullptr && reflect_receiver_or_raise<T>(mrb, self) == *other);
         }, MRB_ARGS_REQ(1));
     }
     if constexpr (std::three_way_comparable<T> && !DeclaresSpaceship) {
@@ -1908,7 +1916,7 @@ void reflect_define_comparisons(mrb_state *const mrb, RClass *const methods)
             std::optional<T> made;
             const T *const other = reflect_comparable_operand<T>(mrb, v, made);
             if (other == nullptr) return mrb_nil_value();
-            return reflect_result(mrb, self, *reflect_ptr<T>(mrb, self) <=> *other);
+            return reflect_result(mrb, self, reflect_receiver_or_raise<T>(mrb, self) <=> *other);
         }, MRB_ARGS_REQ(1));
         mrb_include_module(mrb, methods, mrb_module_get_id(mrb, MRB_SYM(Comparable)));
     }
@@ -1917,10 +1925,10 @@ void reflect_define_comparisons(mrb_state *const mrb, RClass *const methods)
             mrb_value v;
             mrb_get_args(mrb, "o", &v);
             const T *const other = reflect_ptr<T>(mrb, v);
-            return mrb_bool_value(other != nullptr && *reflect_ptr<T>(mrb, self) == *other);
+            return mrb_bool_value(other != nullptr && reflect_receiver_or_raise<T>(mrb, self) == *other);
         }, MRB_ARGS_REQ(1));
         ::mrb_define_method_id(mrb, methods, MRB_SYM(hash), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
-            return mrb_int_value(mrb, static_cast<mrb_int>(std::hash<T>{}(*reflect_ptr<T>(mrb, self))));
+            return mrb_int_value(mrb, static_cast<mrb_int>(std::hash<T>{}(reflect_receiver_or_raise<T>(mrb, self))));
         }, MRB_ARGS_NONE());
     }
 }
