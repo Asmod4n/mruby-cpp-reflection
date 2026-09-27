@@ -116,6 +116,14 @@ type is defined with its class only where a member uses it.
   the classes and enums of its namespace that its declaration accepts. A
   template whose body does not compile for such a type stops the build.
 
+- A coroutine that returns a range that can be walked once, such as
+  `std::generator<T>`, answers `each`, `next` and `to_a`, and includes
+  `Enumerable`. `each` and `next` share one position, as the range can be
+  walked once, and `next` raises `StopIteration` at the end. Each value is
+  a copy. A coroutine with a reference, pointer or view parameter is not
+  reflected, as the converted argument ends with the call. A member
+  coroutine keeps its receiver alive.
+
 ## Virtual functions overridden in Ruby
 
 `reflect_define<classes, {.virtual_overriders = true}>(mrb)` together with
@@ -155,3 +163,13 @@ program before the presym scan and writes the names to
 `build/<name>/include/mruby/presym/reflect.h`. Nothing of it is in the tree.
 A gem calls `reflect_presyms(spec, "#{spec.dir}/tools/reflect_presyms/main.cpp")`
 with a program that prints `reflect_presyms_header<^^A, ^^B>()`.
+
+## Ideas not taken
+
+libclang reads a header without reflection. A generator on top of it
+could write plain C++ bindings that any compiler builds, MSVC included,
+and it sees what reflection does not show: friend operators declared in a
+class, inherited constructors and the values of default arguments. The
+gem stays with reflection. Where reflection cannot answer a question,
+the gem could ask clang's API for that part alone. This is a note for
+later.

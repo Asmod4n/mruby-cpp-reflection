@@ -655,3 +655,25 @@ assert('an abstract class is made through a Ruby subclass, and lent arguments en
   assert_raise(TypeError) { r.kept.x }
   assert_raise(NotImplementedError) { ShapeWithoutSides.new(1).counted }
 end
+
+# A coroutine that C++ returns as a generator runs one step per value.
+# It can be walked once, as in C++: each and next share one position. A
+# member coroutine keeps its receiver, and a coroutine that would keep a
+# reference to a converted argument is not reflected, as that argument
+# ends with the call.
+def generator_without_its_receiver
+  Counting.new.from_start(2)
+end
+
+assert('a coroutine is walked one step per value') do
+  g = Counting.up_to(3)
+  assert_equal(1, g.next)
+  assert_equal([2, 3], g.to_a)
+  assert_raise(StopIteration) { g.next }
+  assert_equal([2, 4, 6], Counting.up_to(3).map { |i| i * 2 })
+  late = generator_without_its_receiver
+  full_gc
+  assert_equal([1, 2], late.to_a)
+  assert_equal(['a', 'aa'], Counting.words(2).map(&:to_s))
+  assert_false(Counting.respond_to?(:letters_of))
+end

@@ -245,6 +245,27 @@ consteval bool reflect_element_compared(const std::meta::info function)
     return true;
 }
 
+consteval bool reflect_is_coroutine(const std::meta::info type)
+{
+    const std::meta::info t = reflect_bare(type);
+    if (!std::meta::is_class_type(t) || !std::meta::is_complete_type(t)) return false;
+    for (const std::meta::info m : std::meta::members_of(t, std::meta::access_context::unchecked()))
+        if (std::meta::is_type(m) && std::meta::has_identifier(m) && std::meta::identifier_of(m) == "promise_type") return true;
+    return false;
+}
+
+consteval bool reflect_coroutine_parameters_supported(const std::meta::info function)
+{
+    for (const std::meta::info p : std::meta::parameters_of(function)) {
+        const std::meta::info t = std::meta::type_of(p);
+        const std::meta::info bare = reflect_bare(t);
+        if (std::meta::is_reference_type(t) || std::meta::is_pointer_type(std::meta::dealias(t)) || reflect_is_view(bare) ||
+            bare == std::meta::dealias(^^std::string_view) || bare == std::meta::dealias(^^std::span<const mrb_value>))
+            return false;
+    }
+    return true;
+}
+
 consteval bool reflect_call_supported(const std::meta::info function)
 {
     if (std::meta::is_deleted(function) || !reflect_element_compared(function)) return false;
@@ -253,7 +274,9 @@ consteval bool reflect_call_supported(const std::meta::info function)
     if (std::meta::is_rvalue_reference_qualified(function) || std::meta::is_volatile(function)) return false;
     for (const std::meta::info p : std::meta::parameters_of(function))
         if (!reflect_parameter_supported(std::meta::type_of(p))) return false;
-    return std::meta::is_constructor(function) || reflect_result_supported(std::meta::return_type_of(function));
+    if (std::meta::is_constructor(function)) return true;
+    if (reflect_is_coroutine(std::meta::return_type_of(function)) && !reflect_coroutine_parameters_supported(function)) return false;
+    return reflect_result_supported(std::meta::return_type_of(function));
 }
 
 consteval bool reflect_reserved(const std::meta::info type)

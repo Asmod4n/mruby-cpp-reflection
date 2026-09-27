@@ -1139,7 +1139,9 @@ mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
                     std::apply([&](auto &...held) { object->[:Function:](reflect_pass(held)...); }, args);
                     return self;
                 } else {
-                    return std::apply([&](auto &...held) -> mrb_value { return reflect_result(mrb, self, object->[:Function:](reflect_pass(held)...)); }, args);
+                    const mrb_value answer = std::apply([&](auto &...held) -> mrb_value { return reflect_result(mrb, self, object->[:Function:](reflect_pass(held)...)); }, args);
+                    if constexpr (reflect_is_coroutine(std::meta::return_type_of(Function))) mrb_iv_set(mrb, answer, mrb_intern_lit(mrb, "reflected receiver"), self);
+                    return answer;
                 }
             });
             if constexpr (reflect_ownership_class<T>() != ^^void) reflect_attach<T>(mrb, self);
@@ -1378,6 +1380,30 @@ void reflect_define_conversion_function(mrb_state *const mrb, RClass *const klas
 }
 
 template <class T>
+struct reflect_single_pass {
+    T range;
+    std::optional<std::ranges::iterator_t<T>> at;
+};
+
+template <class T>
+reflect_single_pass<T> &reflect_iteration(mrb_state *const mrb, const mrb_value self)
+{
+    static constexpr mrb_data_type type{"iteration", [](mrb_state *, void *const p) { delete static_cast<reflect_single_pass<T> *>(p); }};
+    const mrb_sym key = mrb_intern_lit(mrb, "reflected iteration");
+    const mrb_value held = mrb_iv_get(mrb, self, key);
+    if (void *const p = mrb_data_check_get_ptr(mrb, held, &type); p != nullptr) [[likely]] return *static_cast<reflect_single_pass<T> *>(p);
+    mrb_check_frozen(mrb, mrb_obj_ptr(self));
+    T *const object = reflect_ptr<T>(mrb, self);
+    if (object == nullptr) [[unlikely]] mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
+    std::unique_ptr<reflect_single_pass<T>> made(new reflect_single_pass<T>{std::move(*object), std::nullopt});
+    RData *const data = mrb_data_object_alloc(mrb, mrb->object_class, made.get(), &type);
+    reflect_single_pass<T> &pass = *made.release();
+    mrb_iv_set(mrb, self, key, mrb_obj_value(data));
+    pass.at.emplace(pass.range.begin());
+    return pass;
+}
+
+template <class T>
 void reflect_define_conversions(mrb_state *const mrb, RClass *const klass)
 {
     if constexpr (reflect_bytes<T>) {
@@ -1401,6 +1427,46 @@ void reflect_define_conversions(mrb_state *const mrb, RClass *const klass)
             return hash;
         };
         ::mrb_define_method_id(mrb, klass, reflect_sym<kToH>(mrb), to_h, MRB_ARGS_NONE());
+    } else if constexpr (std::ranges::input_range<T> && !std::ranges::forward_range<T>) {
+        constexpr auto each = [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+            mrb_value block;
+            mrb_get_args(mrb, "&!", &block);
+            return reflect_translate_exceptions(mrb, [&] {
+                reflect_single_pass<T> &pass = reflect_iteration<T>(mrb, self);
+                while (*pass.at != pass.range.end()) {
+                    std::ranges::range_value_t<T> value(**pass.at);
+                    ++*pass.at;
+                    mrb_yield(mrb, block, reflect_result(mrb, mrb_nil_value(), std::move(value)));
+                }
+                return self;
+            });
+        };
+        constexpr auto next = [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+            return reflect_translate_exceptions(mrb, [&] {
+                reflect_single_pass<T> &pass = reflect_iteration<T>(mrb, self);
+                if (*pass.at == pass.range.end()) [[unlikely]] mrb_raise(mrb, mrb_class_get(mrb, "StopIteration"), "iteration reached an end");
+                std::ranges::range_value_t<T> value(**pass.at);
+                ++*pass.at;
+                return reflect_result(mrb, mrb_nil_value(), std::move(value));
+            });
+        };
+        constexpr auto to_a = [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+            return reflect_translate_exceptions(mrb, [&] {
+                reflect_single_pass<T> &pass = reflect_iteration<T>(mrb, self);
+                const mrb_value array = mrb_ary_new(mrb);
+                while (*pass.at != pass.range.end()) {
+                    std::ranges::range_value_t<T> value(**pass.at);
+                    ++*pass.at;
+                    mrb_ary_push(mrb, array, reflect_result(mrb, mrb_nil_value(), std::move(value)));
+                }
+                return array;
+            });
+        };
+        ::mrb_define_method_id(mrb, klass, reflect_sym<kEach>(mrb), each, MRB_ARGS_BLOCK());
+        ::mrb_define_method(mrb, klass, "next", next, MRB_ARGS_NONE());
+        ::mrb_define_method_id(mrb, klass, reflect_sym<kToA>(mrb), to_a, MRB_ARGS_NONE());
+        if (mrb_class_defined_id(mrb, reflect_sym<kEnumerable>(mrb)))
+            mrb_include_module(mrb, klass, mrb_module_get_id(mrb, reflect_sym<kEnumerable>(mrb)));
     } else if constexpr (std::ranges::range<T>) {
         constexpr auto each = [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
             mrb_value block;
