@@ -643,6 +643,8 @@ end
 class RubySquare < Shapes::Square
   def area(k) = super * 10
   def name = 'ruby square'
+  def quiet = raise('not reached')
+  def label = 'ruby'
 end
 
 assert('a Ruby method overrides a virtual function that C++ calls') do
@@ -650,6 +652,11 @@ assert('a Ruby method overrides a virtual function that C++ calls') do
   assert_equal(80, r.ask(2))
   assert_equal('ruby square', r.told.to_s)
   assert_equal(4, r.counted)
+  # A Ruby exception cannot leave a noexcept function, and a reference
+  # that C++ keeps cannot point into a Ruby object that the collector
+  # frees. So C++ calls its own function for both.
+  assert_equal(1, r.ask_quiet)
+  assert_equal('c++', r.ask_label.to_s)
   plain = Shapes::Square.new(2)
   assert_equal(8, plain.ask(2))
   assert_equal('shape', plain.told.to_s)

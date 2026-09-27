@@ -373,10 +373,13 @@ consteval bool reflect_virtual_function_supported(const std::meta::info f)
 {
     if (!std::meta::is_function(f) || !std::meta::is_virtual(f) || std::meta::is_destructor(f) || !std::meta::has_identifier(f)) return false;
     if (std::meta::is_private(f) || std::meta::is_deleted(f) || std::meta::is_volatile(f) || std::meta::is_rvalue_reference_qualified(f)) return false;
-    if (std::meta::is_vararg_function(f)) return false;
+    if (std::meta::is_vararg_function(f) || std::meta::is_noexcept(f)) return false;
     for (const std::meta::info p : std::meta::parameters_of(f))
         if (!reflect_result_supported(std::meta::type_of(p))) return false;
     const std::meta::info r = std::meta::return_type_of(f);
+    if (std::meta::is_reference_type(r) || std::meta::is_pointer_type(std::meta::dealias(r)) || reflect_is_view(reflect_bare(r)) ||
+        reflect_bare(r) == std::meta::dealias(^^std::string_view))
+        return false;
     return r == ^^void || reflect_parameter_supported(r);
 }
 
@@ -393,8 +396,10 @@ consteval std::vector<std::meta::info> reflect_virtual_functions(const std::meta
                 std::ranges::none_of(seen, [&](const std::meta::info s) { return reflect_virtual_signature_equal(s, m); }))
                 seen.push_back(m);
     std::vector<std::meta::info> functions;
-    for (const std::meta::info f : seen)
+    for (const std::meta::info f : seen) {
         if (!std::meta::is_final(f) && reflect_virtual_function_supported(f)) functions.push_back(f);
+        else if (std::meta::is_pure_virtual(f)) return {};
+    }
     return functions;
 }
 

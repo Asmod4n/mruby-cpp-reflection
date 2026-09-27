@@ -539,6 +539,14 @@ struct Shape {
     virtual std::string name() const { return "shape"; }
     virtual int sides() const = 0;
     virtual int measure(const Point &p) const { return p.x; }
+    virtual int quiet() const noexcept { return 1; }
+    virtual const std::string &label() const
+    {
+        static const std::string text = "c++";
+        return text;
+    }
+    int ask_quiet() const { return quiet(); }
+    std::string ask_label() const { return label(); }
     int probe() const
     {
         const Point p{5};
