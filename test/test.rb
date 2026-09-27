@@ -1164,25 +1164,26 @@ assert('a copy of a shared object is not shared with the keeper of the original'
   assert_equal(1, s.read)
 end
 
-# C++26 lists the preconditions of these members of string_view and span
-# as hardened. A call that breaks one reads outside the view, so the call
-# must raise IndexError before it reaches C++.
-assert('a member of a standard view refuses a count past its end') do
-  v = Reflected.new.name
-  assert_raise(IndexError) { v.remove_prefix(100) }
-  assert_raise(IndexError) { v.remove_suffix(100) }
-  v.remove_prefix(2)
-  v.remove_suffix(2)
-  assert_equal('flect', v.to_s)
-  w = Shelf.new.window
-  assert_raise(IndexError) { w.first(3) }
-  assert_raise(IndexError) { w.last(3) }
-  assert_raise(IndexError) { w.subspan(3) }
-  assert_raise(IndexError) { w.subspan(1, 2) }
-  assert_equal([2], w.subspan(1, 1).to_a)
-  assert_equal([], w.subspan(2).to_a)
-  assert_equal([1, 2], w.first(2).to_a)
-  assert_equal([2], w.last(1).to_a)
+# A view points into memory that C++ may move or free at any time, so a
+# view that C++ returns reaches Ruby as a copy: a String for a view of
+# characters, an Array for any other view. The copy keeps its values
+# when C++ changes the memory behind the view. Ruby cannot give C++ a
+# view into Ruby memory that C++ keeps, so a field of a view type has no
+# setter, and a view other than std::string_view is no parameter.
+assert('a view that a function returns is a copy') do
+  name = Reflected.new.name
+  assert_equal(String, name.class)
+  assert_equal('reflected', name)
+  s = Shelf.new
+  w = s.window
+  assert_equal(Array, w.class)
+  100.times { s.full.push_back(1) }
+  full_gc
+  assert_equal([1, 2], w)
+  assert_equal([1, 1, 1], s.reversed.first(3))
+  assert_equal([3, 4], s.part)
+  assert_false(s.respond_to?(:part=))
+  assert_false(s.respond_to?(:total))
 end
 
 # A copy or an assignment that throws while an argument is converted

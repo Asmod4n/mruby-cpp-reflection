@@ -14,6 +14,7 @@ typedef struct mrb_state mrb_state;
 #include <meta>
 #include <span>
 #include <memory>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -95,10 +96,13 @@ consteval std::meta::info reflect_bare(const std::meta::info type)
     return std::meta::dealias(std::meta::remove_cvref(type));
 }
 
+consteval bool reflect_is_coroutine(std::meta::info type);
+
 consteval bool reflect_is_view(const std::meta::info bare)
 {
-    if (bare == std::meta::dealias(^^std::string_view)) return true;
-    return std::meta::has_template_arguments(bare) && std::meta::template_of(bare) == ^^std::span;
+    if (std::meta::has_template_arguments(bare) && (std::meta::template_of(bare) == ^^std::span || std::meta::template_of(bare) == ^^std::basic_string_view)) return true;
+    if (!std::meta::is_class_type(bare) || !std::meta::is_complete_type(bare) || reflect_is_coroutine(bare)) return false;
+    return std::meta::extract<bool>(std::meta::substitute(^^std::ranges::view, {bare}));
 }
 
 consteval bool reflect_is_object(const std::meta::info type)
@@ -215,6 +219,9 @@ consteval bool reflect_parameter_supported(const std::meta::info type)
         return true;
     }
     if (!reflect_complete(type)) return false;
+    if (reflect_is_view(reflect_bare(type)) && reflect_bare(type) != std::meta::dealias(^^std::string_view) &&
+        reflect_bare(type) != std::meta::dealias(^^std::span<const mrb_value>))
+        return false;
     if (reflect_get_args_letter(type) == '\0') return false;
     const bool class_pointer = std::meta::is_pointer_type(reflect_bare(type)) &&
                                std::meta::is_class_type(std::meta::dealias(std::meta::remove_cv(std::meta::remove_pointer(reflect_bare(type)))));
@@ -248,6 +255,11 @@ consteval bool reflect_result_supported(const std::meta::info type)
         return to == ^^char || to == ^^void || (std::meta::is_class_type(to) && std::meta::is_complete_type(to));
     }
     if (!std::meta::is_class_type(bare) || !std::meta::is_complete_type(bare) || std::meta::is_abstract_type(bare) || reflect_is_iterator(bare)) return false;
+    if (reflect_is_view(bare)) {
+        const std::meta::info element = std::meta::dealias(std::meta::substitute(^^std::ranges::range_value_t, {bare}));
+        return std::meta::extract<bool>(std::meta::substitute(^^std::ranges::forward_range, {bare})) && std::meta::is_copy_constructible_type(element) &&
+               reflect_result_supported(element);
+    }
     if (std::meta::has_template_arguments(bare) && std::meta::template_of(bare) == ^^std::pair) return true;
     return std::meta::is_reference_type(type) || std::meta::is_move_constructible_type(bare);
 }

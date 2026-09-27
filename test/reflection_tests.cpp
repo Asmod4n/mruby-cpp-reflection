@@ -377,6 +377,7 @@ struct Measure {
     double v = 0;
     auto operator<=>(const Measure &) const = default;
 };
+inline int shelf_numbers[2] = {3, 4};
 struct Shelf {
     std::vector<int> full{1, 2};
     std::vector<int> empty;
@@ -384,6 +385,9 @@ struct Shelf {
     std::list<int> chain{1, 2};
     std::vector<int> &items() { return full; }
     std::span<int> window() { return full; }
+    auto reversed() { return std::views::reverse(full); }
+    std::span<int> part = shelf_numbers;
+    int total(std::span<const int> numbers) const { return static_cast<int>(numbers.size()); }
     bool is_ready() const { return true; }
     int fits(int n) const { return n; }
     int pick(int) const { return 1; }

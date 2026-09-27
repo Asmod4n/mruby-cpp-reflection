@@ -299,7 +299,7 @@ consteval bool reflect_owns(const std::meta::info field)
 {
     if (std::meta::is_reference_type(std::meta::type_of(field))) return false;
     const std::meta::info bare = reflect_bare(std::meta::type_of(field));
-    return std::meta::is_class_type(bare) && !reflect_is_variant(bare) && !reflect_is_shared_ptr(bare) && bare != std::meta::dealias(^^std::string_view);
+    return std::meta::is_class_type(bare) && !reflect_is_variant(bare) && !reflect_is_shared_ptr(bare) && !reflect_is_view(bare);
 }
 
 consteval std::size_t reflect_owning_field_count(const std::meta::info type)
@@ -689,17 +689,9 @@ mrb_value reflect_borrowed(mrb_state *const mrb, T *const ref, const mrb_value o
 }
 
 template <class T>
-mrb_value reflect_view(mrb_state *const mrb, T view, const mrb_value owner, const bool frozen)
-{
-    const mrb_value object = reflect_object<T>(mrb, std::move(view), frozen);
-    mrb_iv_set(mrb, object, reflect_sym<kOwner>(mrb), owner);
-    return object;
-}
-
-template <class T>
 constexpr bool reflect_from_mrb = [] {
     namespace vc = mrbcpp::value_converter;
-    if constexpr (!vc::convertible_from_mrb<T>) return false;
+    if constexpr (!vc::convertible_from_mrb<T> || reflect_is_view(^^T)) return false;
     else if constexpr (vc::is_std_optional<T>::value || vc::is_std_vector<T>::value || vc::is_std_array<T>::value || vc::is_set_like_v<T>)
         return reflect_from_mrb<std::remove_cv_t<typename T::value_type>>;
     else if constexpr (vc::is_std_pair<T>::value)
@@ -788,7 +780,7 @@ bool reflect_variant_exact(mrb_state *const mrb, const mrb_value v)
     if constexpr (std::same_as<A, bool>) return mrb_true_p(v) || mrb_false_p(v);
     else if constexpr (std::integral<A>) return mrb_integer_p(v);
     else if constexpr (std::floating_point<A>) return mrb_float_p(v);
-    else if constexpr (std::same_as<A, std::string> || std::same_as<A, std::string_view>) return mrb_string_p(v);
+    else if constexpr (std::same_as<A, std::string>) return mrb_string_p(v);
     else if constexpr (std::is_class_v<A> || std::is_enum_v<A>) return reflect_ptr<A>(mrb, v) != nullptr;
     else return false;
 }
@@ -796,7 +788,7 @@ bool reflect_variant_exact(mrb_state *const mrb, const mrb_value v)
 template <class A>
 A reflect_variant_alternative(mrb_state *const mrb, const mrb_value v)
 {
-    if constexpr ((std::is_class_v<A> || std::is_enum_v<A>) && !std::same_as<A, std::string> && !std::same_as<A, std::string_view>) return *reflect_ptr<A>(mrb, v);
+    if constexpr ((std::is_class_v<A> || std::is_enum_v<A>) && !std::same_as<A, std::string>) return *reflect_ptr<A>(mrb, v);
     else return mrb_value_to<A>(mrb, v);
 }
 
@@ -1027,8 +1019,18 @@ mrb_value reflect_result(mrb_state *const mrb, const mrb_value self, R &&value)
         mrb_ary_push(mrb, pair, reflect_result(mrb, self, value.first));
         mrb_ary_push(mrb, pair, reflect_result(mrb, self, value.second));
         return pair;
+    } else if constexpr (reflect_is_view(^^T)) {
+        using E = std::ranges::range_value_t<T>;
+        if constexpr (std::same_as<std::remove_cv_t<E>, char> && std::ranges::contiguous_range<T> && std::ranges::sized_range<T>) {
+            const std::string copied(std::ranges::data(value), std::ranges::size(value));
+            return mrb_str_new(mrb, copied.data(), static_cast<mrb_int>(copied.size()));
+        } else {
+            std::vector<E> copied = std::ranges::to<std::vector<E>>(value);
+            const mrb_value array = mrb_ary_new_capa(mrb, static_cast<mrb_int>(copied.size()));
+            for (auto &&element : copied) mrb_ary_push(mrb, array, reflect_result(mrb, mrb_nil_value(), E(std::move(element))));
+            return array;
+        }
     } else if constexpr (std::is_lvalue_reference_v<R>) return reflect_reference(mrb, &value);
-    else if constexpr (reflect_is_view(^^T)) return reflect_view<T>(mrb, std::move(value), self, frozen);
     else return reflect_object(mrb, std::move(value), frozen);
 }
 
@@ -1610,7 +1612,7 @@ void reflect_define_field(mrb_state *const mrb, RClass *const klass)
             else return reflect_result(mrb, self, object->[:Field:]);
         });
     }, MRB_ARGS_NONE());
-    if constexpr (!std::meta::is_const_type(std::meta::type_of(Field)) &&
+    if constexpr (!std::meta::is_const_type(std::meta::type_of(Field)) && !reflect_is_view(reflect_bare(std::meta::type_of(Field))) &&
                   (std::is_copy_assignable_v<typename [:reflect_bare(std::meta::type_of(Field)):]> || std::is_array_v<typename [:reflect_bare(std::meta::type_of(Field)):]>)) {
         constexpr std::string_view name = std::meta::identifier_of(Field);
         constexpr auto setter = std::define_static_string(std::string(name) + "=");
