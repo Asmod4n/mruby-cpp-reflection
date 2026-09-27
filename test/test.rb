@@ -217,11 +217,10 @@ assert('a void pointer crosses as VoidPointer or ConstVoidPointer') do
   left, right = seen
   assert_equal(ConstVoidPointer, left.class)
   assert_equal(VoidPointer, right.class)
-  assert_false(left.respond_to?(:address))
-  assert_false(left.respond_to?(:to_i))
-  assert_true(left.inspect.start_with?('#<ConstVoidPointer address=0x'))
-  assert_true(left == right)
-  assert_true(right.dup == right)
+  # A void pointer is an identifier and nothing else. Only C++ compares
+  # it, and a copy holds no pointer, so C++ refuses it.
+  assert_equal([], VoidPointer.instance_methods(false))
+  assert_raise(TypeError) { c.same(right.dup, right) }
   assert_true(c.same(left, right))
   assert_true(c.same(right, c.address.call(right)))
   assert_nil(c.address.call(nil))
