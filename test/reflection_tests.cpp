@@ -204,6 +204,9 @@ struct Callback {
     bool compare(const std::function<bool(const void *, void *)> &f) const { return f(this, const_cast<Callback *>(this)); }
     std::function<void *(void *)> address() const { return [](void *p) { return p; }; }
     bool same(const void *const a, const void *b) const { return a == b; }
+    mrb_int first_after(std::string_view s, const std::function<number(number)> &f) const { f(0); return s.empty() ? 0 : s[0]; }
+    mrb_int length_after(const char *s, const std::function<number(number)> &f) const { f(0); return static_cast<mrb_int>(std::string_view(s).size()); }
+    mrb_value pick(std::function<number(number)> f, std::span<const mrb_value> more) const { f(0); return more.empty() ? mrb_nil_value() : more.back(); }
     bool same_text(const std::function<std::string_view()> &f) const { return f() == f(); }
     bool same_label(const std::function<const std::string &()> &f) const { return f() == f(); }
     bool same_plain(const std::function<const Plain *()> &f) const { return f() == f(); }

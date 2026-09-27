@@ -880,10 +880,22 @@ auto reflect_argument(mrb_state *const mrb, const mrb_value v)
     }
 }
 
+template <class V>
+struct reflect_lent_string {
+    V value;
+    mrb_state *mrb;
+    mrb_value copy;
+    reflect_lent_string(mrb_state *const state, const mrb_value string, const V view) : value(view), mrb(state), copy(string) { mrb_gc_register(mrb, copy); }
+    reflect_lent_string(reflect_lent_string &&other) noexcept : value(other.value), mrb(other.mrb), copy(std::exchange(other.copy, mrb_nil_value())) {}
+    reflect_lent_string &operator=(reflect_lent_string &&) = delete;
+    ~reflect_lent_string() { mrb_gc_unregister(mrb, copy); }
+};
+
 template <class H>
 decltype(auto) reflect_pass(H &held)
 {
-    if constexpr (requires { held.ptr; held.temporary; }) {
+    if constexpr (requires { held.value; held.copy; }) return held.value;
+    else if constexpr (requires { held.ptr; held.temporary; }) {
         if constexpr (H::moves) return std::move(*held.ptr);
         else return (*held.ptr);
     } else return std::move(held);
@@ -930,10 +942,22 @@ auto reflect_get_args(mrb_state *const mrb)
             auto &s = std::get<J>(retrieved);
             constexpr std::meta::info P = std::meta::parameters_of(Function)[J + Skip];
             using T = [:reflect_bare(std::meta::type_of(P)):];
+            const std::span<const mrb_value> argv(mrb_get_argv(mrb), static_cast<std::size_t>(mrb_get_argc(mrb)));
             if constexpr (std::same_as<std::remove_cvref_t<decltype(s)>, mrb_value> && !std::same_as<T, mrb_value>) return reflect_argument<std::meta::type_of(P)>(mrb, s);
-            else if constexpr (std::same_as<T, std::string_view>) return std::string_view(s.first, static_cast<std::size_t>(s.second));
-            else if constexpr (std::same_as<T, std::string>) return std::string(s.first, static_cast<std::size_t>(s.second));
-            else if constexpr (std::same_as<T, std::span<const mrb_value>>) return std::span(s.first, static_cast<std::size_t>(s.second));
+            else if constexpr (std::same_as<T, std::string_view>) {
+                const mrb_value copy = mrb_str_byte_subseq(mrb, argv[J], 0, RSTRING_LEN(argv[J]));
+                return reflect_lent_string<std::string_view>(mrb, copy, std::string_view(RSTRING_PTR(copy), static_cast<std::size_t>(RSTRING_LEN(copy))));
+            } else if constexpr (std::same_as<T, const char *>) {
+                const mrb_value copy = mrb_str_new(mrb, RSTRING_PTR(argv[J]), RSTRING_LEN(argv[J]));
+                return reflect_lent_string<const char *>(mrb, copy, RSTRING_PTR(copy));
+            }
+            else if constexpr (std::same_as<T, std::string>) return std::string(RSTRING_PTR(argv[J]), static_cast<std::size_t>(RSTRING_LEN(argv[J])));
+            else if constexpr (std::same_as<T, std::span<const mrb_value>>) {
+                reflect_holder<std::vector<mrb_value>> held;
+                held.temporary = std::make_unique<std::vector<mrb_value>>(std::from_range, argv.subspan(J));
+                held.ptr = held.temporary.get();
+                return held;
+            }
             else if constexpr (std::integral<T> && !std::same_as<T, bool>) {
                 if ((std::is_unsigned_v<T> && s < 0) || static_cast<mrb_int>(static_cast<T>(s)) != s) [[unlikely]] mrb_raisef(mrb, E_RANGE_ERROR, "integer %i does not fit", s);
                 return static_cast<T>(s);

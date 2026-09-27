@@ -253,6 +253,63 @@ assert('a std::function parameter that answers a reference, a pointer or a view 
   assert_false(c.respond_to?(:same_void))
 end
 
+# A std::string_view or a const char * argument is lent for the call. It
+# points into a copy of the Ruby String that lives until the call ends, so
+# a callback that C++ calls while it reads the view can change the String,
+# and C++ still reads the bytes it was given. The String itself stays free
+# to change.
+assert('a view argument reads a copy of the String') do
+  c = Callback.new
+  s = 'x' * 100
+  assert_equal(120, c.first_after(s, ->(n) { s.replace('y' * 4000); n }))
+  assert_equal('y' * 4000, s)
+  assert_false(s.frozen?)
+  t = 'x' * 100
+  assert_equal(100, c.length_after(t, ->(n) { t.replace('y' * 4000); n }))
+  assert_equal('y' * 4000, t)
+end
+
+# The copy ends with the call, also when the call raises, so many calls
+# that raise leave as many objects as one.
+assert('a view argument releases its copy when the call raises') do
+  c = Callback.new
+  s = 'x' * 100
+  raiser = ->(n) { raise ArgumentError, 'from the callback' }
+  assert_raise(ArgumentError) { c.first_after(s, raiser) }
+  before = live_objects
+  100000.times do
+    c.first_after(s, raiser)
+  rescue ArgumentError
+    nil
+  end
+  after = live_objects
+  assert_true(after - before < 100, "#{after - before} objects more")
+end
+
+# The rest arguments of a call stand on the stack of the VM, which moves
+# when a callback calls deeper than it has room for. C++ reads its own
+# copy of them, so a deep callback does not change what C++ reads.
+def deep_for_test(depth)
+  depth == 0 ? 0 : deep_for_test(depth - 1)
+end
+
+assert('a rest argument is a copy that a deep callback does not move') do
+  assert_equal(3, Callback.new.pick(->(n) { deep_for_test(100); n }, 1, 2, 3))
+  assert_nil(Callback.new.pick(->(n) { deep_for_test(100); n }))
+end
+
+# mruby counts the levels of calls and raises SystemStackError at its
+# limit, before the C stack runs out. A callback that calls C++ again,
+# which calls the callback again, goes through that count too.
+assert('a recursion through C++ and a callback raises SystemStackError') do
+  c = Callback.new
+  f = nil
+  f = ->(n) { n == 0 ? 0 : c.apply(f, n - 1) }
+  assert_equal(0, c.apply(f, 20))
+  assert_raise(SystemStackError) { c.apply(f, 100000) }
+  assert_raise(SystemStackError) { Callback.new.pick(->(n) { deep_for_test(100000); n }, 1) }
+end
+
 assert('a callback C++ keeps survives a full collection') do
   c = Callback.new
   c.keep(->(n) { n * 10 })
