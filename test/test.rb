@@ -368,6 +368,19 @@ assert('a callback that C++ calls from another thread ends the process') do
   assert_true(callback_from_other_thread_aborts?)
 end
 
+# A char pointer that C or C++ returns points into memory that C or C++
+# may change or free after the call. Ruby gets a String copy at once,
+# and the copy stays as it was.
+assert('a char pointer that a function returns is copied into a String') do
+  c = Callback.new
+  t = c.text
+  m = c.mutable_text
+  c.buffer = 'x' * 100
+  assert_equal('abc', t)
+  assert_equal('abc', m)
+  assert_equal('x' * 100, c.text)
+end
+
 assert('a callback C++ keeps survives a full collection') do
   c = Callback.new
   c.keep(->(n) { n * 10 })

@@ -206,6 +206,9 @@ struct Callback {
     void keep(std::function<number(number)> f) { kept = std::move(f); }
     mrb_int call_kept(mrb_int n) const { return kept(n); }
     static void keep_outside(std::function<number(number)> f) { kept_outside() = std::move(f); }
+    std::string buffer = "abc";
+    const char *text() const { return buffer.c_str(); }
+    char *mutable_text() { return buffer.data(); }
     const std::function<number(number)> &given() const { return kept; }
     std::function<number(number)> times(mrb_int k) const { return [k](mrb_int n) { return n * k; }; }
     auto plus(mrb_int k) const { return [k](mrb_int n) { return n + k; }; }
