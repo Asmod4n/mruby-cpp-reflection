@@ -1086,6 +1086,35 @@ mrb_value reflect_translate_exceptions(mrb_state *const mrb, const Call &call)
     std::unreachable();
 }
 
+consteval bool reflect_in_std(const std::meta::info function)
+{
+    const std::meta::info type = std::meta::dealias(std::meta::parent_of(function));
+    if (!std::meta::is_type(type)) return false;
+    std::meta::info scope = std::meta::parent_of(std::meta::has_template_arguments(type) ? std::meta::template_of(type) : type);
+    while (std::meta::is_namespace(scope) && scope != ^^::) {
+        if (scope == ^^std) return true;
+        scope = std::meta::parent_of(scope);
+    }
+    return false;
+}
+
+template <std::meta::info Function, class T, class... A>
+void reflect_raise_on_hardened_precondition(mrb_state *const mrb, const T &object, const A &...arguments)
+{
+    if constexpr (reflect_in_std(Function)) {
+        if constexpr (std::meta::is_operator_function(Function) && std::meta::operator_of(Function) == std::meta::operators::op_square_brackets &&
+                      sizeof...(A) == 1 && (std::is_integral_v<A> && ...) && requires { object.size(); }) {
+            if (((std::cmp_less(arguments, 0) || !std::cmp_less(arguments, object.size())) || ...)) [[unlikely]]
+                mrb_raise(mrb, E_INDEX_ERROR, "index out of range");
+        } else if constexpr (std::meta::has_identifier(Function) && requires { object.empty(); }) {
+            constexpr std::string_view name = std::meta::identifier_of(Function);
+            if constexpr (name == "front" || name == "back" || name == "pop_front" || name == "pop_back") {
+                if (object.empty()) [[unlikely]] mrb_raise(mrb, E_INDEX_ERROR, "empty container");
+            }
+        }
+    }
+}
+
 template <class A>
 mrb_value reflect_virtual_argument(mrb_state *const mrb, const mrb_value holder, A &argument)
 {
@@ -1194,6 +1223,7 @@ mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
             T *const object = reflect_ptr<T>(mrb, self);
             if (object == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
             auto args = reflect_get_args<Function, 0, Count>(mrb);
+            std::apply([&](auto &...held) { reflect_raise_on_hardened_precondition<Function>(mrb, *object, reflect_pass(held)...); }, args);
             const mrb_value answer = reflect_translate_exceptions(mrb, [&] {
                 if constexpr (std::meta::return_type_of(Function) == ^^void) {
                     std::apply([&](auto &...held) { object->[:Function:](reflect_pass(held)...); }, args);
@@ -1644,6 +1674,7 @@ void reflect_define_element_assignment(mrb_state *const mrb, RClass *const metho
         mrb_value index, v;
         mrb_get_args(mrb, "oo", &index, &v);
         auto held = reflect_argument<std::meta::type_of(std::meta::parameters_of(Subscript)[0])>(mrb, index);
+        reflect_raise_on_hardened_precondition<Subscript>(mrb, *object, reflect_pass(held));
         E &element = object->[:Subscript:](reflect_pass(held));
         if constexpr (std::is_pointer_v<E> && std::is_void_v<std::remove_pointer_t<E>>) element = reflect_void_ptr<std::remove_pointer_t<E>>(mrb, v);
             else if (E *const p = reflect_ptr<E>(mrb, v); p != nullptr) element = *p;

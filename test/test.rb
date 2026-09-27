@@ -636,6 +636,21 @@ assert('a variable of class type is the same object on each read') do
   assert_raise(NameError) { Globals.const_get(:shared) }
 end
 
+# The standard library leaves an index out of range and an access to an
+# empty container undefined. Ruby raises IndexError instead, as at()
+# raises out_of_range in C++.
+assert('a standard container checks what its operator[], front and back need') do
+  shelf = Shelf.new
+  assert_equal(2, shelf.items[1])
+  assert_raise(IndexError) { shelf.items[2] }
+  assert_raise(IndexError) { shelf.items[-1] }
+  assert_raise(IndexError) { shelf.items[2] = 5 }
+  assert_raise(IndexError) { shelf.none.front }
+  assert_raise(IndexError) { shelf.none.back }
+  assert_raise(IndexError) { shelf.none.pop_back }
+  assert_equal(1, shelf.items.front)
+end
+
 # C++ calls a virtual function through the object. For an object that
 # Ruby made from a subclass, the overrider calls the Ruby method of the
 # same name, and super reaches the C++ function it overrides. Without a
