@@ -590,6 +590,14 @@ T *reflect_ptr(mrb_state *const mrb, const mrb_value v)
     return nullptr;
 }
 
+template <class T>
+T &reflect_receiver_or_raise(mrb_state *const mrb, const mrb_value self)
+{
+    T *const object = reflect_ptr<T>(mrb, self);
+    if (object == nullptr) [[unlikely]] mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
+    return *object;
+}
+
 inline const mrb_data_type &reflect_data_type_share()
 {
     static const mrb_data_type type{"shared", [](mrb_state *, void *const p) { delete static_cast<std::shared_ptr<void> *>(p); }};
@@ -701,11 +709,20 @@ constexpr bool reflect_from_mrb = [] {
     else return true;
 }();
 
-template <class T, bool Move = false>
+template <class T, bool Move = false, bool Pointer = false, bool Mutates = false>
 struct reflect_holder {
     static constexpr bool moves = Move;
+    static constexpr bool pointer = Pointer;
     std::unique_ptr<T> temporary;
     T *ptr = nullptr;
+    mrb_value lent = mrb_undef_value();
+    void resolve(mrb_state *const mrb)
+    {
+        if (mrb_undef_p(lent)) return;
+        if constexpr (Mutates) mrb_check_frozen(mrb, mrb_obj_ptr(lent));
+        ptr = reflect_ptr<T>(mrb, lent);
+        if (ptr == nullptr) [[unlikely]] mrb_raise(mrb, E_TYPE_ERROR, "wrong argument");
+    }
 };
 
 struct reflect_gc_root {
@@ -837,17 +854,16 @@ auto reflect_argument(mrb_state *const mrb, const mrb_value v)
         using P = [:std::meta::dealias(std::meta::remove_cv(std::meta::remove_pointer(std::meta::dealias(type)))):];
         if constexpr (std::is_void_v<P>) return reflect_void_ptr<typename [:std::meta::remove_pointer(std::meta::dealias(type)):]>(mrb, v);
         else {
-        if (mrb_nil_p(v)) return static_cast<P *>(nullptr);
-        P *const p = reflect_ptr<P>(mrb, v);
-        if (p == nullptr) mrb_raisef(mrb, E_TYPE_ERROR, "%s wanted", std::define_static_string(reflect_class_name(std::meta::dealias(^^P))));
-        if constexpr (reflect_mutates(type)) mrb_check_frozen(mrb, mrb_obj_ptr(v));
-        return p;
+            reflect_holder<P, false, true, reflect_mutates(type)> held;
+            if (mrb_nil_p(v)) return held;
+            if (reflect_ptr<P>(mrb, v) == nullptr) mrb_raisef(mrb, E_TYPE_ERROR, "%s wanted", std::define_static_string(reflect_class_name(std::meta::dealias(^^P))));
+            held.lent = v;
+            return held;
         }
     } else if constexpr (std::meta::is_lvalue_reference_type(type)) {
-        reflect_holder<T> held;
-        held.ptr = reflect_ptr<T>(mrb, v);
-        if (held.ptr != nullptr) {
-            if constexpr (reflect_mutates(type)) mrb_check_frozen(mrb, mrb_obj_ptr(v));
+        reflect_holder<T, false, false, reflect_mutates(type)> held;
+        if (reflect_ptr<T>(mrb, v) != nullptr) {
+            held.lent = v;
         } else if constexpr (!reflect_mutates(type) && reflect_from_mrb<T> && std::is_move_constructible_v<T>) {
             held.temporary = std::make_unique<T>(mrb_value_to<T>(mrb, v));
             held.ptr = held.temporary.get();
@@ -892,11 +908,18 @@ struct reflect_lent_string {
 };
 
 template <class H>
+void reflect_resolve(mrb_state *const mrb, H &held)
+{
+    if constexpr (requires { held.resolve(mrb); }) held.resolve(mrb);
+}
+
+template <class H>
 decltype(auto) reflect_pass(H &held)
 {
     if constexpr (requires { held.value; held.copy; }) return held.value;
     else if constexpr (requires { held.ptr; held.temporary; }) {
-        if constexpr (H::moves) return std::move(*held.ptr);
+        if constexpr (H::pointer) return held.ptr;
+        else if constexpr (H::moves) return std::move(*held.ptr);
         else return (*held.ptr);
     } else return std::move(held);
 }
@@ -966,7 +989,9 @@ auto reflect_get_args(mrb_state *const mrb)
                 return static_cast<T>(s);
             } else return static_cast<T>(s);
         };
-        return std::tuple<decltype(converted.template operator()<I>())...>(converted.template operator()<I>()...);
+        std::tuple<decltype(converted.template operator()<I>())...> args(converted.template operator()<I>()...);
+        (reflect_resolve(mrb, std::get<I>(args)), ...);
+        return args;
     }(std::make_index_sequence<Count>{});
 }
 
@@ -1232,6 +1257,7 @@ auto reflect_call_virtual_overrider(Self &self, bool &running, const Base &base,
     if constexpr (std::meta::return_type_of(Function) == ^^void) return;
     else {
         auto held = reflect_argument<std::meta::return_type_of(Function)>(mrb, answer);
+        reflect_resolve(mrb, held);
         return reflect_pass(held);
     }
 }
@@ -1245,10 +1271,12 @@ mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
         constexpr std::meta::info operand = std::meta::type_of(std::meta::parameters_of(Function)[0]);
         using O = [:reflect_bare(operand):];
         if constexpr (reflect_mutates(operand)) mrb_check_frozen(mrb, mrb_obj_ptr(self));
-        O *const object = reflect_ptr<O>(mrb, self);
-        if (object == nullptr) [[unlikely]] mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
+        if (reflect_ptr<O>(mrb, self) == nullptr) [[unlikely]] mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
         return reflect_translate_exceptions(mrb, [&] {
             auto args = reflect_get_args<Function, 1, Count>(mrb);
+            if constexpr (reflect_mutates(operand)) mrb_check_frozen(mrb, mrb_obj_ptr(self));
+            O *const object = reflect_ptr<O>(mrb, self);
+            if (object == nullptr) [[unlikely]] mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
             if constexpr (std::meta::return_type_of(Function) == ^^void) {
                 std::apply([&](auto &...held) { [:Function:](*object, reflect_pass(held)...); }, args);
                 return mrb_nil_value();
@@ -1299,10 +1327,12 @@ mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
             });
         } else {
             if constexpr (!std::meta::is_const(Function)) mrb_check_frozen(mrb, mrb_obj_ptr(self));
-            T *const object = reflect_ptr<T>(mrb, self);
-            if (object == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
+            if (reflect_ptr<T>(mrb, self) == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
             const mrb_value answer = reflect_translate_exceptions(mrb, [&] {
                 auto args = reflect_get_args<Function, 0, Count>(mrb);
+                if constexpr (!std::meta::is_const(Function)) mrb_check_frozen(mrb, mrb_obj_ptr(self));
+                T *const object = reflect_ptr<T>(mrb, self);
+                if (object == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
                 std::apply([&](auto &...held) { reflect_raise_on_hardened_precondition<Function>(mrb, *object, reflect_pass(held)...); }, args);
                 if constexpr (std::meta::return_type_of(Function) == ^^void) {
                     std::apply([&](auto &...held) { object->[:Function:](reflect_pass(held)...); }, args);
@@ -1381,6 +1411,7 @@ std::unique_ptr<T> reflect_implicit_conversion(mrb_state *const mrb, const mrb_v
                 made = std::make_unique<T>(mrb_string_cstr(mrb, v));
             else if constexpr (reflect_is_object(std::meta::type_of(P)) || std::meta::is_pointer_type(std::meta::dealias(std::meta::type_of(P)))) {
                 auto held = reflect_argument<std::meta::type_of(P), false>(mrb, v);
+                reflect_resolve(mrb, held);
                 made = std::make_unique<T>(reflect_pass(held));
             } else made = std::make_unique<T>(mrb_value_to<U>(mrb, v));
         }
@@ -1430,7 +1461,8 @@ mrb_value reflect_dispatch(mrb_state *const mrb, const mrb_value self)
 {
     if constexpr (sizeof...(Overloads) == 1) return reflect_call_given<Type, Overloads...>(mrb, self);
     else {
-        const std::span<const mrb_value> argv(mrb_get_argv(mrb), static_cast<std::size_t>(mrb_get_argc(mrb)));
+        const std::vector<mrb_value> given(std::from_range, std::span<const mrb_value>(mrb_get_argv(mrb), static_cast<std::size_t>(mrb_get_argc(mrb))));
+        const std::span<const mrb_value> argv(given);
         mrb_value answer = mrb_undef_value();
         template for (constexpr std::meta::info Function : std::array{Overloads...}) {
             if (mrb_undef_p(answer) && (std::meta::is_const(Function) || !mrb_frozen_p(mrb_obj_ptr(self))) &&
@@ -1523,7 +1555,8 @@ void reflect_define_method(mrb_state *const mrb, RClass *const klass, const mrb_
                                                              std::meta::operator_of(first) == std::meta::operators::op_exclamation_equals ||
                                                              std::meta::operator_of(first) == std::meta::operators::op_spaceship)) {
         ::mrb_define_method_id(mrb, klass, defined, [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
-            const std::span<const mrb_value> argv(mrb_get_argv(mrb), static_cast<std::size_t>(mrb_get_argc(mrb)));
+            const std::vector<mrb_value> given(std::from_range, std::span<const mrb_value>(mrb_get_argv(mrb), static_cast<std::size_t>(mrb_get_argc(mrb))));
+            const std::span<const mrb_value> argv(given);
             using R = [:reflect_skip(first) == 1 ? reflect_bare(std::meta::type_of(std::meta::parameters_of(first)[0])) : std::meta::dealias(Type):];
             if (reflect_ptr<R>(mrb, self) == nullptr) [[unlikely]] mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
             if (argv.size() == 1 && !(reflect_get_args_match<Overloads>(mrb, argv) || ...)) {
@@ -1647,31 +1680,40 @@ void reflect_define_field(mrb_state *const mrb, RClass *const klass)
             const reflect_call_end<1> ended(&records);
             return reflect_translate_exceptions(mrb, [&]() -> mrb_value {
                 mrb_check_frozen(mrb, mrb_obj_ptr(self));
-                T *const object = reflect_ptr<T>(mrb, self);
-                if (object == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
+                if (reflect_ptr<T>(mrb, self) == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
                 mrb_value v;
                 mrb_get_args(mrb, "o", &v);
                 using F = [:reflect_bare(std::meta::type_of(Field)):];
+                const auto receiver = [&]() -> T & {
+                    mrb_check_frozen(mrb, mrb_obj_ptr(self));
+                    return reflect_receiver_or_raise<T>(mrb, self);
+                };
                 if constexpr (reflect_is_variant(^^F)) {
                     std::optional<F> made = reflect_variant_from<F>(mrb, v);
                     if (!made) [[unlikely]] mrb_raisef(mrb, E_TYPE_ERROR, "%T fits no alternative of the variant", v);
-                    object->[:Field:] = std::move(*made);
+                    receiver().[:Field:] = std::move(*made);
                 } else if constexpr (std::is_array_v<F>) {
                     using E = std::remove_extent_t<F>;
                     if (!mrb_array_p(v) || RARRAY_LEN(v) != static_cast<mrb_int>(std::extent_v<F>)) [[unlikely]]
                         mrb_raisef(mrb, E_ARGUMENT_ERROR, "an Array of %d elements wanted", static_cast<int>(std::extent_v<F>));
                     std::array<E, std::extent_v<F>> converted{};
                     for (std::size_t i = 0; i < converted.size(); i++) {
-                        const mrb_value element = RARRAY_PTR(v)[i];
+                        const mrb_value element = mrb_ary_entry(v, static_cast<mrb_int>(i));
                         if (E *const p = reflect_ptr<E>(mrb, element); p != nullptr) converted[i] = *p;
                         else if constexpr (reflect_from_mrb<E>) converted[i] = mrb_value_to<E>(mrb, element);
                         else mrb_raise(mrb, E_TYPE_ERROR, "wrong type");
                     }
-                    std::ranges::copy(converted, std::ranges::begin(object->[:Field:]));
-                } else if constexpr (std::is_pointer_v<F> && std::is_void_v<std::remove_pointer_t<F>>) object->[:Field:] = reflect_void_ptr<std::remove_pointer_t<F>>(mrb, v);
-                else if (F *const p = reflect_ptr<F>(mrb, v); p != nullptr) object->[:Field:] = *p;
-                else if constexpr (reflect_from_mrb<F>) object->[:Field:] = mrb_value_to<F>(mrb, v);
-                else mrb_raise(mrb, E_TYPE_ERROR, "wrong type");
+                    std::ranges::copy(converted, std::ranges::begin(receiver().[:Field:]));
+                } else if constexpr (std::is_pointer_v<F> && std::is_void_v<std::remove_pointer_t<F>>) {
+                    F const address = reflect_void_ptr<std::remove_pointer_t<F>>(mrb, v);
+                    receiver().[:Field:] = address;
+                } else if (reflect_ptr<F>(mrb, v) != nullptr) {
+                    T &object = receiver();
+                    object.[:Field:] = reflect_receiver_or_raise<F>(mrb, v);
+                } else if constexpr (reflect_from_mrb<F>) {
+                    F converted = mrb_value_to<F>(mrb, v);
+                    receiver().[:Field:] = std::move(converted);
+                } else mrb_raise(mrb, E_TYPE_ERROR, "wrong type");
                 return v;
             });
         }, MRB_ARGS_REQ(1));
@@ -1741,14 +1783,6 @@ reflect_single_pass<T> &reflect_iteration(mrb_state *const mrb, const mrb_value 
     const std::unique_ptr<bool, decltype([](bool *const running) { *running = false; })> resumed(&pass.running);
     pass.at.emplace(pass.range.begin());
     return pass;
-}
-
-template <class T>
-T &reflect_receiver_or_raise(mrb_state *const mrb, const mrb_value self)
-{
-    T *const object = reflect_ptr<T>(mrb, self);
-    if (object == nullptr) [[unlikely]] mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
-    return *object;
 }
 
 template <class T>
@@ -1865,13 +1899,17 @@ void reflect_define_replace(mrb_state *const mrb, RClass *const klass)
         const reflect_call_end<1> ended(&records);
         return reflect_translate_exceptions(mrb, [&]() -> mrb_value {
             mrb_check_frozen(mrb, mrb_obj_ptr(self));
-            T *const object = reflect_ptr<T>(mrb, self);
-            if (object == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
+            if (reflect_ptr<T>(mrb, self) == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
             mrb_value v;
             mrb_get_args(mrb, "o", &v);
-            if (T *const p = reflect_ptr<T>(mrb, v); p != nullptr) *object = *p;
-            else if constexpr (reflect_from_mrb<T>) *object = mrb_value_to<T>(mrb, v);
-            else mrb_raise(mrb, E_TYPE_ERROR, "wrong type");
+            if (reflect_ptr<T>(mrb, v) != nullptr) {
+                const T &source = reflect_receiver_or_raise<T>(mrb, v);
+                reflect_receiver_or_raise<T>(mrb, self) = source;
+            } else if constexpr (reflect_from_mrb<T>) {
+                T converted = mrb_value_to<T>(mrb, v);
+                mrb_check_frozen(mrb, mrb_obj_ptr(self));
+                reflect_receiver_or_raise<T>(mrb, self) = std::move(converted);
+            } else mrb_raise(mrb, E_TYPE_ERROR, "wrong type");
             return self;
         });
     }, MRB_ARGS_REQ(1));
@@ -1927,17 +1965,22 @@ void reflect_define_element_assignment(mrb_state *const mrb, RClass *const metho
             using T = [:std::meta::dealias(Type):];
             using E = [:reflect_bare(std::meta::return_type_of(Subscript)):];
             mrb_check_frozen(mrb, mrb_obj_ptr(self));
-            T *const object = reflect_ptr<T>(mrb, self);
-            if (object == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
+            if (reflect_ptr<T>(mrb, self) == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
             mrb_value index, v;
             mrb_get_args(mrb, "oo", &index, &v);
             auto held = reflect_argument<std::meta::type_of(std::meta::parameters_of(Subscript)[0])>(mrb, index);
-            reflect_raise_on_hardened_precondition<Subscript>(mrb, *object, reflect_pass(held));
-            E &element = object->[:Subscript:](reflect_pass(held));
-            if constexpr (std::is_pointer_v<E> && std::is_void_v<std::remove_pointer_t<E>>) element = reflect_void_ptr<std::remove_pointer_t<E>>(mrb, v);
-                else if (E *const p = reflect_ptr<E>(mrb, v); p != nullptr) element = *p;
-            else if constexpr (reflect_from_mrb<E>) element = mrb_value_to<E>(mrb, v);
+            std::optional<E> converted;
+            if constexpr (std::is_pointer_v<E> && std::is_void_v<std::remove_pointer_t<E>>) converted.emplace(reflect_void_ptr<std::remove_pointer_t<E>>(mrb, v));
+            else if (reflect_ptr<E>(mrb, v) != nullptr) {}
+            else if constexpr (reflect_from_mrb<E>) converted.emplace(mrb_value_to<E>(mrb, v));
             else mrb_raise(mrb, E_TYPE_ERROR, "wrong type");
+            reflect_resolve(mrb, held);
+            mrb_check_frozen(mrb, mrb_obj_ptr(self));
+            T &object = reflect_receiver_or_raise<T>(mrb, self);
+            reflect_raise_on_hardened_precondition<Subscript>(mrb, object, reflect_pass(held));
+            E &element = object.[:Subscript:](reflect_pass(held));
+            if (converted) element = std::move(*converted);
+            else element = reflect_receiver_or_raise<E>(mrb, v);
             return v;
         });
     }, MRB_ARGS_REQ(2));

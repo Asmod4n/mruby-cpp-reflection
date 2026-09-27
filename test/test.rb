@@ -310,6 +310,55 @@ assert('a recursion through C++ and a callback raises SystemStackError') do
   assert_raise(SystemStackError) { Callback.new.pick(->(n) { deep_for_test(100000); n }, 1) }
 end
 
+# Converting an argument can run Ruby code: to_str, to_ary, to_hash, to_a.
+# That code can delete the C++ object of the receiver or of another
+# argument, or move the elements of a container. So all arguments are
+# converted first, and the receiver and every argument that C++ gets by
+# reference are looked up after that, when no Ruby code runs any more.
+class CutterForTest
+  def initialize(root)
+    @root = root
+  end
+
+  def to_str
+    @root.cut_first
+    'x'
+  end
+end
+
+class GrowerForTest
+  def initialize(sets)
+    @sets = sets
+  end
+
+  def to_a
+    200.times { @sets.push_back([1]) }
+    [1, 2]
+  end
+end
+
+assert('an argument conversion that deletes the receiver or an argument raises') do
+  root = Node.new
+  cutter = CutterForTest.new(root)
+  root.grow
+  assert_raise(TypeError) { root.first.which(cutter) }
+  root.grow
+  assert_raise(TypeError) { Node.weigh(root.first, cutter) }
+  root.grow
+  assert_raise(TypeError) { root.first.mark = cutter }
+  root.grow
+  assert_equal(1, root.first.which('x'))
+  root.first.mark = 'y'
+  assert_equal('y', root.first.mark.to_s)
+end
+
+assert('an element assignment converts the value before it takes the element') do
+  sets = Groups.new.sets
+  sets[0] = GrowerForTest.new(sets)
+  assert_equal(201, sets.size)
+  assert_equal([1, 2], sets[0].to_a)
+end
+
 assert('a callback C++ keeps survives a full collection') do
   c = Callback.new
   c.keep(->(n) { n * 10 })

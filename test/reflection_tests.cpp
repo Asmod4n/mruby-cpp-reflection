@@ -11,6 +11,7 @@
 #include <list>
 #include <stdckdint.h>
 #include <map>
+#include <set>
 #include <variant>
 #include <generator>
 #include <mruby.h>
@@ -242,6 +243,9 @@ struct Node {
     void swap_children() { std::swap(first, second); }
     mrb_int child_count() const { return (first != nullptr ? 1 : 0) + (second != nullptr ? 1 : 0); }
     static mrb_int alive() { return nodes_alive(); }
+    std::variant<int, std::string> mark = 0;
+    std::size_t which(const std::variant<int, std::string> &v) const { return v.index() + static_cast<std::size_t>(child_count()); }
+    static std::size_t weigh(const Node &n, const std::variant<int, std::string> &v) { return v.index() + static_cast<std::size_t>(n.child_count()); }
 };
 /* Leaf is a Node without a virtual destructor. C++ cannot tell Ruby
  * when it deletes a Leaf, so only the types of its fields can. */
@@ -366,6 +370,10 @@ struct Lender {
     const std::vector<mrb_int> &view() const { return items; }
     Lonely &alone() const { return *lonely; }
     void add(mrb_int n) { items.push_back(n); }
+};
+
+struct Groups {
+    std::vector<std::set<int>> sets{{1}};
 };
 struct Link {
     int v = 0;
@@ -731,7 +739,7 @@ struct TakesFragile {
 struct FragileHolder {
     Fragile item;
 };
-constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Leaf, ^^Forest, ^^Hand, ^^Sharer, ^^SelfSharer, ^^WatchedHolder, ^^Lender, ^^Shelf, ^^PlainSharer, ^^Fragile, ^^TakesFragile, ^^FragileHolder, ^^Scored, ^^Measure, ^^Link, ^^free_functions, ^^Odd, ^^Converts, ^^Outer, ^^Diamond, ^^TakesRvalues, ^^Flags, ^^Declared, ^^Unbuilt, ^^Held<long>, ^^Color, ^^Flag, ^^Palette, ^^Mark, ^^Choices, ^^Grid, ^^Counting, ^^Keeper, ^^ConvertsExplicitly, ^^std::pair<const std::string, int>, ^^std::pair<std::string, int>>();
+constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Leaf, ^^Forest, ^^Hand, ^^Sharer, ^^SelfSharer, ^^WatchedHolder, ^^Lender, ^^Shelf, ^^PlainSharer, ^^Fragile, ^^TakesFragile, ^^FragileHolder, ^^Scored, ^^Measure, ^^Link, ^^Groups, ^^free_functions, ^^Odd, ^^Converts, ^^Outer, ^^Diamond, ^^TakesRvalues, ^^Flags, ^^Declared, ^^Unbuilt, ^^Held<long>, ^^Color, ^^Flag, ^^Palette, ^^Mark, ^^Choices, ^^Grid, ^^Counting, ^^Keeper, ^^ConvertsExplicitly, ^^std::pair<const std::string, int>, ^^std::pair<std::string, int>>();
 constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();
 constexpr auto nested = mrb_cpp_reflector::reflect<^^Holder>();
 constexpr auto named = mrb_cpp_reflector::reflect<^^fruit::Basket::count<fruit::Apple>>();
