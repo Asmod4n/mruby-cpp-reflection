@@ -706,6 +706,30 @@ assert('a comparison with an object of another class answers as Ruby does') do
   assert_equal(1, [Operand.new(3), Operand.new(1)].min.v)
 end
 
+# std::string has ==, <=> and std::hash as templates outside the class.
+# Ruby compares it with a String and with itself, sorts it, and finds it
+# as a Hash key. eql? and hash hold for objects of the same class.
+assert('a class whose == <=> and std::hash are not members compares as in C++') do
+  a = Reflected.new.label
+  b = Reflected.new.label
+  assert_true(a == 'l')
+  assert_true(a == b)
+  assert_true(a != 'x')
+  assert_false(a == 1)
+  assert_equal(-1, a <=> 'm')
+  assert_nil(a <=> 1)
+  assert_true(Std::String.ancestors.include?(Comparable))
+  assert_true(a.eql?(b))
+  assert_false(a.eql?('l'))
+  assert_equal(a.hash, b.hash)
+  assert_equal(1, { a => 1 }[b])
+  # A partial ordering that is unordered, as NaN is, is nil for Ruby.
+  m = Measure.new
+  m.v = Float::NAN
+  assert_nil(m <=> Measure.new)
+  assert_raise(ArgumentError) { m < Measure.new }
+end
+
 # C++ calls a virtual function through the object. For an object that
 # Ruby made from a subclass, the overrider calls the Ruby method of the
 # same name, and super reaches the C++ function it overrides. Without a

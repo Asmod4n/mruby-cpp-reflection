@@ -1857,6 +1857,53 @@ mrb_value reflect_enumerator(mrb_state *const mrb, const E value)
     return reflect_object(mrb, value, true);
 }
 
+template <class T>
+T *reflect_comparable_operand(mrb_state *const mrb, const mrb_value v, std::optional<T> &made)
+{
+    if (T *const p = reflect_ptr<T>(mrb, v); p != nullptr) return p;
+    if constexpr (reflect_from_mrb<T>) {
+        if (reflect_variant_exact<T>(mrb, v)) return &made.emplace(mrb_value_to<T>(mrb, v));
+    }
+    return nullptr;
+}
+
+template <std::meta::info Type, bool DeclaresEquals, bool DeclaresSpaceship>
+void reflect_define_comparisons(mrb_state *const mrb, RClass *const methods)
+{
+    using T = [:std::meta::dealias(Type):];
+    if constexpr (std::equality_comparable<T> && !DeclaresEquals) {
+        ::mrb_define_method_id(mrb, methods, MRB_OPSYM(eq), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+            mrb_value v;
+            mrb_get_args(mrb, "o", &v);
+            std::optional<T> made;
+            const T *const other = reflect_comparable_operand<T>(mrb, v, made);
+            return mrb_bool_value(other != nullptr && *reflect_ptr<T>(mrb, self) == *other);
+        }, MRB_ARGS_REQ(1));
+    }
+    if constexpr (std::three_way_comparable<T> && !DeclaresSpaceship) {
+        ::mrb_define_method_id(mrb, methods, MRB_OPSYM(cmp), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+            mrb_value v;
+            mrb_get_args(mrb, "o", &v);
+            std::optional<T> made;
+            const T *const other = reflect_comparable_operand<T>(mrb, v, made);
+            if (other == nullptr) return mrb_nil_value();
+            return reflect_result(mrb, self, *reflect_ptr<T>(mrb, self) <=> *other);
+        }, MRB_ARGS_REQ(1));
+        mrb_include_module(mrb, methods, mrb_module_get_id(mrb, MRB_SYM(Comparable)));
+    }
+    if constexpr (std::equality_comparable<T> && std::is_default_constructible_v<std::hash<T>>) {
+        ::mrb_define_method_id(mrb, methods, MRB_SYM_Q(eql), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+            mrb_value v;
+            mrb_get_args(mrb, "o", &v);
+            const T *const other = reflect_ptr<T>(mrb, v);
+            return mrb_bool_value(other != nullptr && *reflect_ptr<T>(mrb, self) == *other);
+        }, MRB_ARGS_REQ(1));
+        ::mrb_define_method_id(mrb, methods, MRB_SYM(hash), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+            return mrb_int_value(mrb, static_cast<mrb_int>(std::hash<T>{}(*reflect_ptr<T>(mrb, self))));
+        }, MRB_ARGS_NONE());
+    }
+}
+
 template <std::meta::info Type, reflect_options Options, auto Instances>
 RClass *reflect_define_class(reflect_definition &definition, RClass *const under)
 {
@@ -1942,10 +1989,11 @@ RClass *reflect_define_class(reflect_definition &definition, RClass *const under
             }(std::make_index_sequence<overloads.size()>{});
         }
     }
-    if constexpr (std::ranges::any_of(instance_methods, [](const std::meta::info m) {
-                      return std::meta::is_operator_function(m) && std::meta::operator_of(m) == std::meta::operators::op_spaceship;
-                  }))
-        mrb_include_module(mrb, methods, mrb_module_get_id(mrb, MRB_SYM(Comparable)));
+    constexpr auto declares = [](const std::meta::operators op) consteval {
+        return std::ranges::any_of(instance_methods, [op](const std::meta::info m) { return std::meta::is_operator_function(m) && std::meta::operator_of(m) == op; });
+    };
+    if constexpr (declares(std::meta::operators::op_spaceship)) mrb_include_module(mrb, methods, mrb_module_get_id(mrb, MRB_SYM(Comparable)));
+    reflect_define_comparisons<Type, declares(std::meta::operators::op_equals_equals), declares(std::meta::operators::op_spaceship)>(mrb, methods);
     template for (constexpr std::meta::info member : reflect_members<Type>()) {
         if constexpr (std::meta::is_operator_function(member) && std::meta::operator_of(member) == std::meta::operators::op_square_brackets &&
                       std::meta::parameters_of(member).size() == 1 && !std::meta::is_const(member) &&

@@ -337,6 +337,10 @@ struct Link {
     Link &follow() const { return *next; }
     Link &itself() { return *this; }
 };
+struct Measure {
+    double v = 0;
+    auto operator<=>(const Measure &) const = default;
+};
 struct Shelf {
     std::vector<int> full{1, 2};
     std::vector<int> empty;
@@ -647,7 +651,7 @@ mrb_int twice(mrb_int n, mrb_int m) { return n * m * 2; }
 mrb_int scaled(mrb_int n, mrb_int by = 3) { return n * by; }
 Plain made(mrb_int n) { return Plain{n}; }
 }
-constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Sharer, ^^SelfSharer, ^^WatchedHolder, ^^Lender, ^^Shelf, ^^Link, ^^free_functions, ^^Odd, ^^Converts, ^^Outer, ^^Diamond, ^^TakesRvalues, ^^Flags, ^^Declared, ^^Unbuilt, ^^Held<long>, ^^Color, ^^Flag, ^^Palette, ^^Mark, ^^Choices, ^^Grid, ^^Counting, ^^Keeper, ^^ConvertsExplicitly, ^^std::pair<const std::string, int>, ^^std::pair<std::string, int>>();
+constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Sharer, ^^SelfSharer, ^^WatchedHolder, ^^Lender, ^^Shelf, ^^Measure, ^^Link, ^^free_functions, ^^Odd, ^^Converts, ^^Outer, ^^Diamond, ^^TakesRvalues, ^^Flags, ^^Declared, ^^Unbuilt, ^^Held<long>, ^^Color, ^^Flag, ^^Palette, ^^Mark, ^^Choices, ^^Grid, ^^Counting, ^^Keeper, ^^ConvertsExplicitly, ^^std::pair<const std::string, int>, ^^std::pair<std::string, int>>();
 constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();
 constexpr auto nested = mrb_cpp_reflector::reflect<^^Holder>();
 constexpr auto named = mrb_cpp_reflector::reflect<^^fruit::Basket::count<fruit::Apple>>();
