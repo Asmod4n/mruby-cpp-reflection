@@ -411,6 +411,15 @@ assert('a function no linked library defines raises NotImplementedError') do
   assert_raise(NotImplementedError) { d.undefined }
 end
 
+# The two other kinds a library leaves undefined: a constructor it
+# declares and never defines, and a member of an extern template that no
+# linked library instantiates.
+assert('an undefined constructor or extern template member raises NotImplementedError') do
+  assert_equal(0, Unbuilt.new.n)
+  assert_raise(NotImplementedError) { Unbuilt.new(1) }
+  assert_raise(NotImplementedError) { HeldLong.new.get }
+end
+
 assert('a function no library defines raises in the state that called it') do
   assert_equal(:raised_here, undefined_after_other_state)
 end

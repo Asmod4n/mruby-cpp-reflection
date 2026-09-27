@@ -411,6 +411,23 @@ struct Declared {
     int defined() const { return 1; }
     int undefined() const;
 };
+struct Unbuilt {
+    Unbuilt() = default;
+    explicit Unbuilt(int n);
+    int n = 0;
+};
+template <class T>
+struct Held {
+    T value{};
+    T get() const;
+};
+template <class T>
+T Held<T>::get() const
+{
+    return value;
+}
+extern template struct Held<long>;
+using HeldLong = Held<long>;
 enum class Color { red, green = 5, dark_blue };
 enum Flag : unsigned { none = 0, read = 1, write = 2 };
 struct Palette {
@@ -600,7 +617,7 @@ mrb_int twice(mrb_int n, mrb_int m) { return n * m * 2; }
 mrb_int scaled(mrb_int n, mrb_int by = 3) { return n * by; }
 Plain made(mrb_int n) { return Plain{n}; }
 }
-constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Sharer, ^^SelfSharer, ^^WatchedHolder, ^^Lender, ^^free_functions, ^^Odd, ^^Converts, ^^Outer, ^^Diamond, ^^TakesRvalues, ^^Flags, ^^Declared, ^^Color, ^^Flag, ^^Palette, ^^Mark, ^^Choices, ^^Grid, ^^Counting, ^^Keeper, ^^ConvertsExplicitly, ^^std::pair<const std::string, int>, ^^std::pair<std::string, int>>();
+constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Sharer, ^^SelfSharer, ^^WatchedHolder, ^^Lender, ^^free_functions, ^^Odd, ^^Converts, ^^Outer, ^^Diamond, ^^TakesRvalues, ^^Flags, ^^Declared, ^^Unbuilt, ^^Held<long>, ^^Color, ^^Flag, ^^Palette, ^^Mark, ^^Choices, ^^Grid, ^^Counting, ^^Keeper, ^^ConvertsExplicitly, ^^std::pair<const std::string, int>, ^^std::pair<std::string, int>>();
 constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();
 constexpr auto nested = mrb_cpp_reflector::reflect<^^Holder>();
 constexpr auto named = mrb_cpp_reflector::reflect<^^fruit::Basket::count<fruit::Apple>>();
