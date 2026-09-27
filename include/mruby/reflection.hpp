@@ -1413,7 +1413,19 @@ void reflect_define_method(mrb_state *const mrb, RClass *const klass, const mrb_
 {
     constexpr std::meta::info first = std::array{Overloads...}[0];
     static constexpr std::array arities{(reflect_takes_block(Overloads) ? std::meta::parameters_of(Overloads).size() : std::size_t{0})...};
-    if constexpr (std::ranges::any_of(arities, [](const std::size_t n) { return n > 0; })) {
+    if constexpr (std::meta::is_operator_function(first) && (std::meta::operator_of(first) == std::meta::operators::op_equals_equals ||
+                                                             std::meta::operator_of(first) == std::meta::operators::op_exclamation_equals ||
+                                                             std::meta::operator_of(first) == std::meta::operators::op_spaceship)) {
+        ::mrb_define_method_id(mrb, klass, name, [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+            const std::span<const mrb_value> argv(mrb_get_argv(mrb), static_cast<std::size_t>(mrb_get_argc(mrb)));
+            if (argv.size() == 1 && !(reflect_get_args_match<Overloads>(mrb, argv) || ...)) {
+                if constexpr (std::meta::operator_of(first) == std::meta::operators::op_equals_equals) return mrb_false_value();
+                else if constexpr (std::meta::operator_of(first) == std::meta::operators::op_exclamation_equals) return mrb_true_value();
+                else return mrb_nil_value();
+            }
+            return reflect_dispatch<Type, Overloads...>(mrb, self);
+        }, MRB_ARGS_REQ(1));
+    } else if constexpr (std::ranges::any_of(arities, [](const std::size_t n) { return n > 0; })) {
         ::mrb_define_method_id(mrb, klass, name, [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
             mrb_value *argv;
             mrb_int argc;
@@ -1930,6 +1942,10 @@ RClass *reflect_define_class(reflect_definition &definition, RClass *const under
             }(std::make_index_sequence<overloads.size()>{});
         }
     }
+    if constexpr (std::ranges::any_of(instance_methods, [](const std::meta::info m) {
+                      return std::meta::is_operator_function(m) && std::meta::operator_of(m) == std::meta::operators::op_spaceship;
+                  }))
+        mrb_include_module(mrb, methods, mrb_module_get_id(mrb, MRB_SYM(Comparable)));
     template for (constexpr std::meta::info member : reflect_members<Type>()) {
         if constexpr (std::meta::is_operator_function(member) && std::meta::operator_of(member) == std::meta::operators::op_square_brackets &&
                       std::meta::parameters_of(member).size() == 1 && !std::meta::is_const(member) &&

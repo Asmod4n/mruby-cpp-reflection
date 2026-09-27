@@ -694,6 +694,18 @@ assert('an exact overload is taken before one that converts') do
   assert_equal(2, shelf.pick_back(1.5))
 end
 
+# Ruby compares any two objects. == with an object of another class is
+# false, != is true, and <=> is nil. A class with <=> is Comparable.
+assert('a comparison with an object of another class answers as Ruby does') do
+  two = Operand.new(2)
+  assert_false(two == 'x')
+  assert_true(two != 'x')
+  assert_nil(two <=> 'x')
+  assert_true(Operand.ancestors.include?(Comparable))
+  assert_true(two.between?(Operand.new(1), Operand.new(3)))
+  assert_equal(1, [Operand.new(3), Operand.new(1)].min.v)
+end
+
 # C++ calls a virtual function through the object. For an object that
 # Ruby made from a subclass, the overrider calls the Ruby method of the
 # same name, and super reaches the C++ function it overrides. Without a
