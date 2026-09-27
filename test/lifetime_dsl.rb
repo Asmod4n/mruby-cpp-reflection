@@ -1,49 +1,44 @@
 if Object.const_defined?(:TreeObject)
-  # An object that Ruby made before the declaration was made with the
-  # allocator of mruby, so C++ may not delete it later.
-  $made_before_declaration = TreeObject.new
+  # mrbgem.rake declares the lifetimes of these classes with
+  # spec.reflect_object_lifetime; the tests below only use the classes.
 
-  TreeObject.lifetime do
-    owns :set_parent, owner: 0
-    owns :initialize, owner: :owner
-    ends_lifetime :destroy, 0
-  end
-  Resource.lifetime { ends_lifetime :destroy, 0 }
-  Window.lifetime { retains :set_layout, 0 }
-  Device.lifetime do
-    errors :open, error: :negative, sets_errno: true
-    errors :status, success: 0
-    errors :find, error: nil
-    threadsafe :start, :no
-  end
-  Deep.lifetime do
-    stack_reserve :depth, 1 << 60
-    stack_reserve :shallow, 1024
-  end
-
-  def tree_child_of_dropped_owner
-    owner = TreeObject.new
+  def tree_child_of_dropped_parent
+    parent = TreeObject.new
     child = TreeObject.new
-    child.set_parent(owner)
+    child.set_parent(parent)
     child
   end
 
   def tree_dropped_pair
-    owner = TreeObject.new
-    TreeObject.new.set_parent(owner)
+    parent = TreeObject.new
+    TreeObject.new.set_parent(parent)
     nil
   end
 
-  assert('without a lifetime declaration, an owner and Ruby delete the same child') do
+  assert('Ruby has no method that declares or changes a lifetime') do
+    # A lifetime is declared when the gem is built. Hostile Ruby code
+    # that could declare one for a class the host did not declare could
+    # pair a wrong deallocator with an allocator, which is a memory fault.
+    [TreeObject, Resource, Window, Device, Deep, Adopter, Blank, Empty].each do |klass|
+      assert_false klass.respond_to?(:lifetime)
+      assert_false klass.singleton_methods.include?(:lifetime)
+    end
+    %i[lifetime takes_ownership owns ends_lifetime retains errors stack_reserve threadsafe allocator deallocator shared_ownership reflect_lifetime reflect_object_lifetime].each do |word|
+      assert_false Object.new.respond_to?(word, true)
+      assert_false TreeObject.respond_to?(word, true)
+    end
+  end
+
+  assert('without a lifetime declaration, a parent and Ruby delete the same child') do
     # The model checker found this trace; the child process ends with a
-    # double free, which shows what owns prevents.
+    # double free, which shows what takes_ownership prevents.
     assert_true undeclared_tree_fails?
   end
 
-  assert('owns keeps the owner while Ruby holds the child') do
+  assert('takes_ownership keeps the parent while Ruby holds the child') do
     full_gc
     before = TreeObject.alive
-    child = tree_child_of_dropped_owner
+    child = tree_child_of_dropped_parent
     full_gc
     assert_equal before + 2, TreeObject.alive
     assert_equal 1, child.value
@@ -53,7 +48,7 @@ if Object.const_defined?(:TreeObject)
     assert_equal before, TreeObject.alive
   end
 
-  assert('owns lets C++ delete a child once, in the order the GC frees') do
+  assert('takes_ownership lets C++ delete a child once, in the order the GC frees') do
     full_gc
     before = TreeObject.alive
     20.times { tree_dropped_pair }
@@ -62,34 +57,34 @@ if Object.const_defined?(:TreeObject)
     assert_equal before, TreeObject.alive
   end
 
-  assert('owns follows the constructor that takes an owner') do
+  assert('takes_ownership follows the constructor that takes a parent') do
     full_gc
     before = TreeObject.alive
-    owner = TreeObject.new
-    TreeObject.new(owner)
-    assert_equal 1, owner.child_count
-    owner = nil
+    parent = TreeObject.new
+    TreeObject.new(parent)
+    assert_equal 1, parent.child_count
+    parent = nil
     full_gc
     full_gc
     assert_equal before, TreeObject.alive
   end
 
-  assert('a nil owner gives the object back to Ruby') do
+  assert('a nil parent gives the object back to Ruby') do
     full_gc
     before = TreeObject.alive
-    owner = TreeObject.new
+    parent = TreeObject.new
     child = TreeObject.new
-    child.set_parent(owner)
+    child.set_parent(parent)
     child.set_parent(nil)
-    assert_equal 0, owner.child_count
-    owner = nil
+    assert_equal 0, parent.child_count
+    parent = nil
     child = nil
     full_gc
     full_gc
     assert_equal before, TreeObject.alive
   end
 
-  assert('a second owner takes the object from the first') do
+  assert('a second parent takes ownership from the first') do
     full_gc
     before = TreeObject.alive
     first = TreeObject.new
@@ -104,38 +99,41 @@ if Object.const_defined?(:TreeObject)
     assert_equal before, TreeObject.alive
   end
 
-  assert('owns refuses a link that makes an object own itself') do
-    owner = TreeObject.new
+  assert('takes_ownership refuses a link that makes an object own itself') do
+    parent = TreeObject.new
     child = TreeObject.new
-    child.set_parent(owner)
-    assert_raise(ArgumentError) { owner.set_parent(child) }
-    assert_raise(ArgumentError) { owner.set_parent(owner) }
+    child.set_parent(parent)
+    assert_raise(ArgumentError) { parent.set_parent(child) }
+    assert_raise(ArgumentError) { parent.set_parent(parent) }
     assert_equal 0, child.child_count
   end
 
-  assert('owns refuses an object made before the declaration') do
-    assert_raise(TypeError) { $made_before_declaration.set_parent(TreeObject.new) }
+  assert('takes_ownership refuses an object that mruby allocated') do
+    # The declaration of Adopter names a Leaf, but nothing declares that
+    # C++ deletes a Leaf, so mruby allocates it, and C++ may not delete
+    # memory that mruby allocated.
+    assert_raise(TypeError) { Adopter.new.adopt(Leaf.new) }
   end
 
-  assert('the end of an owner ends the lifetime of what it owns') do
+  assert('the end of an object ends the lifetime of what it took ownership of') do
     full_gc
     before = TreeObject.alive
-    owner = TreeObject.new
+    parent = TreeObject.new
     child = TreeObject.new
     grandchild = TreeObject.new
-    child.set_parent(owner)
+    child.set_parent(parent)
     grandchild.set_parent(child)
-    TreeObject.destroy(owner)
-    assert_raise(TypeError) { owner.value }
+    TreeObject.destroy(parent)
+    assert_raise(TypeError) { parent.value }
     assert_raise(TypeError) { child.value }
     assert_raise(TypeError) { grandchild.value }
-    owner = child = grandchild = nil
+    parent = child = grandchild = nil
     full_gc
     assert_equal before, TreeObject.alive
   end
 
-  assert('mrb_close deletes owned objects once, children first') do
-    assert_true tree_freed_at_close_with_owns?
+  assert('mrb_close deletes each object once, children first') do
+    assert_true tree_freed_at_close_with_takes_ownership?
   end
 
   assert('ends_lifetime: after the call nothing reaches the object') do
@@ -190,28 +188,45 @@ if Object.const_defined?(:TreeObject)
     assert_equal 4, Device.new.start(4)
   end
 
-  assert('threadsafe :no refuses a function that takes a callback') do
-    assert_raise(ArgumentError) { Worker.lifetime { threadsafe :watch, :no } }
-  end
-
   assert('stack_reserve raises when the thread stack has less left') do
     assert_raise(SystemStackError) { Deep.new.depth }
     assert_equal 2, Deep.new.shallow
   end
 
-  assert('a class declares its lifetime once') do
-    assert_raise(FrozenError) { TreeObject.lifetime { } }
-    subclass = Class.new(TreeObject)
-    assert_raise(FrozenError) { subclass.lifetime { } }
+  assert('the compile refuses a declaration that the types contradict') do
+    # Each entry is the text the compiler prints for one wrong
+    # declaration; nil is a declaration that compiles.
+    errors = object_lifetime_declaration_errors
+    assert_true errors['threadsafe_callback'].include?('watch takes an argument that points into the VM')
+    assert_true errors['no_function'].include?('nowhere is no function of the class')
+    assert_true errors['owns_itself'].include?('set_parent cannot make an object take ownership of itself')
+    assert_true errors['no_class_there'].include?('status has no pointer or reference to a class')
+    assert_true errors['no_class_named'].include?('set_layout has no pointer or reference to a class')
+    assert_true errors['errors_without_number'].include?('set_layout answers no integer and no pointer')
+    assert_nil errors['right']
   end
 
-  assert('the declaration is closed after its block') do
-    kept = nil
-    Blank.lifetime { kept = self }
-    assert_raise(FrozenError) { kept.retains(:n, 0) }
+  def dropped_watcher
+    Watcher.new.watch(->(x) { x })
+    nil
   end
 
-  assert('a declaration names a reflected method of the class') do
-    assert_raise(NameError) { Empty.lifetime { owns :nowhere, owner: 0 } }
+  assert('a free function releases a callback without a call into mruby') do
+    # The free function of a Watcher deletes the callback it keeps. It
+    # only marks the GC root of the callback, so the collection leaves
+    # the number of roots alone, and the next callback that Ruby passes
+    # to C++ unregisters the marked roots. The collector is off while
+    # the watchers are made, so that none of them is freed before.
+    kept = Watcher.new
+    kept.watch(->(x) { x + 1 })
+    GC.disable
+    10.times { dropped_watcher }
+    GC.enable
+    made = callback_roots
+    full_gc
+    full_gc
+    assert_equal made, callback_roots
+    kept.watch(->(x) { x + 2 })
+    assert_true callback_roots < made
   end
 end

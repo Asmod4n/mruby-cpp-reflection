@@ -1,18 +1,24 @@
 if Object.const_defined?(:CLibrary)
-  assert('a function that makes a handle of an undeclared lifetime raises NotImplementedError') do
-    # No declaration says who frees an Unknown, so the gem does not call
-    # the function at all.
-    assert_raise(NotImplementedError) { CLibrary.unknown_make }
+  assert('the build refuses a function that makes a handle of an undeclared lifetime') do
+    # No declaration says who frees an unknown, a loose or a stray handle,
+    # so the build stops where such a function is reflected, and the
+    # message names the function, where the handle comes from, and the
+    # declaration that is missing.
+    errors = missing_lifetime_errors
+    assert_true errors['unknown_make'].include?('unknown_make')
+    assert_true errors['unknown_make'].include?('the result gives a pointer to c_library_undeclared::unknown')
+    assert_true errors['unknown_make'].include?("spec.reflect_object_lifetime 'c_library_undeclared::unknown' needs allocator :unknown_make and a deallocator, or shared_ownership")
+    assert_true errors['loose_make'].include?('allocator :loose_make')
+    assert_true errors['stray_open'].include?('parameter 0 (made) gives a pointer to c_library_undeclared::stray')
+    assert_true errors['stray_open'].include?('allocator :stray_open, output_parameter: :made')
+    assert_nil errors['handle_make']
+    assert_nil errors['handle_open']
+    assert_nil errors['counted_find']
+    assert_nil errors['handle_value']
   end
 
-  CLibrary::Handle.lifetime do
-    allocator :handle_open, output_parameter: :made
-    allocator :handle_make
-    allocator :handle_popen
-    deallocator :handle_close, results_of: [:handle_open, :handle_make]
-    deallocator :handle_pclose, results_of: :handle_popen
-    errors :handle_open, success: 0
-  end
+  # mrbgem.rake declares the allocators, the deallocators and the shared
+  # ownership of these handles with spec.reflect_object_lifetime.
 
   def dropped_handles
     CLibrary.handle_open("abc", nil)
@@ -80,21 +86,24 @@ if Object.const_defined?(:CLibrary)
     assert_raise(NoMethodError) { CLibrary::Handle.new }
   end
 
-  assert('an allocator needs a deallocator') do
-    assert_raise(ArgumentError) { CLibrary::Loose.lifetime { allocator :loose_make } }
-    assert_raise(NotImplementedError) { CLibrary.loose_make }
+  assert('the compile refuses an allocator or deallocator that the types contradict') do
+    # Each entry is the text the compiler prints for one wrong
+    # declaration; nil is a declaration that compiles.
+    errors = allocator_declaration_errors
+    assert_true errors['unnamed_output'].include?('stray_open gives the object through a parameter, which output_parameter: names')
+    assert_true errors['wrong_output'].include?('handle_open has no pointer to a pointer to the class where output_parameter: points')
+    assert_true errors['makes_nothing'].include?('handle_value makes no object of the class')
+    assert_true errors['frees_nothing'].include?('handle_make takes no pointer to the class as its only parameter')
+    assert_true errors['no_deallocator'].include?('loose_make is an allocator without a deallocator')
+    assert_true errors['no_decrement'].include?('counted_find takes no pointer to the class as its only parameter')
+    assert_nil errors['right']
   end
 
-  assert('an allocator that gives the handle through a parameter names it') do
-    assert_raise(ArgumentError) do
-      CLibrary::Stray.lifetime do
-        allocator :stray_open
-        deallocator :stray_close
-      end
+  assert('Ruby cannot declare the lifetime of a handle') do
+    [CLibrary::Handle, CLibrary::Counted].each do |klass|
+      assert_false klass.respond_to?(:lifetime)
     end
   end
-
-  CLibrary::Counted.lifetime { shared_ownership increment: :counted_ref, decrement: :counted_unref }
 
   def dropped_counted
     CLibrary.counted_find(1)

@@ -2,112 +2,24 @@
  * The lifetime declaration of a class says what its types do not say:
  * which call hands an object to another object that deletes it, which
  * call ends a lifetime, which call keeps an argument, and how a function
- * reports an error. The C++ side reads the declaration once and keeps
- * it; lifetime_dsl.rb drives the classes below from Ruby.
+ * reports an error. mrbgem.rake declares it with spec.reflect_object_lifetime,
+ * rake writes it into mruby/reflect_object_lifetimes.h, and the C++ side reads
+ * it when it compiles; Ruby has no way to declare it. lifetime_dsl.rb
+ * drives the classes of lifetime_dsl.hpp from Ruby.
  */
 #include <mruby.h>
 #if defined(__cpp_impl_reflection)
+#include "lifetime_dsl.hpp"
+#include "lifetime_allocator_library.hpp"
+#include <mruby/reflect_object_lifetimes.h>
 #include <mruby/reflection.hpp>
 #include <mruby/array.h>
 #include <mruby/compile.h>
+#include <mruby/hash.h>
 #include <mruby/variable.h>
-#include <cerrno>
-#include <functional>
 #include <sys/wait.h>
 #include <unistd.h>
-#include <vector>
 
-/* An object tree in the form Qt gives it (QObject::setParent):
- * set_parent makes the argument the owner of the receiver, and the
- * destructor of an owner deletes what it owns. No type says so, since
- * the link is a raw pointer. The destructor is not virtual, so C++
- * cannot tell Ruby when it deletes an object, and it does not take the
- * object out of the list of its owner, so each order in which two frees
- * can come deletes one object twice when Ruby also deletes it. */
-static mrb_int &tree_objects_alive()
-{
-    static mrb_int n = 0;
-    return n;
-}
-class TreeObject {
-    TreeObject *parent = nullptr;
-    std::vector<TreeObject *> children;
-    mrb_int n = 1;
-
-public:
-    TreeObject() { ++tree_objects_alive(); }
-    explicit TreeObject(TreeObject *const owner) : TreeObject() { set_parent(owner); }
-    TreeObject(const TreeObject &) = delete;
-    TreeObject &operator=(const TreeObject &) = delete;
-    ~TreeObject()
-    {
-        for (TreeObject *const child : std::exchange(children, {})) {
-            child->parent = nullptr;
-            delete child;
-        }
-        --tree_objects_alive();
-    }
-    void set_parent(TreeObject *const owner)
-    {
-        if (parent != nullptr) std::erase(parent->children, this);
-        parent = owner;
-        if (owner != nullptr) owner->children.push_back(this);
-    }
-    mrb_int child_count() const { return static_cast<mrb_int>(children.size()); }
-    mrb_int value() const { return n; }
-    static void destroy(TreeObject *const object) { delete object; }
-    static mrb_int alive() { return tree_objects_alive(); }
-};
-/* A function deletes a Resource, as fclose ends the lifetime of a FILE
- * (ISO C 7.21.5.1). After the call nothing may reach it. */
-static mrb_int &resources_alive()
-{
-    static mrb_int n = 0;
-    return n;
-}
-struct Resource {
-    mrb_int n = 2;
-    Resource() { ++resources_alive(); }
-    Resource(const Resource &) = delete;
-    Resource &operator=(const Resource &) = delete;
-    ~Resource() { --resources_alive(); }
-    mrb_int value() const { return n; }
-    static void destroy(Resource *const resource) { delete resource; }
-    static mrb_int alive() { return resources_alive(); }
-};
-/* A Window keeps the Layout it is given, as QWidget::setLayout does, and
- * reads it later. */
-struct Layout {
-    mrb_int n = 3;
-};
-class Window {
-    const Layout *layout = nullptr;
-
-public:
-    void set_layout(const Layout *const given) { layout = given; }
-    mrb_int layout_value() const { return layout == nullptr ? 0 : layout->n; }
-};
-/* The error conventions of C: a negative answer and errno (open in
- * POSIX), one value for success, and a null pointer. start is called
- * from another thread in a C library that takes a callback, so it takes
- * only copies. */
-struct Device {
-    int open(const int flags) const
-    {
-        if (flags < 0) {
-            errno = EINVAL;
-            return -1;
-        }
-        return 3;
-    }
-    int status(const int code) const { return code; }
-    const Device *find(const bool found) const { return found ? this : nullptr; }
-    int start(const int n) const { return n; }
-};
-struct Deep {
-    int depth() const { return 1; }
-    int shallow() const { return 2; }
-};
 struct Worker {
     int watch(const std::function<int(int)> &f) const { return f(1); }
 };
@@ -117,8 +29,46 @@ struct Blank {
 struct Empty {
     mrb_int n = 0;
 };
+/* A Watcher keeps the callback it is given, so the callback lives in
+ * C++ memory until the free function of the Watcher deletes it. */
+struct Watcher {
+    std::function<int(int)> kept;
+    void watch(std::function<int(int)> f) { kept = std::move(f); }
+};
 
-constexpr auto lifetime_classes = mrb_cpp_reflector::reflect<^^TreeObject, ^^Resource, ^^Layout, ^^Window, ^^Device, ^^Deep, ^^Worker, ^^Blank, ^^Empty>();
+/* The same tree as TreeObject, with no declaration. */
+inline mrb_int &undeclared_trees_alive()
+{
+    static mrb_int n = 0;
+    return n;
+}
+class UndeclaredTree {
+    UndeclaredTree *parent = nullptr;
+    std::vector<UndeclaredTree *> children;
+
+public:
+    UndeclaredTree() { ++undeclared_trees_alive(); }
+    UndeclaredTree(const UndeclaredTree &) = delete;
+    UndeclaredTree &operator=(const UndeclaredTree &) = delete;
+    ~UndeclaredTree()
+    {
+        for (UndeclaredTree *const child : std::exchange(children, {})) {
+            child->parent = nullptr;
+            delete child;
+        }
+        --undeclared_trees_alive();
+    }
+    void set_parent(UndeclaredTree *const parent)
+    {
+        if (this->parent != nullptr) std::erase(this->parent->children, this);
+        this->parent = parent;
+        if (parent != nullptr) parent->children.push_back(this);
+    }
+};
+
+constexpr auto lifetime_classes = mrb_cpp_reflector::reflect<^^TreeObject, ^^Resource, ^^Layout, ^^Window, ^^Device, ^^Deep, ^^Leaf, ^^Adopter, ^^Worker, ^^Blank, ^^Empty,
+                                                             ^^Watcher>();
+constexpr auto undeclared_classes = mrb_cpp_reflector::reflect<^^UndeclaredTree>();
 
 /* A test that expects a memory fault runs its part in a child process.
  * It answers whether the child ended by a signal or with a status other
@@ -137,17 +87,17 @@ static bool fails_in_child(void (*const run)())
 }
 
 /* The trace "today" of the lifetime model: set_parent links two objects
- * that Ruby made, the owner deletes the child, and Ruby deletes the
+ * that Ruby made, the parent deletes the child, and Ruby deletes the
  * child as well. Without a declaration the gem cannot know the link. */
 static mrb_value undeclared_tree_fails_q(mrb_state *, mrb_value)
 {
     return mrb_bool_value(fails_in_child([] {
         mrb_state *const other = mrb_open();
-        mrb_cpp_reflector::reflect_define<lifetime_classes>(other);
+        mrb_cpp_reflector::reflect_define<undeclared_classes>(other);
         mrb_load_string(other, "def link\n"
-                               "  owner = TreeObject.new\n"
-                               "  child = TreeObject.new\n"
-                               "  child.set_parent(owner)\n"
+                               "  parent = UndeclaredTree.new\n"
+                               "  child = UndeclaredTree.new\n"
+                               "  child.set_parent(parent)\n"
                                "  nil\n"
                                "end\n"
                                "link\n"
@@ -156,20 +106,20 @@ static mrb_value undeclared_tree_fails_q(mrb_state *, mrb_value)
     }));
 }
 
-/* mrb_close frees every object in the order of the heap. With owns, a
- * child is freed before its owner, and each C++ object is deleted
- * once, also along a chain of owners that is deeper than one level. */
+/* mrb_close frees every object in the order of the heap. With
+ * takes_ownership, a child is freed before its parent, and each C++
+ * object is deleted once, also along a chain of parents that is deeper
+ * than one level. */
 static mrb_value tree_freed_at_close_q(mrb_state *, mrb_value)
 {
     const mrb_int before = tree_objects_alive();
     mrb_state *const other = mrb_open();
     mrb_cpp_reflector::reflect_define<lifetime_classes>(other);
-    mrb_load_string(other, "TreeObject.lifetime { owns :set_parent, owner: 0 }\n"
-                           "$kept = []\n"
+    mrb_load_string(other, "$kept = []\n"
                            "30.times do\n"
-                           "  owner = TreeObject.new\n"
-                           "  3.times { c = TreeObject.new; c.set_parent(owner); $kept << c }\n"
-                           "  $kept << owner if $kept.size % 2 == 0\n"
+                           "  parent = TreeObject.new\n"
+                           "  3.times { c = TreeObject.new; c.set_parent(parent); $kept << c }\n"
+                           "  $kept << parent if $kept.size % 2 == 0\n"
                            "end\n"
                            "last = TreeObject.new\n"
                            "$kept << last\n"
@@ -190,11 +140,57 @@ static mrb_value retained_count_m(mrb_state *mrb, mrb_value)
     return mrb_int_value(mrb, mrb_array_p(kept) ? RARRAY_LEN(kept) : 0);
 }
 
+/* The number of callbacks that C++ memory holds as GC roots, released or
+ * not. A free function only marks a root as released, and the next
+ * callback that Ruby passes unregisters it, so that no free function
+ * calls a function of mruby. */
+static mrb_value callback_roots_m(mrb_state *mrb, mrb_value)
+{
+    return mrb_int_value(mrb, static_cast<mrb_int>(mrb_cpp_reflector::reflect_callbacks_of(mrb).roots.size()));
+}
+
+namespace declared_wrong {
+using mrb_cpp_reflector::reflect_object_lifetime_word;
+using mrb_cpp_reflector::reflect_word;
+/* Each declaration below is one that the C++ side refuses when it
+ * compiles the class. They are checked here with the function that the
+ * compile runs, so that one build tests all of them, and each answer
+ * reaches Ruby as the text that the compiler prints. */
+constexpr reflect_object_lifetime_word threadsafe_callback[] = {{.word = reflect_word::threadsafe, .function = "watch"}};
+constexpr reflect_object_lifetime_word no_function[] = {{.word = reflect_word::retains, .function = "nowhere", .position = {.number = 0}}};
+constexpr reflect_object_lifetime_word owns_itself[] = {{.word = reflect_word::takes_ownership, .function = "set_parent", .of = {.number = 0}, .by = {.number = 0}}};
+constexpr reflect_object_lifetime_word no_class_there[] = {{.word = reflect_word::retains, .function = "status", .position = {.number = 0}}};
+constexpr reflect_object_lifetime_word no_class_named[] = {{.word = reflect_word::ends_lifetime, .function = "set_layout", .position = {.identifier = "missing"}}};
+constexpr reflect_object_lifetime_word errors_without_number[] = {{.word = reflect_word::errors, .function = "set_layout", .test = mrb_cpp_reflector::reflect_answer_test::success}};
+constexpr reflect_object_lifetime_word right[] = {{.word = reflect_word::takes_ownership, .function = "set_parent", .of = {}, .by = {.number = 0}},
+                                           {.word = reflect_word::takes_ownership, .function = "initialize", .of = {}, .by = {.identifier = "parent"}},
+                                           {.word = reflect_word::ends_lifetime, .function = "destroy", .position = {.number = 0}}};
+}
+
+static mrb_value object_lifetime_declaration_errors_m(mrb_state *const mrb, mrb_value)
+{
+    using mrb_cpp_reflector::reflect_object_lifetime_error;
+    const mrb_value errors = mrb_hash_new(mrb);
+    const auto set = [&](const char *const key, const std::string_view error) {
+        mrb_hash_set(mrb, errors, mrb_str_new_cstr(mrb, key), error.empty() ? mrb_nil_value() : mrb_str_new(mrb, error.data(), static_cast<mrb_int>(error.size())));
+    };
+    set("threadsafe_callback", reflect_object_lifetime_error(^^Worker, declared_wrong::threadsafe_callback));
+    set("no_function", reflect_object_lifetime_error(^^Empty, declared_wrong::no_function));
+    set("owns_itself", reflect_object_lifetime_error(^^TreeObject, declared_wrong::owns_itself));
+    set("no_class_there", reflect_object_lifetime_error(^^Device, declared_wrong::no_class_there));
+    set("no_class_named", reflect_object_lifetime_error(^^Window, declared_wrong::no_class_named));
+    set("errors_without_number", reflect_object_lifetime_error(^^Window, declared_wrong::errors_without_number));
+    set("right", reflect_object_lifetime_error(^^TreeObject, declared_wrong::right));
+    return errors;
+}
+
 void lifetime_dsl_gem_test(mrb_state *const mrb)
 {
     mrb_define_module_function(mrb, mrb->kernel_module, "retained_count", retained_count_m, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, mrb->kernel_module, "callback_roots", callback_roots_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "undeclared_tree_fails?", undeclared_tree_fails_q, MRB_ARGS_NONE());
-    mrb_define_module_function(mrb, mrb->kernel_module, "tree_freed_at_close_with_owns?", tree_freed_at_close_q, MRB_ARGS_NONE());
+    mrb_define_module_function(mrb, mrb->kernel_module, "tree_freed_at_close_with_takes_ownership?", tree_freed_at_close_q, MRB_ARGS_NONE());
+    mrb_define_module_function(mrb, mrb->kernel_module, "object_lifetime_declaration_errors", object_lifetime_declaration_errors_m, MRB_ARGS_NONE());
     mrb_cpp_reflector::reflect_define<lifetime_classes>(mrb);
 }
 #else

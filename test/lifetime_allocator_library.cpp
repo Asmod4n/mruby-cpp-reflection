@@ -16,15 +16,6 @@ struct handle {
     bool piped;
     std::function<void()> watcher;
 };
-struct loose {
-    int n = 0;
-};
-struct stray {
-    int n = 0;
-};
-struct unknown {
-    int n = 0;
-};
 struct counted {
     int count = 1;
 };
@@ -70,15 +61,6 @@ int handle_value(const handle *const h)
 }
 void handle_watch(handle *const h, std::function<void()> watcher) { h->watcher = std::move(watcher); }
 int handles_alive() { return static_cast<int>(live().size()); }
-loose *loose_make() { return new loose; }
-void loose_free(loose *const l) { delete l; }
-int stray_open(stray **const out)
-{
-    *out = new stray;
-    return 0;
-}
-void stray_close(stray *const s) { delete s; }
-unknown *unknown_make() { return new unknown; }
 
 /* The library keeps one share of each counted object in a registry and
  * hands out pointers to it, as a reference-counted C library does. */

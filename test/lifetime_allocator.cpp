@@ -1,15 +1,19 @@
 /*
  * A C library hands out pointers to types it never defines in its
- * header. The gem cannot know who frees such a handle, so a function
- * that makes one raises NotImplementedError until the class of the
- * handle declares its allocator and its deallocator. lifetime_allocator.rb
- * drives c_library from Ruby.
+ * header. The gem cannot know who frees such a handle, so the build
+ * refuses a function that makes one unless mrbgem.rake declares the
+ * allocator and the deallocator of the handle with
+ * spec.reflect_object_lifetime. lifetime_allocator.rb drives c_library
+ * from Ruby.
  */
 #include <mruby.h>
 #if defined(__cpp_impl_reflection)
+#include "lifetime_allocator_library.hpp"
+#include "lifetime_dsl.hpp"
+#include <mruby/reflect_object_lifetimes.h>
 #include <mruby/reflection.hpp>
 #include <mruby/compile.h>
-#include "lifetime_allocator_library.hpp"
+#include <mruby/hash.h>
 
 /* Only the namespace is listed: its classes are the types its functions
  * take and answer, as spec.reflect generates the list. */
@@ -30,11 +34,7 @@ static mrb_value callback_in_deallocator_aborts_q(mrb_state *, mrb_value)
     return mrb_bool_value(aborts_in_child([] {
         mrb_state *const other = mrb_open();
         mrb_cpp_reflector::reflect_define<allocator_classes>(other);
-        mrb_load_string(other, "CLibrary::Handle.lifetime do\n"
-                               "  allocator :handle_make\n"
-                               "  deallocator :handle_close\n"
-                               "end\n"
-                               "def watcher\n"
+        mrb_load_string(other, "def watcher\n"
                                "  -> { :called }\n"
                                "end\n"
                                "def watched\n"
@@ -55,11 +55,7 @@ static mrb_value watched_handle_freed_at_close_q(mrb_state *, mrb_value)
     const int before = c_library::handles_alive();
     mrb_state *const other = mrb_open();
     mrb_cpp_reflector::reflect_define<allocator_classes>(other);
-    mrb_load_string(other, "CLibrary::Handle.lifetime do\n"
-                           "  allocator :handle_make\n"
-                           "  deallocator :handle_close\n"
-                           "end\n"
-                           "$kept = CLibrary.handle_make(1)\n"
+    mrb_load_string(other, "$kept = CLibrary.handle_make(1)\n"
                            "CLibrary.handle_watch($kept, -> { :called })\n");
     const bool raised = other->exc != nullptr;
     const bool made = c_library::handles_alive() == before + 1;
@@ -67,8 +63,67 @@ static mrb_value watched_handle_freed_at_close_q(mrb_state *, mrb_value)
     return mrb_bool_value(!raised && made && c_library::handles_alive() == before);
 }
 
+namespace allocated_wrong {
+using mrb_cpp_reflector::reflect_object_lifetime_word;
+using mrb_cpp_reflector::reflect_word;
+/* Each declaration below is one that the C++ side refuses when it
+ * compiles the class of the handle, checked with the function that the
+ * compile runs. */
+constexpr reflect_object_lifetime_word unnamed_output[] = {{.word = reflect_word::allocator, .function = "stray_open"}, {.word = reflect_word::deallocator, .function = "stray_close"}};
+constexpr reflect_object_lifetime_word wrong_output[] = {{.word = reflect_word::allocator, .function = "handle_open", .output_parameter = {.number = 0}},
+                                                  {.word = reflect_word::deallocator, .function = "handle_close"}};
+constexpr reflect_object_lifetime_word makes_nothing[] = {{.word = reflect_word::allocator, .function = "handle_value"}, {.word = reflect_word::deallocator, .function = "handle_close"}};
+constexpr reflect_object_lifetime_word frees_nothing[] = {{.word = reflect_word::allocator, .function = "handle_make"}, {.word = reflect_word::deallocator, .function = "handle_make"}};
+constexpr reflect_object_lifetime_word no_deallocator[] = {{.word = reflect_word::allocator, .function = "loose_make"}};
+constexpr reflect_object_lifetime_word no_decrement[] = {{.word = reflect_word::shared_ownership, .increment = "counted_ref", .decrement = "counted_find"}};
+constexpr reflect_object_lifetime_word right[] = {{.word = reflect_word::allocator, .function = "handle_open", .output_parameter = {.identifier = "made"}},
+                                           {.word = reflect_word::allocator, .function = "handle_popen"},
+                                           {.word = reflect_word::deallocator, .function = "handle_close", .results_of = "handle_open"},
+                                           {.word = reflect_word::deallocator, .function = "handle_pclose", .results_of = "handle_popen"}};
+}
+
+static mrb_value allocator_declaration_errors_m(mrb_state *const mrb, mrb_value)
+{
+    using mrb_cpp_reflector::reflect_object_lifetime_error;
+    const mrb_value errors = mrb_hash_new(mrb);
+    const auto set = [&](const char *const key, const std::string_view error) {
+        mrb_hash_set(mrb, errors, mrb_str_new_cstr(mrb, key), error.empty() ? mrb_nil_value() : mrb_str_new(mrb, error.data(), static_cast<mrb_int>(error.size())));
+    };
+    set("unnamed_output", reflect_object_lifetime_error(^^c_library_undeclared::stray, allocated_wrong::unnamed_output));
+    set("wrong_output", reflect_object_lifetime_error(^^c_library::handle, allocated_wrong::wrong_output));
+    set("makes_nothing", reflect_object_lifetime_error(^^c_library::handle, allocated_wrong::makes_nothing));
+    set("frees_nothing", reflect_object_lifetime_error(^^c_library::handle, allocated_wrong::frees_nothing));
+    set("no_deallocator", reflect_object_lifetime_error(^^c_library_undeclared::loose, allocated_wrong::no_deallocator));
+    set("no_decrement", reflect_object_lifetime_error(^^c_library::counted, allocated_wrong::no_decrement));
+    set("right", reflect_object_lifetime_error(^^c_library::handle, allocated_wrong::right));
+    return errors;
+}
+
+/* A function that makes a handle whose lifetime no declaration states
+ * stops the build when it is reflected. Each entry is the text that the
+ * compiler prints for one such function, checked with the function that
+ * the compile runs; nil is a function that the build takes. */
+static mrb_value missing_lifetime_errors_m(mrb_state *const mrb, mrb_value)
+{
+    using mrb_cpp_reflector::reflect_missing_object_lifetime;
+    const mrb_value errors = mrb_hash_new(mrb);
+    const auto set = [&](const char *const key, const std::string_view error) {
+        mrb_hash_set(mrb, errors, mrb_str_new_cstr(mrb, key), error.empty() ? mrb_nil_value() : mrb_str_new(mrb, error.data(), static_cast<mrb_int>(error.size())));
+    };
+    set("unknown_make", reflect_missing_object_lifetime(^^c_library_undeclared, ^^c_library_undeclared::unknown_make));
+    set("loose_make", reflect_missing_object_lifetime(^^c_library_undeclared, ^^c_library_undeclared::loose_make));
+    set("stray_open", reflect_missing_object_lifetime(^^c_library_undeclared, ^^c_library_undeclared::stray_open));
+    set("handle_make", reflect_missing_object_lifetime(^^c_library, ^^c_library::handle_make));
+    set("handle_open", reflect_missing_object_lifetime(^^c_library, ^^c_library::handle_open));
+    set("counted_find", reflect_missing_object_lifetime(^^c_library, ^^c_library::counted_find));
+    set("handle_value", reflect_missing_object_lifetime(^^c_library, ^^c_library::handle_value));
+    return errors;
+}
+
 void lifetime_allocator_gem_test(mrb_state *const mrb)
 {
+    mrb_define_module_function(mrb, mrb->kernel_module, "allocator_declaration_errors", allocator_declaration_errors_m, MRB_ARGS_NONE());
+    mrb_define_module_function(mrb, mrb->kernel_module, "missing_lifetime_errors", missing_lifetime_errors_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "callback_in_deallocator_aborts?", callback_in_deallocator_aborts_q, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "watched_handle_freed_at_close?", watched_handle_freed_at_close_q, MRB_ARGS_NONE());
     mrb_cpp_reflector::reflect_define<allocator_classes>(mrb);

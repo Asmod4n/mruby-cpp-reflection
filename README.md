@@ -79,13 +79,19 @@ end
 
 ## Lifetimes that the types do not state
 
-`Klass.lifetime { ... }` declares, once per class, what the C++ types of
-the class do not say. The C++ side reads the block once and keeps the
-result; a second call raises `FrozenError`. The words:
+`spec.reflect_object_lifetime 'lib::Klass' do ... end` in `mrbgem.rake` or in
+the `conf.gem` block of the build config declares what the C++ types of
+the class do not say. The build config wins over the gem, and rake
+prints one line for each declaration it replaces. Rake writes
+`<mruby/reflect_object_lifetimes.h>`, which a source includes after the headers
+of every class that it names; the C++ side reads it when it compiles
+and refuses a declaration that the types contradict. Ruby has no way to
+declare or change a lifetime at runtime. The words:
 
-- `owns :set_parent, owner: 0` - after the call, argument 0 owns the
-  receiver and deletes it; `owned: 0` says the receiver owns argument 0.
-  A parameter is named by its number or its identifier.
+- `takes_ownership :set_parent, by: 0` - after the call, argument 0 owns
+  the receiver and deletes it; `of: 0` says the receiver takes ownership
+  of argument 0. A parameter is named by its number or its identifier,
+  and the one left out is the receiver.
 - `ends_lifetime :destroy, 0` - the call ends the lifetime of argument 0
   (of the receiver without a number).
 - `retains :set_layout, 0` - the receiver keeps argument 0.
@@ -97,8 +103,9 @@ result; a second call raises `FrozenError`. The words:
   copies.
 - `allocator :open, output_parameter: :made`, `deallocator :close,
   results_of: :open`, `shared_ownership increment: :ref, decrement: :unref`
-  - for a pointer to an incomplete type. A function that makes such a
-  handle raises `NotImplementedError` until its class declares these.
+  - for a pointer to an incomplete type. The build stops at a reflected
+  function that makes such a handle when its class declares none of these,
+  and the message names the declaration that is missing.
 
 ## Generated bindings
 

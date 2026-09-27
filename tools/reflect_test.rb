@@ -36,13 +36,15 @@ class ReflectTest < Test::Unit::TestCase
     FileUtils.remove_entry(@dir)
   end
 
-  # The headers come first, so the gem and the varargs header see the
-  # declarations of the library.
+  # The headers come first, so the gem, the varargs header and the
+  # lifetime header see the declarations of the library.
   def test_the_source_includes_the_headers_before_the_gem
     @spec.reflect(headers: ['sqlite3.h'], scopes: ['sqlite'])
     text = File.read(@spec.reflect_source)
     assert_operator(text.index('#include <sqlite3.h>'), :<, text.index('#include <mruby/reflect_varargs.h>'))
+    assert_operator(text.index('#include <sqlite3.h>'), :<, text.index('#include <mruby/reflect_object_lifetimes.h>'))
     assert_operator(text.index('#include <mruby/reflect_varargs.h>'), :<, text.index('#include <mruby/reflection.hpp>'))
+    assert_operator(text.index('#include <mruby/reflect_object_lifetimes.h>'), :<, text.index('#include <mruby/reflection.hpp>'))
   end
 
   def test_the_scopes_are_listed_as_cpp_names_them

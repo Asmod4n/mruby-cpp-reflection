@@ -1,0 +1,123 @@
+#pragma once
+/*
+ * The classes whose lifetime mrbgem.rake declares with
+ * spec.reflect_object_lifetime. The generated header names every declared
+ * class, so each source that includes it sees all of them; that is why
+ * they live in a header of their own. lifetime_dsl.rb drives them.
+ */
+#include <mruby.h>
+#include <cerrno>
+#include <functional>
+#include <utility>
+#include <vector>
+
+/* An object tree in the form Qt gives it (QObject::setParent):
+ * set_parent makes the argument take ownership of the receiver, and
+ * the destructor of an object deletes the objects it took. No type says so, since
+ * the link is a raw pointer. The destructor is not virtual, so C++
+ * cannot tell Ruby when it deletes an object, and it does not take the
+ * object out of the list of its parent, so each order in which two frees
+ * can come deletes one object twice when Ruby also deletes it. */
+inline mrb_int &tree_objects_alive()
+{
+    static mrb_int n = 0;
+    return n;
+}
+class TreeObject {
+    TreeObject *parent = nullptr;
+    std::vector<TreeObject *> children;
+    mrb_int n = 1;
+
+public:
+    TreeObject() { ++tree_objects_alive(); }
+    explicit TreeObject(TreeObject *const parent) : TreeObject() { set_parent(parent); }
+    TreeObject(const TreeObject &) = delete;
+    TreeObject &operator=(const TreeObject &) = delete;
+    ~TreeObject()
+    {
+        for (TreeObject *const child : std::exchange(children, {})) {
+            child->parent = nullptr;
+            delete child;
+        }
+        --tree_objects_alive();
+    }
+    void set_parent(TreeObject *const parent)
+    {
+        if (this->parent != nullptr) std::erase(this->parent->children, this);
+        this->parent = parent;
+        if (parent != nullptr) parent->children.push_back(this);
+    }
+    mrb_int child_count() const { return static_cast<mrb_int>(children.size()); }
+    mrb_int value() const { return n; }
+    static void destroy(TreeObject *const object) { delete object; }
+    static mrb_int alive() { return tree_objects_alive(); }
+};
+/* A function deletes a Resource, as fclose ends the lifetime of a FILE
+ * (ISO C 7.21.5.1). After the call nothing may reach it. */
+inline mrb_int &resources_alive()
+{
+    static mrb_int n = 0;
+    return n;
+}
+struct Resource {
+    mrb_int n = 2;
+    Resource() { ++resources_alive(); }
+    Resource(const Resource &) = delete;
+    Resource &operator=(const Resource &) = delete;
+    ~Resource() { --resources_alive(); }
+    mrb_int value() const { return n; }
+    static void destroy(Resource *const resource) { delete resource; }
+    static mrb_int alive() { return resources_alive(); }
+};
+/* A Window keeps the Layout it is given, as QWidget::setLayout does, and
+ * reads it later. */
+struct Layout {
+    mrb_int n = 3;
+};
+class Window {
+    const Layout *layout = nullptr;
+
+public:
+    void set_layout(const Layout *const given) { layout = given; }
+    mrb_int layout_value() const { return layout == nullptr ? 0 : layout->n; }
+};
+/* The error conventions of C: a negative answer and errno (open in
+ * POSIX), one value for success, and a null pointer. start is called
+ * from another thread in a C library that takes a callback, so it takes
+ * only copies. */
+struct Device {
+    int open(const int flags) const
+    {
+        if (flags < 0) {
+            errno = EINVAL;
+            return -1;
+        }
+        return 3;
+    }
+    int status(const int code) const { return code; }
+    const Device *find(const bool found) const { return found ? this : nullptr; }
+    int start(const int n) const { return n; }
+};
+struct Deep {
+    int depth() const { return 1; }
+    int shallow() const { return 2; }
+};
+/* An Adopter takes ownership of the Leaf it adopts and deletes it. The
+ * declaration of Adopter names the Leaf, and nothing declares Leaf, so
+ * mruby allocates a Leaf, and C++ may not delete it. */
+struct Leaf {
+    mrb_int n = 5;
+};
+class Adopter {
+    std::vector<Leaf *> leaves;
+
+public:
+    Adopter() = default;
+    Adopter(const Adopter &) = delete;
+    Adopter &operator=(const Adopter &) = delete;
+    ~Adopter()
+    {
+        for (Leaf *const leaf : leaves) delete leaf;
+    }
+    void adopt(Leaf *const leaf) { leaves.push_back(leaf); }
+};

@@ -2,7 +2,8 @@
 # carries no C++ of its own. It takes the headers of the library and an
 # allowlist of scopes: namespaces and classes, named as C++ names them.
 # The generated source includes the headers, then the varargs header of
-# the gem if spec.reflect_varargs wrote one, then the gem, and defines
+# the gem if spec.reflect_varargs wrote one, the lifetime header if
+# spec.reflect_object_lifetime wrote one, then the gem, and defines
 # gem_init and gem_final. reflect_with_signature_types adds every class
 # and enum that a function of a listed scope takes or answers, so a
 # handle type is a Ruby class before any function has made one.
@@ -41,6 +42,9 @@ module MRuby
           #include <mruby.h>
           #if __has_include(<mruby/reflect_varargs.h>)
           #include <mruby/reflect_varargs.h>
+          #endif
+          #if __has_include(<mruby/reflect_object_lifetimes.h>)
+          #include <mruby/reflect_object_lifetimes.h>
           #endif
           #include <mruby/reflection.hpp>
 
