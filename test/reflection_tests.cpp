@@ -609,6 +609,11 @@ struct Square : Shape {
 };
 }
 struct Counting {
+    static std::generator<int> filtered(int n, std::function<bool(int)> keep)
+    {
+        for (int i = 1; i <= n; i++)
+            if (keep(i)) co_yield i;
+    }
     int start = 1;
     static std::generator<int> up_to(int n)
     {
@@ -679,7 +684,19 @@ struct PlainSharer {
     void keep(const std::shared_ptr<Plain> &p) { held = p; }
     mrb_int read() const { return held->n; }
 };
-constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Sharer, ^^SelfSharer, ^^WatchedHolder, ^^Lender, ^^Shelf, ^^PlainSharer, ^^Scored, ^^Measure, ^^Link, ^^free_functions, ^^Odd, ^^Converts, ^^Outer, ^^Diamond, ^^TakesRvalues, ^^Flags, ^^Declared, ^^Unbuilt, ^^Held<long>, ^^Color, ^^Flag, ^^Palette, ^^Mark, ^^Choices, ^^Grid, ^^Counting, ^^Keeper, ^^ConvertsExplicitly, ^^std::pair<const std::string, int>, ^^std::pair<std::string, int>>();
+struct Fragile {
+    int v = 1;
+    Fragile() = default;
+    Fragile(const Fragile &) { throw std::runtime_error("no copy"); }
+    Fragile &operator=(const Fragile &) { throw std::runtime_error("no assign"); }
+};
+struct TakesFragile {
+    int take(Fragile f) const { return f.v; }
+};
+struct FragileHolder {
+    Fragile item;
+};
+constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Sharer, ^^SelfSharer, ^^WatchedHolder, ^^Lender, ^^Shelf, ^^PlainSharer, ^^Fragile, ^^TakesFragile, ^^FragileHolder, ^^Scored, ^^Measure, ^^Link, ^^free_functions, ^^Odd, ^^Converts, ^^Outer, ^^Diamond, ^^TakesRvalues, ^^Flags, ^^Declared, ^^Unbuilt, ^^Held<long>, ^^Color, ^^Flag, ^^Palette, ^^Mark, ^^Choices, ^^Grid, ^^Counting, ^^Keeper, ^^ConvertsExplicitly, ^^std::pair<const std::string, int>, ^^std::pair<std::string, int>>();
 constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();
 constexpr auto nested = mrb_cpp_reflector::reflect<^^Holder>();
 constexpr auto named = mrb_cpp_reflector::reflect<^^fruit::Basket::count<fruit::Apple>>();

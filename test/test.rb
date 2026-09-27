@@ -1057,3 +1057,12 @@ assert('a member of a standard view refuses a count past its end') do
   assert_equal([1, 2], w.first(2).to_a)
   assert_equal([2], w.last(1).to_a)
 end
+
+# A copy or an assignment that throws while an argument is converted
+# must reach Ruby as the Ruby exception, and must not end the process.
+assert('a C++ exception from an argument conversion is the Ruby exception for it') do
+  f = Fragile.new
+  assert_equal('no copy', assert_raise(RuntimeError) { TakesFragile.new.take(f) }.message)
+  assert_equal('no assign', assert_raise(RuntimeError) { FragileHolder.new.item = f }.message)
+  assert_equal('no assign', assert_raise(RuntimeError) { Fragile.new.replace(f) }.message)
+end

@@ -1197,8 +1197,8 @@ mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
         if constexpr (reflect_mutates(operand)) mrb_check_frozen(mrb, mrb_obj_ptr(self));
         O *const object = reflect_ptr<O>(mrb, self);
         if (object == nullptr) [[unlikely]] mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
-        auto args = reflect_get_args<Function, 1, Count>(mrb);
         return reflect_translate_exceptions(mrb, [&] {
+            auto args = reflect_get_args<Function, 1, Count>(mrb);
             if constexpr (std::meta::return_type_of(Function) == ^^void) {
                 std::apply([&](auto &...held) { [:Function:](*object, reflect_pass(held)...); }, args);
                 return mrb_nil_value();
@@ -1211,8 +1211,8 @@ mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
             }
         });
     } else if constexpr (!std::meta::is_class_member(Function)) {
-        auto args = reflect_get_args<Function, 0, Count>(mrb);
         return reflect_translate_exceptions(mrb, [&] {
+            auto args = reflect_get_args<Function, 0, Count>(mrb);
             if constexpr (std::meta::return_type_of(Function) == ^^void) {
                 std::apply([&](auto &...held) { [:Function:](reflect_pass(held)...); }, args);
                 return mrb_nil_value();
@@ -1224,20 +1224,20 @@ mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
         using T = [:std::meta::dealias(Type):];
         if constexpr (std::meta::is_constructor(Function) && requires { typename T::overridden; }) {
             using B = typename T::overridden;
-            auto args = reflect_get_args<Function, 0, Count>(mrb);
             return reflect_translate_exceptions(mrb, [&] {
+                auto args = reflect_get_args<Function, 0, Count>(mrb);
                 reflect_adopt<B>(mrb, self, static_cast<B *>(std::apply([&](auto &...held) { return new T(reflect_pass(held)...); }, args)));
                 return self;
             });
         } else if constexpr (std::meta::is_constructor(Function)) {
-            auto args = reflect_get_args<Function, 0, Count>(mrb);
             return reflect_translate_exceptions(mrb, [&] {
+                auto args = reflect_get_args<Function, 0, Count>(mrb);
                 reflect_adopt<T>(mrb, self, std::apply([&](auto &...held) { return reflect_new<T>(mrb, reflect_pass(held)...); }, args));
                 return self;
             });
         } else if constexpr (std::meta::is_static_member(Function)) {
-            auto args = reflect_get_args<Function, 0, Count>(mrb);
             return reflect_translate_exceptions(mrb, [&] {
+                auto args = reflect_get_args<Function, 0, Count>(mrb);
                 if constexpr (std::meta::return_type_of(Function) == ^^void) {
                     std::apply([&](auto &...held) { [:Function:](reflect_pass(held)...); }, args);
                     return mrb_nil_value();
@@ -1249,9 +1249,9 @@ mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
             if constexpr (!std::meta::is_const(Function)) mrb_check_frozen(mrb, mrb_obj_ptr(self));
             T *const object = reflect_ptr<T>(mrb, self);
             if (object == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
-            auto args = reflect_get_args<Function, 0, Count>(mrb);
-            std::apply([&](auto &...held) { reflect_raise_on_hardened_precondition<Function>(mrb, *object, reflect_pass(held)...); }, args);
             const mrb_value answer = reflect_translate_exceptions(mrb, [&] {
+                auto args = reflect_get_args<Function, 0, Count>(mrb);
+                std::apply([&](auto &...held) { reflect_raise_on_hardened_precondition<Function>(mrb, *object, reflect_pass(held)...); }, args);
                 if constexpr (std::meta::return_type_of(Function) == ^^void) {
                     std::apply([&](auto &...held) { object->[:Function:](reflect_pass(held)...); }, args);
                     return mrb_nil_value();
@@ -1526,18 +1526,20 @@ void reflect_define_field(mrb_state *const mrb, RClass *const klass)
 {
     using T = [:std::meta::parent_of(Field):];
     ::mrb_define_method_id(mrb, klass, reflect_intern<Field>(mrb), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
-        T *const object = reflect_ptr<T>(mrb, self);
-        if (object == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
-        using F = [:reflect_bare(std::meta::type_of(Field)):];
-        if constexpr (reflect_is_variant(^^F)) return reflect_result(mrb, self, object->[:Field:]);
-        else if constexpr (std::is_array_v<F>) {
-            const mrb_value array = mrb_ary_new_capa(mrb, static_cast<mrb_int>(std::extent_v<F>));
-            for (const auto &element : object->[:Field:]) mrb_ary_push(mrb, array, reflect_result(mrb, mrb_nil_value(), std::remove_cvref_t<decltype(element)>(element)));
-            return array;
-        } else if constexpr (std::is_class_v<F> && (reflect_guard_class<T>() == ^^void) && !std::same_as<F, std::string_view>)
-            return reflect_lend(mrb, self, &object->[:Field:], std::meta::is_const_type(std::meta::type_of(Field)) || mrb_frozen_p(mrb_obj_ptr(self)));
-        else if constexpr (std::meta::is_bit_field(Field)) return reflect_result(mrb, self, static_cast<F>(object->[:Field:]));
-        else return reflect_result(mrb, self, object->[:Field:]);
+        return reflect_translate_exceptions(mrb, [&]() -> mrb_value {
+            T *const object = reflect_ptr<T>(mrb, self);
+            if (object == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
+            using F = [:reflect_bare(std::meta::type_of(Field)):];
+            if constexpr (reflect_is_variant(^^F)) return reflect_result(mrb, self, object->[:Field:]);
+            else if constexpr (std::is_array_v<F>) {
+                const mrb_value array = mrb_ary_new_capa(mrb, static_cast<mrb_int>(std::extent_v<F>));
+                for (const auto &element : object->[:Field:]) mrb_ary_push(mrb, array, reflect_result(mrb, mrb_nil_value(), std::remove_cvref_t<decltype(element)>(element)));
+                return array;
+            } else if constexpr (std::is_class_v<F> && (reflect_guard_class<T>() == ^^void) && !std::same_as<F, std::string_view>)
+                return reflect_lend(mrb, self, &object->[:Field:], std::meta::is_const_type(std::meta::type_of(Field)) || mrb_frozen_p(mrb_obj_ptr(self)));
+            else if constexpr (std::meta::is_bit_field(Field)) return reflect_result(mrb, self, static_cast<F>(object->[:Field:]));
+            else return reflect_result(mrb, self, object->[:Field:]);
+        });
     }, MRB_ARGS_NONE());
     if constexpr (!std::meta::is_const_type(std::meta::type_of(Field)) &&
                   (std::is_copy_assignable_v<typename [:reflect_bare(std::meta::type_of(Field)):]> || std::is_array_v<typename [:reflect_bare(std::meta::type_of(Field)):]>)) {
@@ -1546,33 +1548,35 @@ void reflect_define_field(mrb_state *const mrb, RClass *const klass)
         constexpr mrb_sym presym = reflect_presym(setter);
         const mrb_sym sym = presym != 0 ? presym : mrb_intern_static(mrb, setter, name.size() + 1);
         ::mrb_define_method_id(mrb, klass, sym, [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
-            mrb_check_frozen(mrb, mrb_obj_ptr(self));
-            T *const object = reflect_ptr<T>(mrb, self);
-            if (object == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
-            mrb_value v;
-            mrb_get_args(mrb, "o", &v);
-            using F = [:reflect_bare(std::meta::type_of(Field)):];
-            if constexpr (reflect_is_variant(^^F)) {
-                std::optional<F> made = reflect_variant_from<F>(mrb, v);
-                if (!made) [[unlikely]] mrb_raisef(mrb, E_TYPE_ERROR, "%T fits no alternative of the variant", v);
-                object->[:Field:] = std::move(*made);
-            } else if constexpr (std::is_array_v<F>) {
-                using E = std::remove_extent_t<F>;
-                if (!mrb_array_p(v) || RARRAY_LEN(v) != static_cast<mrb_int>(std::extent_v<F>)) [[unlikely]]
-                    mrb_raisef(mrb, E_ARGUMENT_ERROR, "an Array of %d elements wanted", static_cast<int>(std::extent_v<F>));
-                std::array<E, std::extent_v<F>> converted{};
-                for (std::size_t i = 0; i < converted.size(); i++) {
-                    const mrb_value element = RARRAY_PTR(v)[i];
-                    if (E *const p = reflect_ptr<E>(mrb, element); p != nullptr) converted[i] = *p;
-                    else if constexpr (reflect_from_mrb<E>) converted[i] = mrb_value_to<E>(mrb, element);
-                    else mrb_raise(mrb, E_TYPE_ERROR, "wrong type");
-                }
-                std::ranges::copy(converted, std::ranges::begin(object->[:Field:]));
-            } else if constexpr (std::is_pointer_v<F> && std::is_void_v<std::remove_pointer_t<F>>) object->[:Field:] = reflect_void_ptr<std::remove_pointer_t<F>>(mrb, v);
-            else if (F *const p = reflect_ptr<F>(mrb, v); p != nullptr) object->[:Field:] = *p;
-            else if constexpr (reflect_from_mrb<F>) object->[:Field:] = mrb_value_to<F>(mrb, v);
-            else mrb_raise(mrb, E_TYPE_ERROR, "wrong type");
-            return v;
+            return reflect_translate_exceptions(mrb, [&]() -> mrb_value {
+                mrb_check_frozen(mrb, mrb_obj_ptr(self));
+                T *const object = reflect_ptr<T>(mrb, self);
+                if (object == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
+                mrb_value v;
+                mrb_get_args(mrb, "o", &v);
+                using F = [:reflect_bare(std::meta::type_of(Field)):];
+                if constexpr (reflect_is_variant(^^F)) {
+                    std::optional<F> made = reflect_variant_from<F>(mrb, v);
+                    if (!made) [[unlikely]] mrb_raisef(mrb, E_TYPE_ERROR, "%T fits no alternative of the variant", v);
+                    object->[:Field:] = std::move(*made);
+                } else if constexpr (std::is_array_v<F>) {
+                    using E = std::remove_extent_t<F>;
+                    if (!mrb_array_p(v) || RARRAY_LEN(v) != static_cast<mrb_int>(std::extent_v<F>)) [[unlikely]]
+                        mrb_raisef(mrb, E_ARGUMENT_ERROR, "an Array of %d elements wanted", static_cast<int>(std::extent_v<F>));
+                    std::array<E, std::extent_v<F>> converted{};
+                    for (std::size_t i = 0; i < converted.size(); i++) {
+                        const mrb_value element = RARRAY_PTR(v)[i];
+                        if (E *const p = reflect_ptr<E>(mrb, element); p != nullptr) converted[i] = *p;
+                        else if constexpr (reflect_from_mrb<E>) converted[i] = mrb_value_to<E>(mrb, element);
+                        else mrb_raise(mrb, E_TYPE_ERROR, "wrong type");
+                    }
+                    std::ranges::copy(converted, std::ranges::begin(object->[:Field:]));
+                } else if constexpr (std::is_pointer_v<F> && std::is_void_v<std::remove_pointer_t<F>>) object->[:Field:] = reflect_void_ptr<std::remove_pointer_t<F>>(mrb, v);
+                else if (F *const p = reflect_ptr<F>(mrb, v); p != nullptr) object->[:Field:] = *p;
+                else if constexpr (reflect_from_mrb<F>) object->[:Field:] = mrb_value_to<F>(mrb, v);
+                else mrb_raise(mrb, E_TYPE_ERROR, "wrong type");
+                return v;
+            });
         }, MRB_ARGS_REQ(1));
     }
 }
@@ -1655,19 +1659,21 @@ void reflect_define_conversions(mrb_state *const mrb, RClass *const klass)
         ::mrb_define_method_id(mrb, klass, reflect_sym<kToS>(mrb), to_s, MRB_ARGS_NONE());
     } else if constexpr (reflect_map<T>) {
         constexpr auto to_h = [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
-            T *const object = reflect_ptr<T>(mrb, self);
-            if (object == nullptr) [[unlikely]] mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
-            const mrb_value pairs = mrb_ary_new(mrb);
-            for (auto &&[key, mapped] : *object) {
-                if constexpr (reflect_bytes<std::remove_cvref_t<decltype(key)>>)
-                    mrb_ary_push(mrb, pairs, mrb_str_new(mrb, std::ranges::data(key), static_cast<mrb_int>(std::ranges::size(key))));
-                else
-                    mrb_ary_push(mrb, pairs, reflect_result(mrb, self, key));
-                mrb_ary_push(mrb, pairs, reflect_result(mrb, self, mapped));
-            }
-            const mrb_value hash = mrb_hash_new_capa(mrb, RARRAY_LEN(pairs) / 2);
-            for (mrb_int i = 0; i < RARRAY_LEN(pairs); i += 2) mrb_hash_set(mrb, hash, RARRAY_PTR(pairs)[i], RARRAY_PTR(pairs)[i + 1]);
-            return hash;
+            return reflect_translate_exceptions(mrb, [&]() -> mrb_value {
+                T *const object = reflect_ptr<T>(mrb, self);
+                if (object == nullptr) [[unlikely]] mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
+                const mrb_value pairs = mrb_ary_new(mrb);
+                for (auto &&[key, mapped] : *object) {
+                    if constexpr (reflect_bytes<std::remove_cvref_t<decltype(key)>>)
+                        mrb_ary_push(mrb, pairs, mrb_str_new(mrb, std::ranges::data(key), static_cast<mrb_int>(std::ranges::size(key))));
+                    else
+                        mrb_ary_push(mrb, pairs, reflect_result(mrb, self, key));
+                    mrb_ary_push(mrb, pairs, reflect_result(mrb, self, mapped));
+                }
+                const mrb_value hash = mrb_hash_new_capa(mrb, RARRAY_LEN(pairs) / 2);
+                for (mrb_int i = 0; i < RARRAY_LEN(pairs); i += 2) mrb_hash_set(mrb, hash, RARRAY_PTR(pairs)[i], RARRAY_PTR(pairs)[i + 1]);
+                return hash;
+            });
         };
         ::mrb_define_method_id(mrb, klass, reflect_sym<kToH>(mrb), to_h, MRB_ARGS_NONE());
     } else if constexpr (std::ranges::input_range<T> && !std::ranges::forward_range<T>) {
@@ -1712,24 +1718,28 @@ void reflect_define_conversions(mrb_state *const mrb, RClass *const klass)
             mrb_include_module(mrb, klass, mrb_module_get_id(mrb, reflect_sym<kEnumerable>(mrb)));
     } else if constexpr (std::ranges::range<T>) {
         constexpr auto to_a = [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
-            T *const object = reflect_ptr<T>(mrb, self);
-            if (object == nullptr) [[unlikely]] mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
-            const mrb_value array = mrb_ary_new(mrb);
-            for (auto &&element : *object) mrb_ary_push(mrb, array, reflect_result(mrb, self, element));
-            return array;
+            return reflect_translate_exceptions(mrb, [&]() -> mrb_value {
+                T *const object = reflect_ptr<T>(mrb, self);
+                if (object == nullptr) [[unlikely]] mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
+                const mrb_value array = mrb_ary_new(mrb);
+                for (auto &&element : *object) mrb_ary_push(mrb, array, reflect_result(mrb, self, element));
+                return array;
+            });
         };
         ::mrb_define_method_id(mrb, klass, reflect_sym<kToA>(mrb), to_a, MRB_ARGS_NONE());
         if constexpr (std::ranges::random_access_range<T> && std::ranges::sized_range<T>) {
             constexpr auto each = [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
-                mrb_value block;
-                mrb_get_args(mrb, "&", &block);
-                if (mrb_nil_p(block)) return mrb_funcall_id(mrb, self, MRB_SYM(to_enum), 1, mrb_symbol_value(reflect_sym<kEach>(mrb)));
-                for (std::size_t i = 0;; ++i) {
-                    T *const object = reflect_ptr<T>(mrb, self);
-                    if (object == nullptr) [[unlikely]] mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
-                    if (i >= std::ranges::size(*object)) return self;
-                    mrb_yield(mrb, block, reflect_result(mrb, self, std::ranges::begin(*object)[i]));
-                }
+                return reflect_translate_exceptions(mrb, [&]() -> mrb_value {
+                    mrb_value block;
+                    mrb_get_args(mrb, "&", &block);
+                    if (mrb_nil_p(block)) return mrb_funcall_id(mrb, self, MRB_SYM(to_enum), 1, mrb_symbol_value(reflect_sym<kEach>(mrb)));
+                    for (std::size_t i = 0;; ++i) {
+                        T *const object = reflect_ptr<T>(mrb, self);
+                        if (object == nullptr) [[unlikely]] mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
+                        if (i >= std::ranges::size(*object)) return self;
+                        mrb_yield(mrb, block, reflect_result(mrb, self, std::ranges::begin(*object)[i]));
+                    }
+                });
             };
             ::mrb_define_method_id(mrb, klass, reflect_sym<kEach>(mrb), each, MRB_ARGS_BLOCK());
             if (mrb_class_defined_id(mrb, reflect_sym<kEnumerable>(mrb)))
@@ -1742,15 +1752,17 @@ template <class T>
 void reflect_define_replace(mrb_state *const mrb, RClass *const klass)
 {
     ::mrb_define_method_id(mrb, klass, reflect_sym<kReplace>(mrb), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
-        mrb_check_frozen(mrb, mrb_obj_ptr(self));
-        T *const object = reflect_ptr<T>(mrb, self);
-        if (object == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
-        mrb_value v;
-        mrb_get_args(mrb, "o", &v);
-        if (T *const p = reflect_ptr<T>(mrb, v); p != nullptr) *object = *p;
-        else if constexpr (reflect_from_mrb<T>) *object = mrb_value_to<T>(mrb, v);
-        else mrb_raise(mrb, E_TYPE_ERROR, "wrong type");
-        return self;
+        return reflect_translate_exceptions(mrb, [&]() -> mrb_value {
+            mrb_check_frozen(mrb, mrb_obj_ptr(self));
+            T *const object = reflect_ptr<T>(mrb, self);
+            if (object == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
+            mrb_value v;
+            mrb_get_args(mrb, "o", &v);
+            if (T *const p = reflect_ptr<T>(mrb, v); p != nullptr) *object = *p;
+            else if constexpr (reflect_from_mrb<T>) *object = mrb_value_to<T>(mrb, v);
+            else mrb_raise(mrb, E_TYPE_ERROR, "wrong type");
+            return self;
+        });
     }, MRB_ARGS_REQ(1));
 }
 
@@ -1798,21 +1810,23 @@ template <std::meta::info Type, std::meta::info Subscript>
 void reflect_define_element_assignment(mrb_state *const mrb, RClass *const methods)
 {
     ::mrb_define_method_id(mrb, methods, MRB_OPSYM(aset), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
-        using T = [:std::meta::dealias(Type):];
-        using E = [:reflect_bare(std::meta::return_type_of(Subscript)):];
-        mrb_check_frozen(mrb, mrb_obj_ptr(self));
-        T *const object = reflect_ptr<T>(mrb, self);
-        if (object == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
-        mrb_value index, v;
-        mrb_get_args(mrb, "oo", &index, &v);
-        auto held = reflect_argument<std::meta::type_of(std::meta::parameters_of(Subscript)[0])>(mrb, index);
-        reflect_raise_on_hardened_precondition<Subscript>(mrb, *object, reflect_pass(held));
-        E &element = object->[:Subscript:](reflect_pass(held));
-        if constexpr (std::is_pointer_v<E> && std::is_void_v<std::remove_pointer_t<E>>) element = reflect_void_ptr<std::remove_pointer_t<E>>(mrb, v);
-            else if (E *const p = reflect_ptr<E>(mrb, v); p != nullptr) element = *p;
-        else if constexpr (reflect_from_mrb<E>) element = mrb_value_to<E>(mrb, v);
-        else mrb_raise(mrb, E_TYPE_ERROR, "wrong type");
-        return v;
+        return reflect_translate_exceptions(mrb, [&]() -> mrb_value {
+            using T = [:std::meta::dealias(Type):];
+            using E = [:reflect_bare(std::meta::return_type_of(Subscript)):];
+            mrb_check_frozen(mrb, mrb_obj_ptr(self));
+            T *const object = reflect_ptr<T>(mrb, self);
+            if (object == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
+            mrb_value index, v;
+            mrb_get_args(mrb, "oo", &index, &v);
+            auto held = reflect_argument<std::meta::type_of(std::meta::parameters_of(Subscript)[0])>(mrb, index);
+            reflect_raise_on_hardened_precondition<Subscript>(mrb, *object, reflect_pass(held));
+            E &element = object->[:Subscript:](reflect_pass(held));
+            if constexpr (std::is_pointer_v<E> && std::is_void_v<std::remove_pointer_t<E>>) element = reflect_void_ptr<std::remove_pointer_t<E>>(mrb, v);
+                else if (E *const p = reflect_ptr<E>(mrb, v); p != nullptr) element = *p;
+            else if constexpr (reflect_from_mrb<E>) element = mrb_value_to<E>(mrb, v);
+            else mrb_raise(mrb, E_TYPE_ERROR, "wrong type");
+            return v;
+        });
     }, MRB_ARGS_REQ(2));
 }
 
@@ -1901,31 +1915,39 @@ RClass *reflect_define_enum(reflect_definition &definition, RClass *const under)
     ::mrb_define_method_id(mrb, methods, MRB_SYM(to_i), to_i, MRB_ARGS_NONE());
     if constexpr (!std::meta::is_scoped_enum_type(std::meta::dealias(Type))) ::mrb_define_method_id(mrb, methods, MRB_SYM(to_int), to_i, MRB_ARGS_NONE());
     ::mrb_define_method_id(mrb, methods, MRB_OPSYM(cmp), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
-        const E value = reflect_receiver_or_raise<E>(mrb, self);
-        if constexpr (!std::meta::is_scoped_enum_type(std::meta::dealias(Type))) {
-            if (const mrb_value n = mrb_get_arg1(mrb); mrb_integer_p(n)) {
-                const std::underlying_type_t<E> u = std::to_underlying(value);
-                return mrb_fixnum_value(std::cmp_less(u, mrb_integer(n)) ? -1 : std::cmp_greater(u, mrb_integer(n)) ? 1 : 0);
+        return reflect_translate_exceptions(mrb, [&]() -> mrb_value {
+            const E value = reflect_receiver_or_raise<E>(mrb, self);
+            if constexpr (!std::meta::is_scoped_enum_type(std::meta::dealias(Type))) {
+                if (const mrb_value n = mrb_get_arg1(mrb); mrb_integer_p(n)) {
+                    const std::underlying_type_t<E> u = std::to_underlying(value);
+                    return mrb_fixnum_value(std::cmp_less(u, mrb_integer(n)) ? -1 : std::cmp_greater(u, mrb_integer(n)) ? 1 : 0);
+                }
             }
-        }
-        const E *const other = reflect_ptr<E>(mrb, mrb_get_arg1(mrb));
-        if (other == nullptr) return mrb_nil_value();
-        return mrb_fixnum_value(value < *other ? -1 : value > *other ? 1 : 0);
+            const E *const other = reflect_ptr<E>(mrb, mrb_get_arg1(mrb));
+            if (other == nullptr) return mrb_nil_value();
+            return mrb_fixnum_value(value < *other ? -1 : value > *other ? 1 : 0);
+        });
     }, MRB_ARGS_REQ(1));
     constexpr auto equal = [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
         const E *const other = reflect_ptr<E>(mrb, mrb_get_arg1(mrb));
         return mrb_bool_value(other != nullptr && *other == reflect_receiver_or_raise<E>(mrb, self));
     };
     ::mrb_define_method_id(mrb, methods, MRB_OPSYM(eq), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
-        if constexpr (!std::meta::is_scoped_enum_type(std::meta::dealias(Type))) {
-            if (const mrb_value n = mrb_get_arg1(mrb); mrb_integer_p(n)) return mrb_bool_value(std::cmp_equal(std::to_underlying(reflect_receiver_or_raise<E>(mrb, self)), mrb_integer(n)));
-        }
-        const E *const other = reflect_ptr<E>(mrb, mrb_get_arg1(mrb));
-        return mrb_bool_value(other != nullptr && *other == reflect_receiver_or_raise<E>(mrb, self));
+        return reflect_translate_exceptions(mrb, [&]() -> mrb_value {
+            if constexpr (!std::meta::is_scoped_enum_type(std::meta::dealias(Type))) {
+                if (const mrb_value n = mrb_get_arg1(mrb); mrb_integer_p(n)) return mrb_bool_value(std::cmp_equal(std::to_underlying(reflect_receiver_or_raise<E>(mrb, self)), mrb_integer(n)));
+            }
+            const E *const other = reflect_ptr<E>(mrb, mrb_get_arg1(mrb));
+            return mrb_bool_value(other != nullptr && *other == reflect_receiver_or_raise<E>(mrb, self));
+        });
     }, MRB_ARGS_REQ(1));
     ::mrb_define_method_id(mrb, methods, MRB_SYM_Q(eql), equal, MRB_ARGS_REQ(1));
     ::mrb_define_method_id(mrb, methods, MRB_SYM(hash), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
-        return mrb_int_value(mrb, static_cast<mrb_int>(std::hash<E>{}(reflect_receiver_or_raise<E>(mrb, self))));
+        return reflect_translate_exceptions(mrb, [&]() -> mrb_value {
+            return reflect_translate_exceptions(mrb, [&]() -> mrb_value {
+                return mrb_int_value(mrb, static_cast<mrb_int>(std::hash<E>{}(reflect_receiver_or_raise<E>(mrb, self))));
+            });
+        });
     }, MRB_ARGS_NONE());
     ::mrb_define_method_id(mrb, methods, MRB_SYM(to_s), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
         const E value = reflect_receiver_or_raise<E>(mrb, self);
