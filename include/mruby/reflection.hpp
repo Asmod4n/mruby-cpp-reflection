@@ -783,7 +783,7 @@ std::optional<T> reflect_variant_from(mrb_state *const mrb, const mrb_value v)
             namespace vc = mrbcpp::value_converter;
             if (made) return;
             mrb_value c = mrb_nil_value();
-            const bool numeric = mrb_obj_is_kind_of(mrb, v, mrb_class_get(mrb, "Numeric"));
+            const bool numeric = mrb_obj_is_kind_of(mrb, v, mrb_class_get_id(mrb, MRB_SYM(Numeric)));
             if constexpr (std::integral<A> && !std::same_as<A, bool>) {
                 if (numeric) c = mrb_ensure_integer_type(mrb, v);
             } else if constexpr (std::floating_point<A>) {
@@ -1005,7 +1005,7 @@ mrb_value reflect_result(mrb_state *const mrb, const mrb_value self, R &&value)
         if constexpr (std::is_void_v<P>) {
             if (value == nullptr) return mrb_nil_value();
             constexpr bool constant = std::is_const_v<std::remove_pointer_t<T>>;
-            RClass *const klass = mrb_class_get(mrb, constant ? "ConstVoidPointer" : "VoidPointer");
+            RClass *const klass = mrb_class_get_id(mrb, constant ? MRB_SYM(ConstVoidPointer) : MRB_SYM(VoidPointer));
             return mrb_obj_value(mrb_data_object_alloc(mrb, klass, const_cast<void *>(static_cast<const void *>(value)),
                                                        constant ? &mrb_const_void_pointer_type : &mrb_void_pointer_type));
         } else if constexpr (std::same_as<P, char>) return value == nullptr ? mrb_nil_value() : mrb_str_new_cstr(mrb, value);
@@ -1052,7 +1052,7 @@ mrb_value reflect_translate_exceptions(mrb_state *const mrb, const Call &call)
         kind = E_ARGUMENT_ERROR;
         what = e.what();
     } catch (const std::filesystem::filesystem_error &e) {
-        if (mrb_class_defined(mrb, "IOError")) kind = mrb_class_get(mrb, "IOError");
+        if (mrb_class_defined_id(mrb, MRB_SYM(IOError))) kind = mrb_class_get_id(mrb, MRB_SYM(IOError));
         else if (e.code().category() == std::generic_category() || e.code().category() == std::system_category()) system_errno = e.code().value();
         else kind = E_RUNTIME_ERROR;
         what = e.what();
@@ -1582,13 +1582,13 @@ void reflect_define_conversion_function(mrb_state *const mrb, RClass *const klas
     };
     constexpr bool implicit = !std::meta::is_explicit(Function);
     if constexpr (std::is_integral_v<R>) {
-        ::mrb_define_method(mrb, klass, "to_i", convert, MRB_ARGS_NONE());
-        if constexpr (implicit) ::mrb_define_method(mrb, klass, "to_int", convert, MRB_ARGS_NONE());
+        ::mrb_define_method_id(mrb, klass, MRB_SYM(to_i), convert, MRB_ARGS_NONE());
+        if constexpr (implicit) ::mrb_define_method_id(mrb, klass, MRB_SYM(to_int), convert, MRB_ARGS_NONE());
     } else if constexpr (std::is_floating_point_v<R>) {
-        ::mrb_define_method(mrb, klass, "to_f", convert, MRB_ARGS_NONE());
+        ::mrb_define_method_id(mrb, klass, MRB_SYM(to_f), convert, MRB_ARGS_NONE());
     } else {
-        ::mrb_define_method(mrb, klass, "to_s", convert, MRB_ARGS_NONE());
-        if constexpr (implicit) ::mrb_define_method(mrb, klass, "to_str", convert, MRB_ARGS_NONE());
+        ::mrb_define_method_id(mrb, klass, MRB_SYM(to_s), convert, MRB_ARGS_NONE());
+        if constexpr (implicit) ::mrb_define_method_id(mrb, klass, MRB_SYM(to_str), convert, MRB_ARGS_NONE());
     }
 }
 
@@ -1667,7 +1667,7 @@ void reflect_define_conversions(mrb_state *const mrb, RClass *const klass)
         constexpr auto next = [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
             return reflect_translate_exceptions(mrb, [&] {
                 reflect_single_pass<T> &pass = reflect_iteration<T>(mrb, self);
-                if (*pass.at == pass.range.end()) [[unlikely]] mrb_raise(mrb, mrb_class_get(mrb, "StopIteration"), "iteration reached an end");
+                if (*pass.at == pass.range.end()) [[unlikely]] mrb_raise(mrb, mrb_class_get_id(mrb, MRB_SYM(StopIteration)), "iteration reached an end");
                 std::ranges::range_value_t<T> value(**pass.at);
                 ++*pass.at;
                 return reflect_result(mrb, mrb_nil_value(), std::move(value));
@@ -1686,7 +1686,7 @@ void reflect_define_conversions(mrb_state *const mrb, RClass *const klass)
             });
         };
         ::mrb_define_method_id(mrb, klass, reflect_sym<kEach>(mrb), each, MRB_ARGS_BLOCK());
-        ::mrb_define_method(mrb, klass, "next", next, MRB_ARGS_NONE());
+        ::mrb_define_method_id(mrb, klass, MRB_SYM(next), next, MRB_ARGS_NONE());
         ::mrb_define_method_id(mrb, klass, reflect_sym<kToA>(mrb), to_a, MRB_ARGS_NONE());
         if (mrb_class_defined_id(mrb, reflect_sym<kEnumerable>(mrb)))
             mrb_include_module(mrb, klass, mrb_module_get_id(mrb, reflect_sym<kEnumerable>(mrb)));
@@ -1872,15 +1872,15 @@ RClass *reflect_define_enum(reflect_definition &definition, RClass *const under)
         mrb_raisef(mrb, E_NAME_ERROR, "%n is already defined in %C", name, outer);
     RClass *const klass = ::mrb_define_class_under_id(mrb, outer, name, mrb->object_class);
     MRB_SET_INSTANCE_TT(klass, MRB_TT_CDATA);
-    mrb_undef_class_method(mrb, klass, "new");
+    mrb_undef_class_method_id(mrb, klass, MRB_SYM(new));
     mrb_iv_set(mrb, mrb_obj_value(klass), reflect_reflected_key(mrb), mrb_true_value());
     mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), reflect_class_key<std::meta::dealias(Type)>(mrb), mrb_obj_value(klass));
     RClass *const methods = ::mrb_define_module_under_id(mrb, klass, reflect_sym<kInstanceMethods>(mrb));
     mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), reflect_module_key<std::meta::dealias(Type)>(mrb), mrb_obj_value(methods));
     constexpr auto to_i = [](mrb_state *const mrb, const mrb_value self) -> mrb_value { return mrb_convert_number(mrb, reflect_receiver_or_raise<E>(mrb, self)); };
-    ::mrb_define_method(mrb, methods, "to_i", to_i, MRB_ARGS_NONE());
-    if constexpr (!std::meta::is_scoped_enum_type(std::meta::dealias(Type))) ::mrb_define_method(mrb, methods, "to_int", to_i, MRB_ARGS_NONE());
-    ::mrb_define_method(mrb, methods, "<=>", [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+    ::mrb_define_method_id(mrb, methods, MRB_SYM(to_i), to_i, MRB_ARGS_NONE());
+    if constexpr (!std::meta::is_scoped_enum_type(std::meta::dealias(Type))) ::mrb_define_method_id(mrb, methods, MRB_SYM(to_int), to_i, MRB_ARGS_NONE());
+    ::mrb_define_method_id(mrb, methods, MRB_OPSYM(cmp), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
         const E value = reflect_receiver_or_raise<E>(mrb, self);
         if constexpr (!std::meta::is_scoped_enum_type(std::meta::dealias(Type))) {
             if (const mrb_value n = mrb_get_arg1(mrb); mrb_integer_p(n)) {
@@ -1896,28 +1896,28 @@ RClass *reflect_define_enum(reflect_definition &definition, RClass *const under)
         const E *const other = reflect_ptr<E>(mrb, mrb_get_arg1(mrb));
         return mrb_bool_value(other != nullptr && *other == reflect_receiver_or_raise<E>(mrb, self));
     };
-    ::mrb_define_method(mrb, methods, "==", [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+    ::mrb_define_method_id(mrb, methods, MRB_OPSYM(eq), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
         if constexpr (!std::meta::is_scoped_enum_type(std::meta::dealias(Type))) {
             if (const mrb_value n = mrb_get_arg1(mrb); mrb_integer_p(n)) return mrb_bool_value(std::cmp_equal(std::to_underlying(reflect_receiver_or_raise<E>(mrb, self)), mrb_integer(n)));
         }
         const E *const other = reflect_ptr<E>(mrb, mrb_get_arg1(mrb));
         return mrb_bool_value(other != nullptr && *other == reflect_receiver_or_raise<E>(mrb, self));
     }, MRB_ARGS_REQ(1));
-    ::mrb_define_method(mrb, methods, "eql?", equal, MRB_ARGS_REQ(1));
-    ::mrb_define_method(mrb, methods, "hash", [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+    ::mrb_define_method_id(mrb, methods, MRB_SYM_Q(eql), equal, MRB_ARGS_REQ(1));
+    ::mrb_define_method_id(mrb, methods, MRB_SYM(hash), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
         return mrb_int_value(mrb, static_cast<mrb_int>(std::hash<E>{}(reflect_receiver_or_raise<E>(mrb, self))));
     }, MRB_ARGS_NONE());
-    ::mrb_define_method(mrb, methods, "to_s", [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+    ::mrb_define_method_id(mrb, methods, MRB_SYM(to_s), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
         const E value = reflect_receiver_or_raise<E>(mrb, self);
         template for (constexpr std::meta::info enumerator : std::define_static_array(std::meta::enumerators_of(std::meta::dealias(Type)))) {
             if (value == [:enumerator:]) return mrb_str_new_static(mrb, std::meta::identifier_of(enumerator).data(), std::meta::identifier_of(enumerator).size());
         }
         return mrb_funcall_id(mrb, mrb_convert_number(mrb, value), reflect_sym<kToS>(mrb), 0);
     }, MRB_ARGS_NONE());
-    ::mrb_define_method(mrb, methods, "inspect", [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+    ::mrb_define_method_id(mrb, methods, MRB_SYM(inspect), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
         return mrb_format(mrb, "#<%C %v>", mrb_obj_class(mrb, self), mrb_funcall_id(mrb, self, reflect_sym<kToS>(mrb), 0));
     }, MRB_ARGS_NONE());
-    mrb_include_module(mrb, klass, mrb_module_get(mrb, "Comparable"));
+    mrb_include_module(mrb, klass, mrb_module_get_id(mrb, MRB_SYM(Comparable)));
     mrb_include_module(mrb, klass, methods);
     template for (constexpr std::meta::info enumerator : std::define_static_array(std::meta::enumerators_of(std::meta::dealias(Type)))) {
         static constexpr std::string_view constant = std::define_static_string(reflect_class_name(enumerator));

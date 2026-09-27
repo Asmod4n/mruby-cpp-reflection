@@ -217,8 +217,9 @@ assert('a void pointer crosses as VoidPointer or ConstVoidPointer') do
   left, right = seen
   assert_equal(ConstVoidPointer, left.class)
   assert_equal(VoidPointer, right.class)
-  assert_equal(left.address, right.address)
-  assert_equal(left.address, left.to_i)
+  assert_false(left.respond_to?(:address))
+  assert_false(left.respond_to?(:to_i))
+  assert_true(left.inspect.start_with?('#<ConstVoidPointer address=0x'))
   assert_true(left == right)
   assert_true(right.dup == right)
   assert_true(c.same(left, right))
