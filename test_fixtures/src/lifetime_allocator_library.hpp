@@ -22,6 +22,16 @@ void counted_unref(counted *c);
 int counted_count(const counted *c);
 }
 
+/* A library can declare its functions in a namespace and the class of
+ * its handle at global scope, as Dear ImGui does with ImGuiContext and
+ * ImGui::CreateContext. */
+struct c_library_context;
+namespace c_library {
+c_library_context *create_context();
+void destroy_context(c_library_context *c);
+int contexts_alive();
+}
+
 /* Functions that make handles of types that no declaration names. The
  * build refuses to reflect them, so lifetime_allocator.cpp only checks
  * them with the function that the compile runs, and nothing defines
@@ -49,6 +59,11 @@ inline constexpr auto mruby::cpp_reflection::object_lifetime<^^c_library::handle
     deallocator(^^c_library::handle_close, {.results_of = ^^c_library::handle_make}),
     deallocator(^^c_library::handle_pclose, {.results_of = ^^c_library::handle_popen}),
     errors(^^c_library::handle_open, {.success = 0}),
+};
+template <>
+inline constexpr auto mruby::cpp_reflection::object_lifetime<^^c_library_context> = std::array{
+    allocator(^^c_library::create_context),
+    deallocator(^^c_library::destroy_context, {.results_of = ^^c_library::create_context}),
 };
 template <>
 inline constexpr auto mruby::cpp_reflection::object_lifetime<^^c_library::counted> = std::array{

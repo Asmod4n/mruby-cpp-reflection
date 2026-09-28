@@ -896,6 +896,7 @@ void lifetime_allocator_gem_init(mrb_state *mrb);
 void function_pointers_gem_init(mrb_state *mrb);
 void varargs_gem_init(mrb_state *mrb);
 void attributes_gem_init(mrb_state *mrb);
+void signature_types_gem_init(mrb_state *mrb);
 
 /* One thread owns an mrb_state. A call into Ruby from another thread
  * would race with that thread, so the process ends instead. */
@@ -934,6 +935,7 @@ extern "C" void mrb_mruby_cpp_reflection_test_fixtures_gem_init(mrb_state *mrb)
     function_pointers_gem_init(mrb);
     varargs_gem_init(mrb);
     attributes_gem_init(mrb);
+    signature_types_gem_init(mrb);
 }
 #else
 extern "C" void mrb_mruby_cpp_reflection_test_fixtures_gem_init(mrb_state *) {}

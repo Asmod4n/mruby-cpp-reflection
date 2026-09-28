@@ -64,7 +64,7 @@ struct reflect_shared_ownership {
 
 struct reflect_object_lifetime_word {
     reflect_word word;
-    const char *function = std::define_static_string("");
+    std::meta::info function{};
     reflect_parameter of{};
     reflect_parameter by{};
     reflect_parameter position{};
@@ -101,17 +101,17 @@ inline constexpr std::array<std::meta::info, 0> varargs{};
 consteval mruby::cpp_reflection::reflect_object_lifetime_word takes_ownership(const std::meta::info function, const mruby::cpp_reflection::reflect_ownership given)
 {
     if (given.of.number < 0 && *given.of.identifier == '\0' && given.by.number < 0 && *given.by.identifier == '\0') throw "takes_ownership names the of: or the by: parameter";
-    return {.word = mruby::cpp_reflection::reflect_word::takes_ownership, .function = mruby::cpp_reflection::reflect_lifetime_function_name(function), .of = given.of, .by = given.by};
+    return {.word = mruby::cpp_reflection::reflect_word::takes_ownership, .function = function, .of = given.of, .by = given.by};
 }
 
 consteval mruby::cpp_reflection::reflect_object_lifetime_word ends_lifetime(const std::meta::info function, const mruby::cpp_reflection::reflect_parameter position = {})
 {
-    return {.word = mruby::cpp_reflection::reflect_word::ends_lifetime, .function = mruby::cpp_reflection::reflect_lifetime_function_name(function), .position = position};
+    return {.word = mruby::cpp_reflection::reflect_word::ends_lifetime, .function = function, .position = position};
 }
 
 consteval mruby::cpp_reflection::reflect_object_lifetime_word retains(const std::meta::info function, const mruby::cpp_reflection::reflect_parameter position)
 {
-    return {.word = mruby::cpp_reflection::reflect_word::retains, .function = mruby::cpp_reflection::reflect_lifetime_function_name(function), .position = position};
+    return {.word = mruby::cpp_reflection::reflect_word::retains, .function = function, .position = position};
 }
 
 consteval mruby::cpp_reflection::reflect_object_lifetime_word errors(const std::meta::info function, const mruby::cpp_reflection::reflect_error_answers given)
@@ -122,7 +122,7 @@ consteval mruby::cpp_reflection::reflect_object_lifetime_word errors(const std::
     const mruby::cpp_reflection::reflect_answer answer = given.success.test != reflect_answer_test::none ? given.success : given.error;
     const reflect_answer_test test = given.success.test != reflect_answer_test::none ? reflect_answer_test::success : answer.test;
     return {.word = mruby::cpp_reflection::reflect_word::errors,
-            .function = mruby::cpp_reflection::reflect_lifetime_function_name(function),
+            .function = function,
             .test = test,
             .expects_nil = answer.expects_nil,
             .expected = answer.expected,
@@ -132,24 +132,24 @@ consteval mruby::cpp_reflection::reflect_object_lifetime_word errors(const std::
 consteval mruby::cpp_reflection::reflect_object_lifetime_word stack_reserve(const std::meta::info function, const std::size_t bytes)
 {
     if (bytes == 0) throw "a stack reserve is a positive number of bytes";
-    return {.word = mruby::cpp_reflection::reflect_word::stack_reserve, .function = mruby::cpp_reflection::reflect_lifetime_function_name(function), .stack_reserve = bytes};
+    return {.word = mruby::cpp_reflection::reflect_word::stack_reserve, .function = function, .stack_reserve = bytes};
 }
 
 consteval mruby::cpp_reflection::reflect_object_lifetime_word threadsafe(const std::meta::info function, const bool value)
 {
     if (value) throw "threadsafe takes false";
-    return {.word = mruby::cpp_reflection::reflect_word::threadsafe, .function = mruby::cpp_reflection::reflect_lifetime_function_name(function)};
+    return {.word = mruby::cpp_reflection::reflect_word::threadsafe, .function = function};
 }
 
 consteval mruby::cpp_reflection::reflect_object_lifetime_word allocator(const std::meta::info function, const mruby::cpp_reflection::reflect_allocation given = {})
 {
-    return {.word = mruby::cpp_reflection::reflect_word::allocator, .function = mruby::cpp_reflection::reflect_lifetime_function_name(function), .output_parameter = given.output_parameter};
+    return {.word = mruby::cpp_reflection::reflect_word::allocator, .function = function, .output_parameter = given.output_parameter};
 }
 
 consteval mruby::cpp_reflection::reflect_object_lifetime_word deallocator(const std::meta::info function, const mruby::cpp_reflection::reflect_deallocation given = {})
 {
     return {.word = mruby::cpp_reflection::reflect_word::deallocator,
-            .function = mruby::cpp_reflection::reflect_lifetime_function_name(function),
+            .function = function,
             .results_of = given.results_of == std::meta::info{} ? std::define_static_string("") : mruby::cpp_reflection::reflect_lifetime_function_name(given.results_of)};
 }
 

@@ -150,4 +150,16 @@ if Object.const_defined?(:CLibrary)
   assert('a callback that a deallocator calls at mrb_close reaches no Ruby') do
     assert_true watched_handle_freed_at_close?
   end
+
+  assert('a lifetime names functions of a namespace for a class outside it') do
+    # The allocator and the deallocator of c_library_context are in
+    # namespace c_library, and the class is at global scope.
+    full_gc
+    before = CLibrary.contexts_alive
+    c = CLibrary.create_context
+    assert_equal before + 1, CLibrary.contexts_alive
+    c = nil
+    full_gc
+    assert_equal before, CLibrary.contexts_alive
+  end
 end

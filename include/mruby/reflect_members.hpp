@@ -573,7 +573,7 @@ consteval std::vector<std::meta::info> reflect_signature_types(const std::span<c
     for (const std::meta::info scope : scopes) {
         if (!std::meta::is_namespace(scope) && !(std::meta::is_class_type(scope) && std::meta::is_complete_type(scope))) continue;
         for (const std::meta::info m : std::meta::members_of(scope, std::meta::access_context::current())) {
-            if (!std::meta::is_function(m) || std::meta::is_template(m) || !reflect_call_supported(m)) continue;
+            if (!std::meta::is_function(m) || std::meta::is_template(m) || std::meta::is_destructor(m) || !reflect_call_supported(m)) continue;
             if (!std::meta::is_constructor(m)) note(std::meta::return_type_of(m));
             for (const std::meta::info p : std::meta::parameters_of(m)) note(std::meta::type_of(p));
         }

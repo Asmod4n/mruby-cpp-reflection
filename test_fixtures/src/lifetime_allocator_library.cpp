@@ -77,4 +77,26 @@ void counted_unref(counted *const c)
     --c->count;
 }
 int counted_count(const counted *const c) { return c->count; }
+
+static int &contexts()
+{
+    static int alive = 0;
+    return alive;
+}
+int contexts_alive() { return contexts(); }
+}
+
+struct c_library_context {
+    int n;
+};
+
+c_library_context *c_library::create_context()
+{
+    ++c_library::contexts();
+    return new c_library_context{0};
+}
+void c_library::destroy_context(c_library_context *const c)
+{
+    --c_library::contexts();
+    delete c;
 }

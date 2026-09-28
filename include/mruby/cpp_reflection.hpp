@@ -277,6 +277,16 @@ consteval std::vector<std::meta::info> reflect_functions_named(const std::meta::
     return found;
 }
 
+consteval std::vector<std::meta::info> reflect_functions_named(const std::meta::info klass, const std::meta::info function)
+{
+    const std::string_view name = reflect_lifetime_function_name(function);
+    std::vector<std::meta::info> found = reflect_functions_named(klass, name);
+    if (!found.empty() || std::meta::is_type(function)) return found;
+    for (const std::meta::info m : std::meta::members_of(std::meta::parent_of(function), std::meta::access_context::current()))
+        if (std::meta::is_function(m) && reflect_function_name(m) == name && reflect_involves(m, klass)) found.push_back(m);
+    return found;
+}
+
 consteval std::size_t reflect_parameter_index(const std::meta::info function, const reflect_parameter given)
 {
     const std::vector<std::meta::info> parameters = reflect_given_parameters(function);
@@ -326,10 +336,10 @@ consteval std::string_view reflect_object_lifetime_error(const std::meta::info k
             continue;
         }
 #if !defined(__GLIBC__)
-        if (word.word == reflect_word::stack_reserve) return reflect_object_lifetime_message(klass, word.function, "has a stack_reserve, which reads the thread stack with pthread_getattr_np");
+        if (word.word == reflect_word::stack_reserve) return reflect_object_lifetime_message(klass, reflect_lifetime_function_name(word.function), "has a stack_reserve, which reads the thread stack with pthread_getattr_np");
 #endif
         const std::vector<std::meta::info> functions = reflect_functions_named(klass, word.function);
-        if (functions.empty()) return reflect_object_lifetime_message(klass, word.function, "is no function of the class and no function beside it that takes or makes the class");
+        if (functions.empty()) return reflect_object_lifetime_message(klass, reflect_lifetime_function_name(word.function), "is no function of the class and no function beside it that takes or makes the class");
         std::size_t applies = 0;
         for (const std::meta::info function : functions) {
             switch (word.word) {
@@ -337,7 +347,7 @@ consteval std::string_view reflect_object_lifetime_error(const std::meta::info k
                 const int of = reflect_position(function, word.of);
                 const int by = reflect_position(function, word.by);
                 if (of == reflect_nowhere || by == reflect_nowhere) break;
-                if (of == by) return reflect_object_lifetime_message(klass, word.function, "cannot make an object take ownership of itself");
+                if (of == by) return reflect_object_lifetime_message(klass, reflect_lifetime_function_name(word.function), "cannot make an object take ownership of itself");
                 applies++;
                 break;
             }
@@ -346,20 +356,20 @@ consteval std::string_view reflect_object_lifetime_error(const std::meta::info k
                 if (reflect_position(function, word.position) != reflect_nowhere) applies++;
                 break;
             case reflect_word::errors:
-                if (!reflect_answers_number(function)) return reflect_object_lifetime_message(klass, word.function, "answers no integer and no pointer");
+                if (!reflect_answers_number(function)) return reflect_object_lifetime_message(klass, reflect_lifetime_function_name(word.function), "answers no integer and no pointer");
                 applies++;
                 break;
             case reflect_word::threadsafe:
-                if (!reflect_takes_only_copies(function)) return reflect_object_lifetime_message(klass, word.function, "takes an argument that points into the VM");
+                if (!reflect_takes_only_copies(function)) return reflect_object_lifetime_message(klass, reflect_lifetime_function_name(word.function), "takes an argument that points into the VM");
                 applies++;
                 break;
             case reflect_word::allocator: {
                 if (reflect_made_class(function) != klass) break;
                 const int output = reflect_output_position(function);
                 const bool named = word.output_parameter.number >= 0 || *word.output_parameter.identifier != '\0';
-                if (!named && output != reflect_nowhere) return reflect_object_lifetime_message(klass, word.function, "gives the object through a parameter, which output_parameter: names");
+                if (!named && output != reflect_nowhere) return reflect_object_lifetime_message(klass, reflect_lifetime_function_name(word.function), "gives the object through a parameter, which output_parameter: names");
                 if (named && std::cmp_not_equal(reflect_parameter_index(function, word.output_parameter), output))
-                    return reflect_object_lifetime_message(klass, word.function, "has no pointer to a pointer to the class where output_parameter: points");
+                    return reflect_object_lifetime_message(klass, reflect_lifetime_function_name(word.function), "has no pointer to a pointer to the class where output_parameter: points");
                 applies++;
                 break;
             }
@@ -371,19 +381,19 @@ consteval std::string_view reflect_object_lifetime_error(const std::meta::info k
             }
         }
         if (applies > 0) continue;
-        if (word.word == reflect_word::allocator) return reflect_object_lifetime_message(klass, word.function, "makes no object of the class");
-        if (word.word == reflect_word::deallocator) return reflect_object_lifetime_message(klass, word.function, "takes no pointer to the class as its only parameter");
-        return reflect_object_lifetime_message(klass, word.function, "has no pointer or reference to a class at the named parameter");
+        if (word.word == reflect_word::allocator) return reflect_object_lifetime_message(klass, reflect_lifetime_function_name(word.function), "makes no object of the class");
+        if (word.word == reflect_word::deallocator) return reflect_object_lifetime_message(klass, reflect_lifetime_function_name(word.function), "takes no pointer to the class as its only parameter");
+        return reflect_object_lifetime_message(klass, reflect_lifetime_function_name(word.function), "has no pointer or reference to a class at the named parameter");
     }
     for (const reflect_object_lifetime_word &word : words) {
         if (word.word != reflect_word::allocator) continue;
-        const auto frees = [&](const reflect_object_lifetime_word &d) { return d.word == reflect_word::deallocator && (*d.results_of == '\0' || std::string_view(d.results_of) == word.function); };
-        if (std::ranges::none_of(words, frees)) return reflect_object_lifetime_message(klass, word.function, "is an allocator without a deallocator");
+        const auto frees = [&](const reflect_object_lifetime_word &d) { return d.word == reflect_word::deallocator && (*d.results_of == '\0' || std::string_view(d.results_of) == reflect_lifetime_function_name(word.function)); };
+        if (std::ranges::none_of(words, frees)) return reflect_object_lifetime_message(klass, reflect_lifetime_function_name(word.function), "is an allocator without a deallocator");
     }
     for (const reflect_object_lifetime_word &word : words) {
         if (word.word != reflect_word::deallocator || *word.results_of == '\0') continue;
-        const auto made = [&](const reflect_object_lifetime_word &a) { return a.word == reflect_word::allocator && std::string_view(a.function) == word.results_of; };
-        if (std::ranges::none_of(words, made)) return reflect_object_lifetime_message(klass, word.function, std::string("names ") + std::string(std::from_range, std::string_view(word.results_of)) + ", which is no allocator of this class");
+        const auto made = [&](const reflect_object_lifetime_word &a) { return a.word == reflect_word::allocator && std::string_view(reflect_lifetime_function_name(a.function)) == word.results_of; };
+        if (std::ranges::none_of(words, made)) return reflect_object_lifetime_message(klass, reflect_lifetime_function_name(word.function), std::string("names ") + std::string(std::from_range, std::string_view(word.results_of)) + ", which is no allocator of this class");
     }
     return {};
 }
@@ -429,7 +439,7 @@ consteval reflect_function_lifetime reflect_object_lifetime_for(const std::meta:
                 lifetime.ended = 0;
                 continue;
             }
-            if (name != word.function || !std::ranges::contains(reflect_functions_named(klass, word.function), function)) continue;
+            if (name != reflect_lifetime_function_name(word.function) || !std::ranges::contains(reflect_functions_named(klass, word.function), function)) continue;
             switch (word.word) {
             case reflect_word::takes_ownership: {
                 const int of = reflect_position(function, word.of);
@@ -478,7 +488,7 @@ consteval reflect_function_lifetime reflect_object_lifetime_for(const std::meta:
             case reflect_word::threadsafe:
             case reflect_word::shared_ownership: break;
             }
-            lifetime.name = word.function;
+            lifetime.name = reflect_lifetime_function_name(word.function);
         }
     }
     if (const std::meta::info made = reflect_made_class(function); made != ^^void)
@@ -497,7 +507,7 @@ consteval bool reflect_declares(const std::meta::info type, const std::meta::inf
         const std::string_view name = reflect_function_name(function);
         for (const reflect_object_lifetime_word &word : words) {
             if (word.word == reflect_word::shared_ownership ? name == word.decrement && reflect_releases_class(function, klass)
-                                                            : name == word.function && std::ranges::contains(reflect_functions_named(klass, word.function), function))
+                                                            : name == reflect_lifetime_function_name(word.function) && std::ranges::contains(reflect_functions_named(klass, word.function), function))
                 return true;
         }
     }
@@ -510,7 +520,7 @@ consteval std::meta::info reflect_deallocator_for(const std::meta::info function
     if (made == ^^void) return ^^void;
     const std::span<const reflect_object_lifetime_word> words = reflect_words_of(made);
     const std::string_view name = reflect_function_name(function);
-    if (std::ranges::none_of(words, [&](const reflect_object_lifetime_word &w) { return w.word == reflect_word::allocator && name == w.function; })) return ^^void;
+    if (std::ranges::none_of(words, [&](const reflect_object_lifetime_word &w) { return w.word == reflect_word::allocator && name == reflect_lifetime_function_name(w.function); })) return ^^void;
     const auto named = std::ranges::find_if(words, [&](const reflect_object_lifetime_word &w) { return w.word == reflect_word::deallocator && *w.results_of != '\0' && name == w.results_of; });
     const auto general = std::ranges::find_if(words, [](const reflect_object_lifetime_word &w) { return w.word == reflect_word::deallocator && *w.results_of == '\0'; });
     const auto chosen = named != words.end() ? named : general;
@@ -2774,9 +2784,6 @@ consteval std::vector<const char *> reflect_symbol_names_of(const std::meta::inf
     }
     if (std::meta::is_type(bare) && reflect_overridable(bare))
         for (const std::meta::info f : reflect_virtual_functions(bare)) names.emplace_back(std::meta::identifier_of(f));
-    std::ranges::sort(names);
-    const auto [first, last] = std::ranges::unique(names);
-    names.erase(first, last);
     std::vector<const char *> texts;
     for (const std::string &name : names) texts.push_back(std::define_static_string(name));
     return texts;
@@ -2808,12 +2815,13 @@ consteval std::vector<std::meta::info> reflect_call_scopes(const std::span<const
 
 consteval std::vector<const char *> reflect_call_names_of(const std::span<const std::meta::info> classes)
 {
-    std::vector<const char *> texts;
+    std::vector<std::string_view> names;
     for (const std::meta::info scope : reflect_call_scopes(classes))
-        if (std::meta::is_namespace(scope) || std::meta::is_type(scope)) std::ranges::copy(reflect_symbol_names_of(scope), std::back_inserter(texts));
-    std::ranges::sort(texts, {}, [](const char *const text) { return std::string_view(text); });
-    const auto [first, last] = std::ranges::unique(texts, {}, [](const char *const text) { return std::string_view(text); });
-    texts.erase(first, last);
+        if (std::meta::is_namespace(scope) || std::meta::is_type(scope)) std::ranges::copy(reflect_symbol_names_of(scope), std::back_inserter(names));
+    std::sort(names.begin(), names.end(), [](const std::string_view a, const std::string_view b) { return a.size() != b.size() ? a.size() < b.size() : a < b; });
+    names.erase(std::unique(names.begin(), names.end()), names.end());
+    std::vector<const char *> texts;
+    for (const std::string_view name : names) texts.push_back(name.data());
     return texts;
 }
 
