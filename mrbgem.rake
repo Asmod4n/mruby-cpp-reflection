@@ -421,7 +421,9 @@ end
 # the section out. The text of the overriders runs the compile from its
 # own action, so the compile is no prerequisite of a product.
 # include_virtual_overriders.cpp compiles the source with its overriders,
-# in place of the source's own object. Nothing of it enters the tree.
+# in place of the source's own object, in the object list that
+# lib/mruby/gem.rb already gave to libmruby. Nothing of it enters the
+# tree.
 
 module MRuby
   module Gem
@@ -472,9 +474,9 @@ module MRuby
                   ["MRB_CPP_REFLECTOR_SOURCE=#{quoted.(source)}", "MRB_CPP_REFLECTOR_VIRTUAL_OVERRIDERS=#{quoted.(text)}"]
         end
         if test_objs.include?(replaced)
-          self.test_objs = test_objs.map { |o| o == replaced ? object : o }
+          test_objs.map! { |o| o == replaced ? object : o }
         else
-          self.objs = objs.map { |o| o == replaced ? object : o }
+          objs.map! { |o| o == replaced ? object : o }
         end
       end
     end
