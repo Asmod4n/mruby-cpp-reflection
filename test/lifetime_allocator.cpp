@@ -1,16 +1,15 @@
 /*
  * A C library hands out pointers to types it never defines in its
  * header. The gem cannot know who frees such a handle, so the build
- * refuses a function that makes one unless mrbgem.rake declares the
- * allocator and the deallocator of the handle with
- * spec.reflect_object_lifetime. lifetime_allocator.rb drives c_library
+ * refuses a function that makes one unless a declaration names the
+ * allocator and the deallocator of the handle, as
+ * lifetime_allocator_library.hpp does. lifetime_allocator.rb drives c_library
  * from Ruby.
  */
 #include <mruby.h>
 #if defined(__cpp_impl_reflection)
 #include "lifetime_allocator_library.hpp"
 #include "lifetime_dsl.hpp"
-#include <mruby/reflect_object_lifetimes.h>
 #include <mruby/reflection.hpp>
 #include <mruby/compile.h>
 #include <mruby/hash.h>
@@ -64,22 +63,19 @@ static mrb_value watched_handle_freed_at_close_q(mrb_state *, mrb_value)
 }
 
 namespace allocated_wrong {
-using mrb_cpp_reflector::reflect_object_lifetime_word;
-using mrb_cpp_reflector::reflect_word;
+using namespace mruby::cpp_reflection;
 /* Each declaration below is one that the C++ side refuses when it
  * compiles the class of the handle, checked with the function that the
  * compile runs. */
-constexpr reflect_object_lifetime_word unnamed_output[] = {{.word = reflect_word::allocator, .function = "stray_open"}, {.word = reflect_word::deallocator, .function = "stray_close"}};
-constexpr reflect_object_lifetime_word wrong_output[] = {{.word = reflect_word::allocator, .function = "handle_open", .output_parameter = {.number = 0}},
-                                                  {.word = reflect_word::deallocator, .function = "handle_close"}};
-constexpr reflect_object_lifetime_word makes_nothing[] = {{.word = reflect_word::allocator, .function = "handle_value"}, {.word = reflect_word::deallocator, .function = "handle_close"}};
-constexpr reflect_object_lifetime_word frees_nothing[] = {{.word = reflect_word::allocator, .function = "handle_make"}, {.word = reflect_word::deallocator, .function = "handle_make"}};
-constexpr reflect_object_lifetime_word no_deallocator[] = {{.word = reflect_word::allocator, .function = "loose_make"}};
-constexpr reflect_object_lifetime_word no_decrement[] = {{.word = reflect_word::shared_ownership, .increment = "counted_ref", .decrement = "counted_find"}};
-constexpr reflect_object_lifetime_word right[] = {{.word = reflect_word::allocator, .function = "handle_open", .output_parameter = {.identifier = "made"}},
-                                           {.word = reflect_word::allocator, .function = "handle_popen"},
-                                           {.word = reflect_word::deallocator, .function = "handle_close", .results_of = "handle_open"},
-                                           {.word = reflect_word::deallocator, .function = "handle_pclose", .results_of = "handle_popen"}};
+constexpr auto unnamed_output = std::array{allocator(^^c_library_undeclared::stray_open), deallocator(^^c_library_undeclared::stray_close)};
+constexpr auto wrong_output = std::array{allocator(^^c_library::handle_open, {.output_parameter = 0}), deallocator(^^c_library::handle_close)};
+constexpr auto makes_nothing = std::array{allocator(^^c_library::handle_value), deallocator(^^c_library::handle_close)};
+constexpr auto frees_nothing = std::array{allocator(^^c_library::handle_make), deallocator(^^c_library::handle_make)};
+constexpr auto no_deallocator = std::array{allocator(^^c_library_undeclared::loose_make)};
+constexpr auto no_decrement = std::array{shared_ownership({.increment = ^^c_library::counted_ref, .decrement = ^^c_library::counted_find})};
+constexpr auto right = std::array{allocator(^^c_library::handle_open, {.output_parameter = "made"}), allocator(^^c_library::handle_popen),
+                                  deallocator(^^c_library::handle_close, {.results_of = ^^c_library::handle_open}),
+                                  deallocator(^^c_library::handle_pclose, {.results_of = ^^c_library::handle_popen})};
 }
 
 static mrb_value allocator_declaration_errors_m(mrb_state *const mrb, mrb_value)

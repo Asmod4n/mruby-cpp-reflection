@@ -1,5 +1,6 @@
 #pragma once
 #include <functional>
+#include <mruby/cpp_reflection.hpp>
 
 /* The declarations of a C library, as its header shows them: the types
  * are incomplete, so only pointers to them cross the interface, and the
@@ -35,3 +36,22 @@ int stray_open(stray **made);
 void stray_close(stray *s);
 unknown *unknown_make();
 }
+
+/* The header of the library does not say which function frees what
+ * another made, so this declaration says it. */
+#if defined(__cpp_impl_reflection)
+template <>
+inline constexpr auto mruby::cpp_reflection::object_lifetime<^^c_library::handle> = std::array{
+    allocator(^^c_library::handle_open, {.output_parameter = "made"}),
+    allocator(^^c_library::handle_make),
+    allocator(^^c_library::handle_popen),
+    deallocator(^^c_library::handle_close, {.results_of = ^^c_library::handle_open}),
+    deallocator(^^c_library::handle_close, {.results_of = ^^c_library::handle_make}),
+    deallocator(^^c_library::handle_pclose, {.results_of = ^^c_library::handle_popen}),
+    errors(^^c_library::handle_open, {.success = 0}),
+};
+template <>
+inline constexpr auto mruby::cpp_reflection::object_lifetime<^^c_library::counted> = std::array{
+    shared_ownership({.increment = ^^c_library::counted_ref, .decrement = ^^c_library::counted_unref}),
+};
+#endif

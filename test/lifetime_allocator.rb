@@ -17,8 +17,8 @@ if Object.const_defined?(:CLibrary)
     assert_nil errors['handle_value']
   end
 
-  # mrbgem.rake declares the allocators, the deallocators and the shared
-  # ownership of these handles with spec.reflect_object_lifetime.
+  # lifetime_allocator_library.hpp declares the allocators, the
+  # deallocators and the shared ownership of these handles.
 
   def dropped_handles
     CLibrary.handle_open("abc", nil)

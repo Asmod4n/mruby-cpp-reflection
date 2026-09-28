@@ -1,6 +1,6 @@
 if Object.const_defined?(:TreeObject)
-  # mrbgem.rake declares the lifetimes of these classes with
-  # spec.reflect_object_lifetime; the tests below only use the classes.
+  # lifetime_dsl.hpp declares the lifetimes of these classes; the tests
+  # below only use the classes.
 
   def tree_child_of_dropped_parent
     parent = TreeObject.new
@@ -203,7 +203,7 @@ if Object.const_defined?(:TreeObject)
     # declaration; nil is a declaration that compiles.
     errors = object_lifetime_declaration_errors
     assert_true errors['threadsafe_callback'].include?('watch takes an argument that points into the VM')
-    assert_true errors['no_function'].include?('nowhere is no function of the class')
+    assert_true errors['no_function'].include?('status is no function of the class')
     assert_true errors['owns_itself'].include?('set_parent cannot make an object take ownership of itself')
     assert_true errors['no_class_there'].include?('status has no pointer or reference to a class')
     assert_true errors['no_class_named'].include?('set_layout has no pointer or reference to a class')

@@ -34,16 +34,16 @@ end
 
 load File.expand_path('../mrbgem.rake', __dir__) unless MRuby::Gem::Specification.method_defined?(:reflect)
 
-# The header is what the C++ side reads: one specialization per
-# function, one reflect_types per list, the name as C++ names it.
+# The header is what the C++ side reads: one specialization of
+# mruby::cpp_reflection::varargs per function, one std::tuple per list,
+# the name as C++ names it, as a source of C++ writes it by hand.
 assert('ReflectVarargsTest: reflect varargs writes the header the gem reads') do
   @dir = Dir.mktmpdir
   @spec = MRuby::Gem::Specification.new(@dir)
   begin
     @spec.reflect_varargs('ns::sum', [%w[int], ['int', 'const char *']])
     text = File.read(@spec.reflect_varargs_header)
-    assert_true(/reflect_varargs_lists<\^\^::ns::sum>/.match?(text))
-    assert_true(/\^\^reflect_types<int>, \^\^reflect_types<int, const char \*>/.match?(text))
+    assert_true(text.include?("template <>\ninline constexpr auto mruby::cpp_reflection::varargs<^^::ns::sum> = std::array{^^std::tuple<int>, ^^std::tuple<int, const char *>};\n"))
     assert_equal(["#{@dir}/include"], @spec.cxx.include_paths)
   ensure
     FileUtils.remove_entry(@dir)

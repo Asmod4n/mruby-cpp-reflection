@@ -760,8 +760,6 @@ constexpr auto overridable = mrb_cpp_reflector::reflect<^^shapes::Shape, ^^shape
 constexpr auto instantiated = mrb_cpp_reflector::reflect<^^fruit, ^^fruit::Apple, ^^fruit::Pear, ^^fruit::Kind, ^^fruit::Scale>();
 
 static_assert(std::string_view(mrb_cpp_reflector::reflect_get_args_format<std::meta::members_of(^^Reflected, std::meta::access_context::current())[2]>().data()) == "si");
-static_assert(mrb_cpp_reflector::reflect_presym("same") != 0);
-static_assert(mrb_cpp_reflector::reflect_presym("nowhere") == 0);
 
 static mrb_value presym_ok_q(mrb_state *mrb, mrb_value)
 {
@@ -898,7 +896,7 @@ static mrb_value callback_from_other_thread_aborts_q(mrb_state *mrb, mrb_value)
     return mrb_bool_value(aborted);
 }
 
-extern "C" void mrb_mruby_cpp_reflection_test_fixtures_gem_init(mrb_state *mrb)
+extern "C" void mrb_mruby_cpp_reflection_gem_test(mrb_state *mrb)
 {
     mrb_define_module_function(mrb, mrb->kernel_module, "callback_after_close?", callback_after_close_q, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "callback_from_other_thread_aborts?", callback_from_other_thread_aborts_q, MRB_ARGS_NONE());
@@ -925,7 +923,5 @@ extern "C" void mrb_mruby_cpp_reflection_test_fixtures_gem_init(mrb_state *mrb)
     attributes_gem_test(mrb);
 }
 #else
-extern "C" void mrb_mruby_cpp_reflection_test_fixtures_gem_init(mrb_state *) {}
+extern "C" void mrb_mruby_cpp_reflection_gem_test(mrb_state *) {}
 #endif
-
-extern "C" void mrb_mruby_cpp_reflection_test_fixtures_gem_final(mrb_state *) {}

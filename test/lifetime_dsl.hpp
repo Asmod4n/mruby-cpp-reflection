@@ -1,11 +1,12 @@
 #pragma once
 /*
- * The classes whose lifetime mrbgem.rake declares with
- * spec.reflect_object_lifetime. The generated header names every declared
- * class, so each source that includes it sees all of them; that is why
- * they live in a header of their own. lifetime_dsl.rb drives them.
+ * The classes whose lifetime this header declares with
+ * mruby::cpp_reflection::object_lifetime, after the classes. Each source
+ * that reflects one of them includes this header, so every source sees
+ * the same declaration. lifetime_dsl.rb drives them.
  */
 #include <mruby.h>
+#include <mruby/cpp_reflection.hpp>
 #include <cerrno>
 #include <functional>
 #include <utility>
@@ -122,3 +123,32 @@ public:
     }
     void adopt(AdoptedLeaf *const leaf) { leaves.push_back(leaf); }
 };
+
+#if defined(__cpp_impl_reflection)
+template <>
+inline constexpr auto mruby::cpp_reflection::object_lifetime<^^TreeObject> = std::array{
+    takes_ownership(^^TreeObject::set_parent, {.by = 0}),
+    takes_ownership(^^TreeObject, {.by = "parent"}),
+    ends_lifetime(^^TreeObject::destroy, 0),
+};
+template <>
+inline constexpr auto mruby::cpp_reflection::object_lifetime<^^Resource> = std::array{ends_lifetime(^^Resource::destroy, 0)};
+template <>
+inline constexpr auto mruby::cpp_reflection::object_lifetime<^^Window> = std::array{retains(^^Window::set_layout, 0)};
+template <>
+inline constexpr auto mruby::cpp_reflection::object_lifetime<^^Device> = std::array{
+    errors(^^Device::open, {.error = negative, .sets_errno = true}),
+    errors(^^Device::status, {.success = 0}),
+    errors(^^Device::find, {.error = nullptr}),
+    threadsafe(^^Device::start, false),
+};
+/* The reserve of depth is more than any thread stack has, so every call
+ * of depth raises. */
+template <>
+inline constexpr auto mruby::cpp_reflection::object_lifetime<^^Deep> = std::array{
+    stack_reserve(^^Deep::depth, std::size_t{1} << 60),
+    stack_reserve(^^Deep::shallow, 1024),
+};
+template <>
+inline constexpr auto mruby::cpp_reflection::object_lifetime<^^Adopter> = std::array{takes_ownership(^^Adopter::adopt, {.of = 0})};
+#endif

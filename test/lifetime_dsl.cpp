@@ -2,16 +2,15 @@
  * The lifetime declaration of a class says what its types do not say:
  * which call hands an object to another object that deletes it, which
  * call ends a lifetime, which call keeps an argument, and how a function
- * reports an error. mrbgem.rake declares it with spec.reflect_object_lifetime,
- * rake writes it into mruby/reflect_object_lifetimes.h, and the C++ side reads
- * it when it compiles; Ruby has no way to declare it. lifetime_dsl.rb
+ * reports an error. lifetime_dsl.hpp declares it with
+ * mruby::cpp_reflection::object_lifetime, and the C++ side reads it when it
+ * compiles; Ruby has no way to declare it. lifetime_dsl.rb
  * drives the classes of lifetime_dsl.hpp from Ruby.
  */
 #include <mruby.h>
 #if defined(__cpp_impl_reflection)
 #include "lifetime_dsl.hpp"
 #include "lifetime_allocator_library.hpp"
-#include <mruby/reflect_object_lifetimes.h>
 #include <mruby/reflection.hpp>
 #include <mruby/array.h>
 #include <mruby/compile.h>
@@ -150,21 +149,20 @@ static mrb_value callback_roots_m(mrb_state *mrb, mrb_value)
 }
 
 namespace declared_wrong {
-using mrb_cpp_reflector::reflect_object_lifetime_word;
-using mrb_cpp_reflector::reflect_word;
+using namespace mruby::cpp_reflection;
 /* Each declaration below is one that the C++ side refuses when it
  * compiles the class. They are checked here with the function that the
  * compile runs, so that one build tests all of them, and each answer
- * reaches Ruby as the text that the compiler prints. */
-constexpr reflect_object_lifetime_word threadsafe_callback[] = {{.word = reflect_word::threadsafe, .function = "watch"}};
-constexpr reflect_object_lifetime_word no_function[] = {{.word = reflect_word::retains, .function = "nowhere", .position = {.number = 0}}};
-constexpr reflect_object_lifetime_word owns_itself[] = {{.word = reflect_word::takes_ownership, .function = "set_parent", .of = {.number = 0}, .by = {.number = 0}}};
-constexpr reflect_object_lifetime_word no_class_there[] = {{.word = reflect_word::retains, .function = "status", .position = {.number = 0}}};
-constexpr reflect_object_lifetime_word no_class_named[] = {{.word = reflect_word::ends_lifetime, .function = "set_layout", .position = {.identifier = "missing"}}};
-constexpr reflect_object_lifetime_word errors_without_number[] = {{.word = reflect_word::errors, .function = "set_layout", .test = mrb_cpp_reflector::reflect_answer_test::success}};
-constexpr reflect_object_lifetime_word right[] = {{.word = reflect_word::takes_ownership, .function = "set_parent", .of = {}, .by = {.number = 0}},
-                                           {.word = reflect_word::takes_ownership, .function = "initialize", .of = {}, .by = {.identifier = "parent"}},
-                                           {.word = reflect_word::ends_lifetime, .function = "destroy", .position = {.number = 0}}};
+ * reaches Ruby as the text that the compiler prints. no_function names
+ * status, which Empty does not have. */
+constexpr auto threadsafe_callback = std::array{threadsafe(^^Worker::watch, false)};
+constexpr auto no_function = std::array{retains(^^Device::status, 0)};
+constexpr auto owns_itself = std::array{takes_ownership(^^TreeObject::set_parent, {.of = 0, .by = 0})};
+constexpr auto no_class_there = std::array{retains(^^Device::status, 0)};
+constexpr auto no_class_named = std::array{ends_lifetime(^^Window::set_layout, "missing")};
+constexpr auto errors_without_number = std::array{errors(^^Window::set_layout, {.success = 0})};
+constexpr auto right = std::array{takes_ownership(^^TreeObject::set_parent, {.by = 0}), takes_ownership(^^TreeObject, {.by = "parent"}),
+                                  ends_lifetime(^^TreeObject::destroy, 0)};
 }
 
 static mrb_value object_lifetime_declaration_errors_m(mrb_state *const mrb, mrb_value)

@@ -15,12 +15,12 @@
 #
 # Each reflect_varargs call writes build_dir/include/mruby/reflect_varargs.h
 # again, and only when its text changes, so an unchanged declaration
-# rebuilds nothing. The header specializes
-# mrb_cpp_reflector::reflect_varargs_lists for each declared function
-# with one reflect_types<...> per list of trailing types; the gem reads
-# it by reflection and makes one call instance per list. A source
-# includes the header after the header that declares the functions, and
-# names a function as C++ names it, with its namespace.
+# rebuilds nothing. The header specializes mruby::cpp_reflection::varargs
+# for each declared function with one std::tuple<...> per list of
+# trailing types, as a source of C++ does it by hand; the gem reads it by
+# reflection and makes one call instance per list. A source includes the
+# header after the header that declares the functions, and names a
+# function as C++ names it, with its namespace.
 
 module MRuby
   module Gem
@@ -82,14 +82,13 @@ module MRuby
       private
 
       def write_reflect_varargs_header
-        text = +"#pragma once\n#include <mruby/reflection.hpp>\n#if defined(__cpp_impl_reflection)\nnamespace mrb_cpp_reflector {\n"
+        text = +"#pragma once\n#include <mruby/cpp_reflection.hpp>\n#include <tuple>\n#if defined(__cpp_impl_reflection)\n"
         reflect_varargs_declarations.sort.each do |name, lists|
           qualified = name.start_with?('::') ? name : "::#{name}"
-          types = lists.map { |list| "^^reflect_types<#{list.join(', ')}>" }.join(', ')
-          text << "template <>\ninline constexpr std::span<const std::meta::info> reflect_varargs_lists<^^#{qualified}> =\n"
-          text << "    std::define_static_array(std::array<std::meta::info, #{lists.size}>{#{types}});\n"
+          types = lists.map { |list| "^^std::tuple<#{list.join(', ')}>" }.join(', ')
+          text << "template <>\ninline constexpr auto mruby::cpp_reflection::varargs<^^#{qualified}> = std::array{#{types}};\n"
         end
-        text << "}\n#endif\n"
+        text << "#endif\n"
         header = reflect_varargs_header
         FileUtils.mkdir_p(File.dirname(header))
         File.write(header, text) unless File.exist?(header) && File.read(header) == text
@@ -130,7 +129,8 @@ end
 #
 # Each call writes build_dir/include/mruby/reflect_object_lifetimes.h again, and
 # only when its text changes. The header specializes
-# mrb_cpp_reflector::reflect_object_lifetime_words for each declared class. A
+# mruby::cpp_reflection::object_lifetime for each declared class with the
+# words of <mruby/cpp_reflection.hpp>, as a source of C++ does it by hand. A
 # source includes it after the headers that declare every class it names.
 # Ruby code has no way to declare or change a lifetime at runtime.
 
@@ -192,17 +192,11 @@ module MRuby
 
       def deallocator(function, results_of: [])
         allocators = results_of.is_a?(::Array) ? results_of : [results_of]
-        unless allocators.all? { |a| a.is_a?(::Symbol) }
-          ::Kernel.raise ::TypeError, "reflect_object_lifetime #{@class_name}: results_of names allocators by Symbol"
-        end
-        add(word: :deallocator, function: function_name(function), results_of: allocators.map(&:to_s))
+        add(word: :deallocator, function: function_name(function), results_of: allocators.map { |a| function_name(a) })
       end
 
       def shared_ownership(increment:, decrement:)
-        unless increment.is_a?(::Symbol) && decrement.is_a?(::Symbol)
-          ::Kernel.raise ::TypeError, "reflect_object_lifetime #{@class_name}: increment: and decrement: name functions by Symbol"
-        end
-        add(word: :shared_ownership, increment: increment.to_s, decrement: decrement.to_s)
+        add(word: :shared_ownership, increment: function_name(increment), decrement: function_name(decrement))
       end
 
       def words_of(block)
@@ -214,8 +208,8 @@ module MRuby
       private
 
       def function_name(function)
-        ::Kernel.raise ::TypeError, "reflect_object_lifetime #{@class_name}: a word names a function by Symbol, not #{function.inspect}" unless function.is_a?(::Symbol)
-        function.to_s
+        return function if function.is_a?(::Symbol) || function.is_a?(::String)
+        ::Kernel.raise ::TypeError, "reflect_object_lifetime #{@class_name}: a word names a function of the class by Symbol and a function beside it by its C++ name, not #{function.inspect}"
       end
 
       def parameter(position)
@@ -273,44 +267,56 @@ module MRuby
       private
 
       def reflect_object_lifetime_parameter_text(position)
-        return '{}' if position.nil?
-        return "{.number = #{position}}" if position.is_a?(Integer)
-        "{.identifier = std::define_static_string(\"#{position}\")}"
+        position.is_a?(Integer) ? position.to_s : "\"#{position}\""
       end
 
-      def reflect_object_lifetime_word_texts(word)
-        results_of = word[:word] == :deallocator && !word[:results_of].empty? ? word[:results_of] : [nil]
-        results_of.map do |allocator|
-          fields = [".word = reflect_word::#{word[:word]}"]
-          fields << ".function = std::define_static_string(\"#{word[:function]}\")" if word[:function]
-          fields << ".of = #{reflect_object_lifetime_parameter_text(word[:of])}" if word[:of]
-          fields << ".by = #{reflect_object_lifetime_parameter_text(word[:by])}" if word[:by]
-          fields << ".position = #{reflect_object_lifetime_parameter_text(word[:position])}" if word[:position]
-          fields << ".output_parameter = #{reflect_object_lifetime_parameter_text(word[:output_parameter])}" if word[:output_parameter]
-          fields << ".results_of = std::define_static_string(\"#{allocator}\")" if allocator
-          fields << ".increment = std::define_static_string(\"#{word[:increment]}\")" if word[:increment]
-          fields << ".decrement = std::define_static_string(\"#{word[:decrement]}\")" if word[:decrement]
-          if word[:test]
-            fields << ".test = reflect_answer_test::#{word[:test]}"
-            fields << (word[:expected].nil? ? '.expects_nil = true' : ".expected = #{word[:expected]}") unless word[:test] == :negative
-            fields << ".sets_errno = #{word[:sets_errno]}"
-          end
-          fields << ".stack_reserve = #{word[:stack_reserve]}" if word[:stack_reserve]
-          "{#{fields.join(', ')}}"
+      def reflect_object_lifetime_function_text(class_name, function)
+        return "^^#{function.start_with?('::') ? function : "::#{function}"}" if function.is_a?(String)
+        return "^^#{class_name}" if function == :initialize
+        "^^#{class_name}::#{function}"
+      end
+
+      def reflect_object_lifetime_answer_text(answer)
+        answer.nil? ? 'nullptr' : answer.to_s
+      end
+
+      def reflect_object_lifetime_word_texts(class_name, word)
+        function = word[:function] && reflect_object_lifetime_function_text(class_name, word[:function])
+        call = "mruby::cpp_reflection::#{word[:word]}"
+        case word[:word]
+        when :takes_ownership
+          given = { of: word[:of], by: word[:by] }.compact.map { |k, v| ".#{k} = #{reflect_object_lifetime_parameter_text(v)}" }
+          ["#{call}(#{function}, {#{given.join(', ')}})"]
+        when :ends_lifetime, :retains
+          [word[:position].nil? ? "#{call}(#{function})" : "#{call}(#{function}, #{reflect_object_lifetime_parameter_text(word[:position])})"]
+        when :errors
+          given = case word[:test]
+                  when :success then ".success = #{reflect_object_lifetime_answer_text(word[:expected])}"
+                  when :negative then '.error = mruby::cpp_reflection::negative'
+                  else ".error = #{reflect_object_lifetime_answer_text(word[:expected])}"
+                  end
+          ["#{call}(#{function}, {#{given}, .sets_errno = #{word[:sets_errno]}})"]
+        when :stack_reserve then ["#{call}(#{function}, #{word[:stack_reserve]})"]
+        when :threadsafe then ["#{call}(#{function}, false)"]
+        when :allocator
+          [word[:output_parameter].nil? ? "#{call}(#{function})" : "#{call}(#{function}, {.output_parameter = #{reflect_object_lifetime_parameter_text(word[:output_parameter])}})"]
+        when :deallocator
+          return ["#{call}(#{function})"] if word[:results_of].empty?
+          word[:results_of].map { |a| "#{call}(#{function}, {.results_of = #{reflect_object_lifetime_function_text(class_name, a)}})" }
+        when :shared_ownership
+          ["#{call}({.increment = #{reflect_object_lifetime_function_text(class_name, word[:increment])}, .decrement = #{reflect_object_lifetime_function_text(class_name, word[:decrement])}})"]
         end
       end
 
       def write_reflect_object_lifetime_header
-        text = +"#pragma once\n#include <mruby/reflection.hpp>\n#if defined(__cpp_impl_reflection)\nnamespace mrb_cpp_reflector {\n"
+        text = +"#pragma once\n#include <mruby/cpp_reflection.hpp>\n#if defined(__cpp_impl_reflection)\n"
         reflect_object_lifetime_declarations.sort.each do |name, words|
           qualified = name.start_with?('::') ? name : "::#{name}"
-          texts = words.flat_map { |w| reflect_object_lifetime_word_texts(w) }
-          text << "template <>\ninline constexpr std::span<const reflect_object_lifetime_word> reflect_object_lifetime_words<^^#{qualified}> =\n"
-          text << "    std::define_static_array(std::array<reflect_object_lifetime_word, #{texts.size}>{\n"
-          text << texts.map { |t| "        reflect_object_lifetime_word#{t},\n" }.join
-          text << "    });\n"
+          texts = words.flat_map { |w| reflect_object_lifetime_word_texts(qualified, w) }
+          text << "template <>\ninline constexpr auto mruby::cpp_reflection::object_lifetime<^^#{qualified}> = "
+          text << (texts.empty? ? "std::array<mrb_cpp_reflector::reflect_object_lifetime_word, 0>{};\n" : "std::array{\n#{texts.map { |t| "    #{t},\n" }.join}};\n")
         end
-        text << "}\n#endif\n"
+        text << "#endif\n"
         header = reflect_object_lifetime_header
         FileUtils.mkdir_p(File.dirname(header))
         File.write(header, text) unless File.exist?(header) && File.read(header) == text
@@ -388,75 +394,131 @@ module MRuby
   end
 end
 
-# Presyms for the names that C++26 reflection produces. A gem calls
-#   reflect_presyms(spec, "#{spec.dir}/tools/reflect_presyms/reflect_presyms.cpp")
-# with a program that prints mrb_cpp_reflector::reflect_presyms_header<^^T...>()
-# for its reflected types. The program is built and run before the presym
-# scan; its table goes to build/<name>/include/mruby/presym/reflect.h, and
-# a generated source of the gem includes it, so the scanner reads the
-# MRB_SYM tokens like any other source's. Nothing of it enters the tree.
-def reflect_presyms(spec, runner_src)
-  return unless spec.build.cxx.flags.flatten.any? { |f| f.to_s == '-freflection' }
-  runner_bin = "#{spec.build_dir}/reflect_presyms/runner"
-  header = "#{spec.build.build_dir}/include/mruby/presym/reflect.h"
-  source = "#{spec.build_dir}/reflect_presyms/reflect_presyms.cpp"
-  reflection = spec.build.gems.detect { |g| g.name == 'mruby-cpp-reflection' }
-  helpers = spec.build.gems.detect { |g| g.name == 'mruby-c-ext-helpers' }
-  file runner_bin => [runner_src, "#{reflection.dir}/include/mruby/reflect_presyms.hpp"] do |t|
-    FileUtils.mkdir_p(File.dirname(t.name))
-    incs = (spec.build.cxx.include_paths + ["#{reflection.dir}/include", "#{helpers.dir}/include", "#{spec.build.build_dir}/include"]).map { |i| "-I#{i}" }.join(' ')
-    sh "#{spec.build.cxx.command} #{spec.build.cxx.flags.flatten.join(' ')} #{incs} #{runner_src} -o #{t.name}"
+# conf.objcopy = 'path' names the objcopy of a build. The default is the
+# objcopy beside the C++ compiler of the toolchain.
+module MRuby
+  class Build
+    attr_writer :objcopy
+
+    def reflect_presym_sections
+      @reflect_presym_sections ||= []
+    end
+
+    def objcopy
+      @objcopy ||= if toolchains.include?('clang') then `#{cxx.command} -print-prog-name=llvm-objcopy`.chomp
+                   else cxx.command.sub(/(?:g\+\+|gcc|c\+\+)(?:-[\d.]+)?\z/, 'objcopy')
+                   end
+    end
   end
-  file header => runner_bin do |t|
-    FileUtils.mkdir_p(File.dirname(t.name))
-    sh "#{runner_bin} > #{t.name}"
-  end
-  file source => header do |t|
-    File.write(t.name, "#include <mruby.h>\n#include <mruby/presym/reflect.h>\n")
-  end
-  obj = spec.objfile(source.pathmap("#{spec.build_dir}/reflect_presyms/%n"))
-  file obj => source
-  spec.objs << obj
 end
 
-# Overriders for the virtual functions of the classes a source file lists
-# with reflect_options virtual_overriders. A first compile of the source
-# file, with MRB_CPP_REFLECTOR_GENERATE, writes the text of the overriders
-# into the section .mrb_cpp_reflector_virtual_overriders of its object file.
-# objcopy of the toolchain copies that section to spec.build_dir, and include_virtual_overriders.cpp compiles the source
-# file with it, in place of the source file's own object.
-def reflect_virtual_overriders(spec, source)
-  return unless spec.build.cxx.flags.flatten.any? { |f| f.to_s == '-freflection' }
-  reflection = spec.build.gems.detect { |g| g.name == 'mruby-cpp-reflection' }
-  source = File.expand_path(source, spec.dir)
-  dir = "#{spec.build_dir}/virtual_overriders/#{File.basename(source, '.*')}"
-  msvc = spec.build.toolchains.include?('visualcpp')
-  quoted = ->(path) { msvc ? %(\\"#{path}\\") : %('"#{path}"') }
-  printed = "#{dir}/print_virtual_overriders#{spec.build.exts.object}"
-  section = "#{dir}/virtual_overriders.section"
-  text = "#{dir}/virtual_overriders.inc"
-  objcopy = if spec.build.toolchains.include?('clang') then `#{spec.build.cxx.command} -print-prog-name=llvm-objcopy`.chomp
-            else spec.build.cxx.command.sub(/(?:g\+\+|gcc|c\+\+)(?:-[\d.]+)?\z/, 'objcopy')
-            end
-  object = "#{dir}/include_virtual_overriders#{spec.build.exts.object}"
-  replaced = spec.objfile(source.relative_path_from(spec.dir).pathmap("#{spec.build_dir}/%X"))
-  file printed => [source, "#{reflection.dir}/src/print_virtual_overriders.cpp", "#{reflection.dir}/include/mruby/reflection.hpp"] do |t|
-    spec.cxx.run t.name, "#{reflection.dir}/src/print_virtual_overriders.cpp", ["MRB_CPP_REFLECTOR_SOURCE=#{quoted.(source)}"], [], [msvc ? '/GL-' : '-fno-lto']
-  end
-  file section => printed do |t|
-    sh "#{objcopy} -O binary --only-section=.mrb_cpp_reflector_virtual_overriders #{printed} #{t.name}"
-  end
-  file text => section do |t|
-    File.write(t.name, File.read(section).split(/^(?=template <> struct)/).uniq.join)
-  end
-  file object => [text, "#{reflection.dir}/src/include_virtual_overriders.cpp"] do |t|
-    spec.cxx.run t.name, "#{reflection.dir}/src/include_virtual_overriders.cpp",
-                 ["MRB_CPP_REFLECTOR_SOURCE=#{quoted.(source)}", "MRB_CPP_REFLECTOR_VIRTUAL_OVERRIDERS=#{quoted.(text)}"]
-  end
-  if spec.test_objs.include?(replaced)
-    spec.test_objs = spec.test_objs.map { |o| o == replaced ? object : o }
-  else
-    spec.objs = spec.objs.map { |o| o == replaced ? object : o }
+# The generators of a source that calls reflect_define. The build finds
+# such a source by the text reflect_define< in it, among the C++ sources
+# of src/, of test/ in a build with tests, and the source that
+# spec.reflect writes, in every gem of a build that loads this gem.
+#
+# A first compile of the source, with MRB_CPP_REFLECTOR_GENERATE, writes
+# the presyms of the reflected names into the section
+# .mrb_cpp_reflector_presyms of its object file, and the overriders of the
+# classes it lists with reflect_options virtual_overriders into the
+# section .mrb_cpp_reflector_virtual_overriders. objcopy copies both
+# sections out. The presyms of every such source go to
+# build/<name>/include/mruby/presym/reflect.h before the presym scan, and a
+# generated source of the gem includes that header, so the scanner reads
+# the MRB_SYM tokens like any other source's. The header and the text of
+# the overriders run the compile from their own action, so the compile is
+# no prerequisite of a product, and the presym scan does not wait for it. include_virtual_overriders.cpp
+# compiles the source with its overriders, in place of the source's own
+# object. Nothing of it enters the tree.
+
+module MRuby
+  module Gem
+    class Specification
+      def reflect_define_sources
+        sources = Dir.glob("#{dir}/src/*.{cpp,cxx,cc}")
+        sources += Dir.glob("#{dir}/test/*.{cpp,cxx,cc}") if build.test_enabled?
+        sources << reflect_source if File.exist?(reflect_source)
+        sources.select { |source| File.read(source).include?('reflect_define<') }
+      end
+
+      def reflect_generate
+        return unless build.cxx.flags.flatten.any? { |f| f.to_s == '-freflection' }
+        reflection = build.gems.detect { |g| g.name == 'mruby-cpp-reflection' }
+        return unless reflection
+        sources = reflect_define_sources
+        return if sources.empty?
+        header = "#{build.build_dir}/include/mruby/presym/reflect.h"
+        sections = build.reflect_presym_sections
+        sources.each { |source| sections << reflect_virtual_overriders(reflection, source) }
+        unless Rake::Task.task_defined?(header)
+          file header do |t|
+            sections.map { |section| Thread.new { Rake::Task[section].invoke } }.each(&:join)
+            entries = sections.flat_map { |section| File.read(section).delete("\0").lines }.uniq.sort
+            text = "#pragma once\n#include <array>\n#include <string_view>\n#include <utility>\n#include <mruby.h>\n" \
+                   "inline constexpr std::array<std::pair<std::string_view, mrb_sym>, #{entries.size}> reflect_presyms{{\n#{entries.join}}};\n"
+            FileUtils.mkdir_p(File.dirname(t.name))
+            File.write(t.name, text) unless File.exist?(t.name) && File.read(t.name) == text
+          end
+          Rake::Task[header].define_singleton_method(:needed?) { true }
+        end
+        source = "#{build_dir}/reflect_presyms/reflect_presyms.cpp"
+        file source => header do |t|
+          FileUtils.mkdir_p(File.dirname(t.name))
+          File.write(t.name, "#include <mruby.h>\n#include <mruby/presym/reflect.h>\n")
+        end
+        obj = objfile(source.pathmap("#{build_dir}/reflect_presyms/%n"))
+        file obj => source
+        objs << obj unless objs.include?(obj)
+      end
+
+      private
+
+      def reflect_virtual_overriders(reflection, source)
+        out = "#{build_dir}/reflect_generate/#{File.basename(source, '.*')}"
+        msvc = build.toolchains.include?('visualcpp')
+        quoted = ->(path) { msvc ? %(\\"#{path}\\") : %('"#{path}"') }
+        printed = "#{out}/print_virtual_overriders#{build.exts.object}"
+        presyms = "#{out}/presyms.section"
+        section = "#{out}/virtual_overriders.section"
+        text = "#{out}/virtual_overriders.inc"
+        object = "#{out}/include_virtual_overriders#{build.exts.object}"
+        replaced = source.start_with?("#{self.dir}/") ? objfile(source.relative_path_from(self.dir).pathmap("#{build_dir}/%X")) : objfile(source.pathmap('%X'))
+        headers = %w[reflection.hpp cpp_reflection.hpp reflect_presyms.hpp].map { |h| "#{reflection.dir}/include/mruby/#{h}" }
+        file printed => [source, "#{reflection.dir}/src/print_virtual_overriders.cpp", *headers] do |t|
+          cxx.run t.name, "#{reflection.dir}/src/print_virtual_overriders.cpp",
+                  ["MRB_CPP_REFLECTOR_SOURCE=#{quoted.(source)}", 'MRB_NO_PRESYM', 'MRB_REFLECT_NO_PRESYMS'], [], [msvc ? '/GL-' : '-fno-lto']
+        end
+        file presyms => printed do |t|
+          sh "#{build.objcopy} -O binary --only-section=.mrb_cpp_reflector_presyms #{printed} #{t.name}"
+        end
+        file section => printed do |t|
+          sh "#{build.objcopy} -O binary --only-section=.mrb_cpp_reflector_virtual_overriders #{printed} #{t.name}"
+        end
+        file text do |t|
+          Rake::Task[section].invoke
+          overriders = File.read(section).delete("\0").split(/^(?=template <> struct)/).uniq.join
+          File.write(t.name, overriders) unless File.exist?(t.name) && File.read(t.name) == overriders
+        end
+        Rake::Task[text].define_singleton_method(:needed?) { true }
+        file object => [text, "#{reflection.dir}/src/include_virtual_overriders.cpp"] do |t|
+          cxx.run t.name, "#{reflection.dir}/src/include_virtual_overriders.cpp",
+                  ["MRB_CPP_REFLECTOR_SOURCE=#{quoted.(source)}", "MRB_CPP_REFLECTOR_VIRTUAL_OVERRIDERS=#{quoted.(text)}"]
+        end
+        if test_objs.include?(replaced)
+          self.test_objs = test_objs.map { |o| o == replaced ? object : o }
+        else
+          self.objs = objs.map { |o| o == replaced ? object : o }
+        end
+        presyms
+      end
+    end
+
+    Specification.prepend(Specification.const_set(:ReflectGenerate, Module.new do
+      def setup_compilers
+        super
+        reflect_generate
+      end
+    end)) unless Specification.const_defined?(:ReflectGenerate, false)
   end
 end
 

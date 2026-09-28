@@ -11,6 +11,7 @@ typedef struct mrb_state mrb_state;
 
 #include <algorithm>
 #include <functional>
+#include <iterator>
 #include <meta>
 #include <span>
 #include <memory>
@@ -767,7 +768,7 @@ consteval auto reflect_overloads()
 }
 
 template <std::meta::info Type>
-void reflect_names_into(std::vector<std::string_view> &names)
+consteval void reflect_names_into(std::vector<std::string_view> &names)
 {
     template for (constexpr std::meta::info scope : std::define_static_array(reflect_namespaces(Type)))
         names.push_back(std::define_static_string(reflect_class_name(scope)));
@@ -783,7 +784,7 @@ void reflect_names_into(std::vector<std::string_view> &names)
 }
 
 template <std::meta::info Type>
-void reflect_setter_names_into(std::vector<std::string_view> &names)
+consteval void reflect_setter_names_into(std::vector<std::string_view> &names)
 {
     template for (constexpr std::meta::info field : reflect_fields<Type>())
         if constexpr (!std::meta::is_const_type(std::meta::type_of(field))) names.push_back(std::meta::identifier_of(field));
@@ -792,27 +793,30 @@ void reflect_setter_names_into(std::vector<std::string_view> &names)
 }
 
 template <auto Classes>
-std::string reflect_presyms_header()
+consteval std::string reflect_presym_entries()
 {
-    std::string out = "#pragma once\n#include <array>\n#include <string_view>\n#include <utility>\n#include <mruby.h>\n"
-                      "inline constexpr std::array<std::pair<std::string_view, mrb_sym>, ";
     std::vector<std::string_view> names, setters;
     template for (constexpr std::meta::info type : Classes) {
-        reflect_names_into<type>(names);
-        reflect_setter_names_into<type>(setters);
+        if constexpr (std::meta::is_type(type) && std::meta::is_class_type(std::meta::dealias(type)) && std::meta::is_complete_type(std::meta::dealias(type))) {
+            reflect_names_into<type>(names);
+            reflect_setter_names_into<type>(setters);
+        }
     }
     for (const std::string_view fixed : {"to_s", "to_str", "to_a", "to_ary", "to_h", "to_hash", "each", "initialize", "owner", "Enumerable"})
         names.push_back(fixed);
-    std::sort(names.begin(), names.end());
-    names.erase(std::unique(names.begin(), names.end()), names.end());
-    std::sort(setters.begin(), setters.end());
-    setters.erase(std::unique(setters.begin(), setters.end()), setters.end());
-    out += std::to_string(names.size() + setters.size()) + "> reflect_presyms{{\n";
-    for (const std::string_view name : names)
-        out += "    {\"" + std::string(name) + "\", MRB_SYM(" + std::string(name) + ")},\n";
-    for (const std::string_view name : setters)
-        out += "    {\"" + std::string(name) + "=\", MRB_SYM_E(" + std::string(name) + ")},\n";
-    out += "}};\n";
+    const auto identifier = [](const std::string_view name) {
+        const auto word = [](const char c) { return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'); };
+        return !name.empty() && !(name[0] >= '0' && name[0] <= '9') && std::ranges::all_of(name, word);
+    };
+    std::erase_if(names, [&](const std::string_view name) { return !identifier(name); });
+    std::erase_if(setters, [&](const std::string_view name) { return !identifier(name); });
+    std::string out;
+    const auto entry = [&](const std::string_view name, const std::string_view suffix, const std::string_view macro) {
+        for (const std::string_view part : {std::string_view("    {\""), name, suffix, std::string_view("\", "), macro, std::string_view("("), name, std::string_view(")},\n")})
+            std::ranges::copy(part, std::back_inserter(out));
+    };
+    for (const std::string_view name : names) entry(name, "", "MRB_SYM");
+    for (const std::string_view name : setters) entry(name, "=", "MRB_SYM_E");
     return out;
 }
 

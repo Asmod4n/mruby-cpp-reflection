@@ -23,6 +23,7 @@ extern const struct mrb_data_type mrb_const_void_pointer_type;
 #include <mruby/cpp_helpers.hpp>
 #include <mruby/cpp_to_mrb_value.hpp>
 #include <mruby/mrb_value_to_cpp.hpp>
+#include <mruby/cpp_reflection.hpp>
 #include <mruby/reflect_presyms.hpp>
 
 #if defined(__GLIBCXX__)
@@ -35,6 +36,7 @@ extern const struct mrb_data_type mrb_const_void_pointer_type;
 #include <compare>
 #include <cstdio>
 #include <functional>
+#include <iterator>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -131,34 +133,8 @@ inline reflect_callbacks &reflect_callbacks_of(mrb_state *const mrb)
 inline constexpr int reflect_receiver = -1;
 inline constexpr int reflect_nowhere = -2;
 
-enum class reflect_answer_test : unsigned char { none, success, error, negative };
-
-enum class reflect_word : unsigned char { takes_ownership, ends_lifetime, retains, errors, stack_reserve, threadsafe, allocator, deallocator, shared_ownership };
-
-struct reflect_parameter {
-    int number = -1;
-    const char *identifier = std::define_static_string("");
-};
-
-struct reflect_object_lifetime_word {
-    reflect_word word;
-    const char *function = std::define_static_string("");
-    reflect_parameter of{};
-    reflect_parameter by{};
-    reflect_parameter position{};
-    reflect_parameter output_parameter{};
-    const char *results_of = std::define_static_string("");
-    const char *increment = std::define_static_string("");
-    const char *decrement = std::define_static_string("");
-    reflect_answer_test test = reflect_answer_test::none;
-    bool expects_nil = false;
-    mrb_int expected = 0;
-    bool sets_errno = false;
-    std::size_t stack_reserve = 0;
-};
-
 template <std::meta::info Class>
-inline constexpr std::span<const reflect_object_lifetime_word> reflect_object_lifetime_words{};
+inline constexpr std::span<const reflect_object_lifetime_word> reflect_object_lifetime_words = std::define_static_array(mruby::cpp_reflection::object_lifetime<Class>);
 
 struct reflect_function_lifetime {
     const char *name = "";
@@ -316,7 +292,10 @@ consteval std::span<const reflect_object_lifetime_word> reflect_words_of(const s
 
 consteval std::string_view reflect_object_lifetime_message(const std::meta::info klass, const std::string_view function, const std::string_view text)
 {
-    return std::define_static_string(std::string(std::meta::display_string_of(klass)) + ": " + std::string(function) + " " + std::string(text));
+    std::string message;
+    for (const std::string_view part : {std::meta::display_string_of(klass), std::string_view(": "), function, std::string_view(" "), text})
+        std::ranges::copy(part, std::back_inserter(message));
+    return std::define_static_string(message);
 }
 
 consteval std::string_view reflect_object_lifetime_error(const std::meta::info klass, const std::span<const reflect_object_lifetime_word> words)
@@ -385,6 +364,11 @@ consteval std::string_view reflect_object_lifetime_error(const std::meta::info k
         if (word.word != reflect_word::allocator) continue;
         const auto frees = [&](const reflect_object_lifetime_word &d) { return d.word == reflect_word::deallocator && (*d.results_of == '\0' || std::string_view(d.results_of) == word.function); };
         if (std::ranges::none_of(words, frees)) return reflect_object_lifetime_message(klass, word.function, "is an allocator without a deallocator");
+    }
+    for (const reflect_object_lifetime_word &word : words) {
+        if (word.word != reflect_word::deallocator || *word.results_of == '\0') continue;
+        const auto made = [&](const reflect_object_lifetime_word &a) { return a.word == reflect_word::allocator && std::string_view(a.function) == word.results_of; };
+        if (std::ranges::none_of(words, made)) return reflect_object_lifetime_message(klass, word.function, std::string("names ") + std::string(std::from_range, std::string_view(word.results_of)) + ", which is no allocator of this class");
     }
     return {};
 }
@@ -1068,6 +1052,14 @@ consteval std::string reflect_virtual_overriders_text(const std::span<const std:
 template <auto Classes>
 [[gnu::section(".mrb_cpp_reflector_virtual_overriders"), gnu::used]] static constexpr auto reflect_virtual_overriders_printed = [] {
     constexpr std::string_view body = std::define_static_string(reflect_virtual_overriders_text(Classes));
+    std::array<char, body.size()> text{};
+    std::ranges::copy(body, text.begin());
+    return text;
+}();
+
+template <auto Classes>
+[[gnu::section(".mrb_cpp_reflector_presyms"), gnu::used]] static constexpr auto reflect_presyms_printed = [] {
+    constexpr std::string_view body = std::define_static_string(reflect_presym_entries<Classes>());
     std::array<char, body.size()> text{};
     std::ranges::copy(body, text.begin());
     return text;
@@ -3083,7 +3075,7 @@ struct reflect_types {
 };
 
 template <std::meta::info Function>
-inline constexpr std::span<const std::meta::info> reflect_varargs_lists{};
+inline constexpr std::span<const std::meta::info> reflect_varargs_lists = std::define_static_array(mruby::cpp_reflection::varargs<Function>);
 
 template <std::meta::info Function, class Fixed, class... Rest>
 struct reflect_varargs_instance;
@@ -3109,6 +3101,8 @@ consteval std::vector<std::meta::info> reflect_varargs_calls(const std::meta::in
     const std::meta::info fixed_types = std::meta::substitute(^^reflect_types, fixed);
     std::vector<std::meta::info> calls;
     for (const std::meta::info list : lists) {
+        if (!std::meta::has_template_arguments(list) || std::meta::template_of(list) != ^^std::tuple) throw "varargs lists the trailing types of a call as a std::tuple";
+        if (std::meta::template_arguments_of(list).size() > 16) throw "varargs names more than the 16 types after the fixed parameters that the call instances cover";
         std::vector<std::meta::info> arguments{std::meta::reflect_constant(function), fixed_types};
         for (const std::meta::info a : std::meta::template_arguments_of(list)) arguments.push_back(a);
         const std::meta::info instance = std::meta::substitute(^^reflect_varargs_instance, arguments);
@@ -3174,6 +3168,7 @@ template <auto Classes, reflect_options Options = reflect_options{}>
 void reflect_define(mrb_state *const mrb, RClass *const under = nullptr)
 {
 #if defined(MRB_CPP_REFLECTOR_GENERATE)
+    static_cast<void>(reflect_presyms_printed<Classes>);
     if constexpr (Options.virtual_overriders) static_cast<void>(reflect_virtual_overriders_printed<Classes>);
     return;
 #endif

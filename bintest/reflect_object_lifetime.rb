@@ -42,15 +42,18 @@ def header
   File.read(@spec.reflect_object_lifetime_header)
 end
 
-# The header is all the C++ side reads: one specialization per class,
-# named as C++ names it, with one word per entry.
+# The header is all the C++ side reads: one specialization of
+# mruby::cpp_reflection::object_lifetime per class, named as C++ names
+# it, with one word of <mruby/cpp_reflection.hpp> per entry, as a source
+# of C++ writes it by hand.
 assert('ReflectObjectLifetimeTest: the header specializes the words of the class') do
   @dir = Dir.mktmpdir
   @spec = MRuby::Gem::Specification.new(@dir)
   begin
     declare('ns::Tree') { takes_ownership :set_parent, by: 0 }
-    assert_true(/reflect_object_lifetime_words<\^\^::ns::Tree>/.match?(header))
-    assert_true(/\.word = reflect_word::takes_ownership, \.function = std::define_static_string\("set_parent"\), \.by = \{\.number = 0\}/.match?(header))
+    assert_true(header.include?("template <>\ninline constexpr auto mruby::cpp_reflection::object_lifetime<^^::ns::Tree> = std::array{\n"))
+    assert_true(header.include?("    mruby::cpp_reflection::takes_ownership(^^::ns::Tree::set_parent, {.by = 0}),\n};\n"))
+    assert_true(header.include?('#include <mruby/cpp_reflection.hpp>'))
     assert_equal(["#{@dir}/include"], @spec.cxx.include_paths)
   ensure
     FileUtils.remove_entry(@dir)
@@ -77,18 +80,20 @@ assert('ReflectObjectLifetimeTest: every word reaches the header') do
       shared_ownership increment: :ref, decrement: :unref
     end
     text = header
-    assert_true(/reflect_word::takes_ownership, .function = std::define_static_string\("initialize"\), .by = \{.identifier = std::define_static_string\("parent"\)\}/.match?(text))
-    assert_true(/reflect_word::ends_lifetime, .function = std::define_static_string\("destroy"\)\}/.match?(text))
-    assert_true(/reflect_word::retains, .function = std::define_static_string\("set_layout"\), .position = \{.number = 1\}/.match?(text))
-    assert_true(/"open"\), .test = reflect_answer_test::negative, .sets_errno = true/.match?(text))
-    assert_true(/"find"\), .test = reflect_answer_test::error, .expects_nil = true, .sets_errno = false/.match?(text))
-    assert_true(/"status"\), .test = reflect_answer_test::success, .expected = 0, .sets_errno = false/.match?(text))
-    assert_true(/"depth"\), .stack_reserve = 1024/.match?(text))
-    assert_true(/reflect_word::threadsafe, .function = std::define_static_string\("start"\)\}/.match?(text))
-    assert_true(/"open_handle"\), .output_parameter = \{.identifier = std::define_static_string\("made"\)\}/.match?(text))
-    assert_true(/reflect_word::deallocator, .function = std::define_static_string\("close_handle"\)\}/.match?(text))
-    assert_true(/.increment = std::define_static_string\("ref"\), .decrement = std::define_static_string\("unref"\)/.match?(text))
-    assert_true(/std::array<reflect_object_lifetime_word, 11>/.match?(text))
+    [
+      'takes_ownership(^^::lib::handle, {.by = "parent"})',
+      'ends_lifetime(^^::lib::handle::destroy)',
+      'retains(^^::lib::handle::set_layout, 1)',
+      'errors(^^::lib::handle::open, {.error = mruby::cpp_reflection::negative, .sets_errno = true})',
+      'errors(^^::lib::handle::find, {.error = nullptr, .sets_errno = false})',
+      'errors(^^::lib::handle::status, {.success = 0, .sets_errno = false})',
+      'stack_reserve(^^::lib::handle::depth, 1024)',
+      'threadsafe(^^::lib::handle::start, false)',
+      'allocator(^^::lib::handle::open_handle, {.output_parameter = "made"})',
+      'deallocator(^^::lib::handle::close_handle)',
+      'shared_ownership({.increment = ^^::lib::handle::ref, .decrement = ^^::lib::handle::unref})'
+    ].each { |word| assert_true(text.include?("    mruby::cpp_reflection::#{word},\n"), word) }
+    assert_equal(11, text.scan(/^    mruby::cpp_reflection::/).size)
   ensure
     FileUtils.remove_entry(@dir)
   end
@@ -105,8 +110,8 @@ assert('ReflectObjectLifetimeTest: results of gives one entry per allocator') do
       allocator :make
       deallocator :close, results_of: %i[open make]
     end
-    assert_true(/"close"\), .results_of = std::define_static_string\("open"\)/.match?(header))
-    assert_true(/"close"\), .results_of = std::define_static_string\("make"\)/.match?(header))
+    assert_true(header.include?('mruby::cpp_reflection::deallocator(^^::h::close, {.results_of = ^^::h::open})'))
+    assert_true(header.include?('mruby::cpp_reflection::deallocator(^^::h::close, {.results_of = ^^::h::make})'))
   ensure
     FileUtils.remove_entry(@dir)
   end
@@ -215,7 +220,7 @@ assert('ReflectObjectLifetimeTest: takes ownership leaves out the receiver') do
   @spec = MRuby::Gem::Specification.new(@dir)
   begin
     declare { takes_ownership :adopt, of: 1 }
-    assert_true(/"adopt"\), .of = \{.number = 1\}\}/.match?(header))
+    assert_true(header.include?('mruby::cpp_reflection::takes_ownership(^^::Tree::adopt, {.of = 1})'))
   ensure
     FileUtils.remove_entry(@dir)
   end
@@ -244,11 +249,20 @@ assert('ReflectObjectLifetimeTest: a parameter is a number or an identifier') do
   end
 end
 
-assert('ReflectObjectLifetimeTest: a function is named by symbol') do
+# C++ names a function of the class through the class, and a function
+# beside the class through its own scope, which rake cannot find, so the
+# second one is named by its C++ name.
+assert('ReflectObjectLifetimeTest: a function is named by symbol or by its C++ name') do
   @dir = Dir.mktmpdir
   @spec = MRuby::Gem::Specification.new(@dir)
   begin
-    assert_raise(TypeError) { declare { ends_lifetime 'destroy' } }
+    assert_raise(TypeError) { declare { ends_lifetime 1 } }
+    declare('lib::handle') do
+      allocator 'lib::handle_make'
+      deallocator 'lib::handle_close', results_of: 'lib::handle_make'
+    end
+    assert_true(header.include?('mruby::cpp_reflection::allocator(^^::lib::handle_make)'))
+    assert_true(header.include?('mruby::cpp_reflection::deallocator(^^::lib::handle_close, {.results_of = ^^::lib::handle_make})'))
   ensure
     FileUtils.remove_entry(@dir)
   end
@@ -307,21 +321,21 @@ assert('ReflectObjectLifetimeTest: threadsafe takes only no') do
   end
 end
 
-assert('ReflectObjectLifetimeTest: results of names allocators by symbol') do
+assert('ReflectObjectLifetimeTest: results of names allocators as functions') do
   @dir = Dir.mktmpdir
   @spec = MRuby::Gem::Specification.new(@dir)
   begin
-    assert_raise(TypeError) { declare { allocator(:make); deallocator :close, results_of: 'make' } }
+    assert_raise(TypeError) { declare { allocator(:make); deallocator :close, results_of: 1 } }
   ensure
     FileUtils.remove_entry(@dir)
   end
 end
 
-assert('ReflectObjectLifetimeTest: shared ownership names functions by symbol') do
+assert('ReflectObjectLifetimeTest: shared ownership names functions') do
   @dir = Dir.mktmpdir
   @spec = MRuby::Gem::Specification.new(@dir)
   begin
-    assert_raise(TypeError) { declare { shared_ownership increment: 'ref', decrement: :unref } }
+    assert_raise(TypeError) { declare { shared_ownership increment: 1, decrement: :unref } }
   ensure
     FileUtils.remove_entry(@dir)
   end

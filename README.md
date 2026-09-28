@@ -51,8 +51,7 @@ type is defined with its class only where a member uses it.
 
 ## Virtual functions overridden in Ruby
 
-`reflect_define<classes, {.virtual_overriders = true}>(mrb)` together with
-`reflect_virtual_overriders(spec, 'src/file.cpp')` in `mrbgem.rake` lets a
+`reflect_define<classes, {.virtual_overriders = true}>(mrb)` lets a
 Ruby subclass override the virtual functions of a listed class:
 
 ```ruby
@@ -69,9 +68,12 @@ end
   subclass.
 - An argument that C++ passes by reference or pointer is lent for the call
   and detached when the call returns.
-- The build step compiles the named file once more to write the overriders
-  into `spec.build_dir`, and compiles the file with them in place of its
-  own object.
+- The build compiles the file once more to write the overriders into
+  `spec.build_dir`, and compiles the file with them in place of its own
+  object.
+- `objcopy` copies the overriders out of a section of that object file.
+  `conf.objcopy = 'path'` in the build config names it; the default is the
+  objcopy beside the C++ compiler.
 - Left out: `private` and `final` virtual functions, classes without a
   virtual destructor, and objects that C++ creates itself. While the Ruby
   method of a function runs, a call of the same function on the same
@@ -79,42 +81,76 @@ end
 
 ## Lifetimes that the types do not state
 
-`spec.reflect_object_lifetime 'lib::Klass' do ... end` in `mrbgem.rake` or in
-the `conf.gem` block of the build config declares what the C++ types of
-the class do not say. The build config wins over the gem, and rake
-prints one line for each declaration it replaces. Rake writes
-`<mruby/reflect_object_lifetimes.h>`, which a source includes after the headers
-of every class that it names; the C++ side reads it when it compiles
-and refuses a declaration that the types contradict. Ruby has no way to
-declare or change a lifetime at runtime. The words:
+`<mruby/cpp_reflection.hpp>` declares what the C++ types of a class do
+not say, after the declaration of the class:
 
-- `takes_ownership :set_parent, by: 0` - after the call, argument 0 owns
-  the receiver and deletes it; `of: 0` says the receiver takes ownership
-  of argument 0. A parameter is named by its number or its identifier,
-  and the one left out is the receiver.
-- `ends_lifetime :destroy, 0` - the call ends the lifetime of argument 0
-  (of the receiver without a number).
-- `retains :set_layout, 0` - the receiver keeps argument 0.
-- `errors :open, error: :negative, sets_errno: true`, `success: 0`,
-  `error: nil` - the answer that raises.
-- `stack_reserve :parse, 65536` - the call raises `SystemStackError` when
-  the thread stack has less left.
-- `threadsafe :start, :no` - the function takes only arguments that are
-  copies.
-- `allocator :open, output_parameter: :made`, `deallocator :close,
-  results_of: :open`, `shared_ownership increment: :ref, decrement: :unref`
+```cpp
+template <>
+inline constexpr auto mruby::cpp_reflection::object_lifetime<^^TreeObject> = std::array{
+    takes_ownership(^^TreeObject::set_parent, {.by = 0}),
+    takes_ownership(^^TreeObject, {.by = "parent"}),
+    ends_lifetime(^^TreeObject::destroy, 0),
+};
+```
+
+A word names a function by its reflection, and the constructors by the
+reflection of the class. A word applies to every function of that name
+of the class, or of the scope around the class where the function takes
+or makes the class. C++ has no reflection of an overloaded name, so a
+word names an overloaded function by the reflection of one overload,
+from `std::meta::members_of`. A position is a parameter number from 0 or
+a parameter identifier, and the one left out is the receiver. The C++
+side reads the declaration when it compiles and refuses a declaration
+that the types contradict. Ruby has no way to declare or change a
+lifetime at runtime. The words:
+
+- `takes_ownership(^^C::set_parent, {.by = 0})` - after the call,
+  argument 0 owns the receiver and deletes it; `{.of = 0}` says the
+  receiver takes ownership of argument 0.
+- `ends_lifetime(^^C::destroy, 0)` - the call ends the lifetime of
+  argument 0 (of the receiver without a position).
+- `retains(^^C::set_layout, 0)` - the receiver keeps argument 0.
+- `errors(^^C::open, {.error = negative, .sets_errno = true})`,
+  `{.success = 0}`, `{.error = nullptr}` - the answer that raises.
+- `stack_reserve(^^C::parse, 65536)` - the call raises `SystemStackError`
+  when the thread stack has less left.
+- `threadsafe(^^C::start, false)` - the function takes only arguments
+  that are copies.
+- `allocator(^^lib::open, {.output_parameter = "made"})`,
+  `deallocator(^^lib::close, {.results_of = ^^lib::open})`,
+  `shared_ownership({.increment = ^^lib::ref, .decrement = ^^lib::unref})`
   - for a pointer to an incomplete type. The build stops at a reflected
   function that makes such a handle when its class declares none of these,
   and the message names the declaration that is missing.
+
+`spec.reflect_object_lifetime 'lib::Klass' do ... end` in `mrbgem.rake` or
+in the `conf.gem` block of the build config writes the same C++ into
+`<mruby/reflect_object_lifetimes.h>`, which a source includes after the
+headers of every class that it names. The words take the same arguments:
+a function of the class is a Symbol, the constructors are `:initialize`,
+a function beside the class is its C++ name as a String, and a position
+is a number or a Symbol (`takes_ownership :set_parent, by: 0`,
+`errors :open, error: :negative, sets_errno: true`,
+`threadsafe :start, :no`, `deallocator 'lib::close', results_of: 'lib::open'`).
+The build config wins over the gem, and rake prints one line for each
+declaration it replaces.
 
 ## Generated bindings
 
 `spec.reflect headers: ['lib.h'], scopes: ['lib']` in `mrbgem.rake`
 writes the C++ of a gem: the listed namespaces and classes, and every
 class and enum their functions take or answer.
+The lists of trailing types of a function with `...` are declared in
+C++:
+
+```cpp
+template <>
+inline constexpr auto mruby::cpp_reflection::varargs<^^lib::f> = std::array{^^std::tuple<int>, ^^std::tuple<int, const char *>};
+```
+
 `spec.reflect_varargs 'lib::f', [%w[int], ['int', 'const char *']]`
-declares the lists of trailing types of a function with `...`; a source
-includes `<mruby/reflect_varargs.h>` after the header of the library.
+writes the same C++ into `<mruby/reflect_varargs.h>`, which a source
+includes after the header of the library.
 
 ## Build
 
@@ -122,20 +158,18 @@ A compiler with `__cpp_impl_reflection`, today g++ 16 with `-freflection`,
 and [mruby-c-ext-helpers](https://github.com/Asmod4n/mruby-c-ext-helpers)
 for the value conversions.
 
-Every reflected name is a presym. `mrbgem.rake` builds and runs a small
-program before the presym scan and writes the names to
-`build/<name>/include/mruby/presym/reflect.h`. Nothing of it is in the tree.
-A gem calls `reflect_presyms(spec, "#{spec.dir}/tools/reflect_presyms/reflect_presyms.cpp")`
-with a program that prints `reflect_presyms_header<^^A, ^^B>()`.
+Every reflected name is a presym. The build finds each C++ source that
+contains `reflect_define<`, in `src/` and `test/` of every gem of the
+build and in the source that `spec.reflect` writes. Before the presym
+scan it compiles such a source once more; the object file carries the
+names in a section, and the build writes them to
+`build/<name>/include/mruby/presym/reflect.h`. The same compile carries
+the virtual overriders. Nothing of it is in the tree.
 
 ## Tests
 
-The C++ classes that the tests reflect are the gem
-`mruby-cpp-reflection-test_fixtures` in `test_fixtures/`. The tests in
-`test/` run only in a build that loads that gem, as
-`test_fixtures/build_config.rb` does:
-
-    MRUBY_CONFIG=<this gem>/test_fixtures/build_config.rb rake test
+The C++ classes that the tests reflect are in `test/`, and a test
+build of this gem builds them.
 
 `bintest/` tests the Rake API of `mrbgem.rake` in CRuby.
 
