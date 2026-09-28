@@ -8,6 +8,12 @@ if Object.const_defined?(:CLibrary)
     assert_true errors['unknown_make'].include?('unknown_make')
     assert_true errors['unknown_make'].include?('the result gives a pointer to c_library_undeclared::unknown')
     assert_true errors['unknown_make'].include?("spec.reflect_object_lifetime 'c_library_undeclared::unknown' needs allocator :unknown_make and a deallocator, or shared_ownership")
+    # The message ends with the missing declaration in the form of a
+    # lifetime file, so that a user can paste it, check the marked word
+    # against the library, and send it to this repository.
+    assert_true errors['unknown_make'].include?("send the block as lifetimes/<package>/<version>.lifetime:\n")
+    assert_true errors['unknown_make'].end_with?("reflect_object_lifetime 'c_library_undeclared::unknown' do\n  allocator :unknown_make\n  deallocator :CHECK\nend\n")
+    assert_true errors['stray_open'].include?("do\n  allocator :stray_open, output_parameter: :made\n  deallocator :CHECK\nend\n")
     assert_true errors['loose_make'].include?('allocator :loose_make')
     assert_true errors['stray_open'].include?('parameter 0 (made) gives a pointer to c_library_undeclared::stray')
     assert_true errors['stray_open'].include?('allocator :stray_open, output_parameter: :made')

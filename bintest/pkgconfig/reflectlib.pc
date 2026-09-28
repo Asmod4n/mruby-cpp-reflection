@@ -1,0 +1,5 @@
+Name: reflectlib
+Description: A package that exists only for the bintests of mruby-cpp-reflection
+Version: 1.2.3
+Cflags:
+Libs:

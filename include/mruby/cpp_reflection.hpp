@@ -555,9 +555,12 @@ consteval std::string_view reflect_missing_object_lifetime(const std::meta::info
         where = "parameter " + number + (identifier.empty() ? std::string() : " (" + identifier + ")");
         keyword = ", output_parameter: " + (identifier.empty() ? number : ":" + identifier);
     }
-    return std::define_static_string(std::string(std::meta::display_string_of(function)) + ": " + where + " gives a pointer to " + std::string(std::meta::display_string_of(made)) +
-                                     ", and no declaration says who frees it; spec.reflect_object_lifetime '" + std::string(std::meta::display_string_of(made)) +
-                                     "' needs allocator :" + std::string(reflect_function_name(function)) + keyword + " and a deallocator, or shared_ownership");
+    const std::string made_name(std::meta::display_string_of(made));
+    const std::string allocated = "allocator :" + std::string(reflect_function_name(function)) + keyword;
+    return std::define_static_string(std::string(std::meta::display_string_of(function)) + ": " + where + " gives a pointer to " + made_name +
+                                     ", and no declaration says who frees it; spec.reflect_object_lifetime '" + made_name + "' needs " + allocated +
+                                     " and a deallocator, or shared_ownership. Check each CHECK against the documentation of the library, then send the block as lifetimes/<package>/<version>.lifetime:\n"
+                                     "reflect_object_lifetime '" + made_name + "' do\n  " + allocated + "\n  deallocator :CHECK\nend\n");
 }
 
 consteval void reflect_raise_on_missing_object_lifetime(const std::meta::info type, const std::meta::info function)

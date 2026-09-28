@@ -483,6 +483,122 @@ module MRuby
   end
 end
 
+# search_package runs `pkg-config --modversion` with the query that
+# mruby's search_package (lib/mruby/gem.rb) builds, then calls mruby's
+# search_package with the same arguments and answers its answer. When
+# both find the package, the spec records the name, the query and the
+# version. pkgconf prints one line per condition of the query; the
+# version is recorded only when all lines are equal.
+#
+# A recorded package with a version loads its lifetime file from
+# lifetimes/<package>/ of this gem: <version>.lifetime, else
+# <major>.lifetime when that file states that the library follows
+# SemVer and who confirmed it. A file holds the same
+# reflect_object_lifetime blocks as a mrbgem.rake, and:
+#
+#   version '1.3.2'
+#   confirmed_by 'name of the author, where the author confirmed it'
+#   follows_semver confirmed_by: 'name of the author, where'
+#
+# A file without confirmed_by, or with another version than its file
+# name, is not used. The declarations of a file enter the same header
+# as spec.reflect_object_lifetime. A class that the gem declared before
+# the file loads keeps that declaration, and a later call replaces the
+# declaration of the file; rake prints one line for each replacement.
+
+module MRuby
+  module Gem
+    class ReflectLifetimeFile < BasicObject
+      attr_reader :declarations, :declared_version, :confirmation, :semver_confirmation
+
+      def initialize
+        @declarations = []
+      end
+
+      def version(text)
+        @declared_version = text.to_s
+      end
+
+      def confirmed_by(text)
+        @confirmation = text.to_s
+      end
+
+      def follows_semver(confirmed_by:)
+        @semver_confirmation = confirmed_by.to_s
+      end
+
+      def reflect_object_lifetime(class_name, &block)
+        name = class_name.to_s
+        @declarations << [name, ReflectObjectLifetimeDeclaration.new(name).words_of(block)]
+      end
+    end
+
+    class Specification
+      def reflect_packages
+        @reflect_packages ||= []
+      end
+
+      def reflect_lifetime_files_dir
+        "#{__dir__}/lifetimes"
+      end
+
+      def reflect_lifetime_file(package, version)
+        exact = "#{reflect_lifetime_files_dir}/#{package}/#{version}.lifetime"
+        return exact if File.file?(exact)
+        major = "#{reflect_lifetime_files_dir}/#{package}/#{version.split('.').first}.lifetime"
+        major if File.file?(major)
+      end
+
+      def load_reflect_lifetime_file(path)
+        file = ReflectLifetimeFile.new
+        file.instance_eval(File.read(path), path)
+        expected = File.basename(path, '.lifetime')
+        if file.declared_version != expected
+          puts "reflect_object_lifetime: #{path} states version #{file.declared_version.inspect}, not #{expected}, and is not used"
+          return
+        end
+        if file.confirmation.nil?
+          puts "reflect_object_lifetime: #{path} names nobody who confirmed it, and is not used"
+          return
+        end
+        if !expected.include?('.') && file.semver_confirmation.nil?
+          puts "reflect_object_lifetime: #{path} names a major version and does not state that the library follows SemVer, and is not used"
+          return
+        end
+        file.declarations.each do |class_name, words|
+          if reflect_object_lifetime_declarations.key?(class_name)
+            puts "reflect_object_lifetime: replaced the declaration of #{class_name} from #{path} (#{words.inspect}) with #{reflect_object_lifetime_declarations[class_name].inspect}"
+            next
+          end
+          reflect_object_lifetime_declarations[class_name] = words
+        end
+        write_reflect_object_lifetime_header
+      end
+    end
+
+    Specification.prepend(Specification.const_set(:ReflectSearchPackage, Module.new do
+      def search_package(name, version_query = nil, *rest, **options, &block)
+        query = version_query ? "#{name} #{version_query}" : name.to_s
+        output = begin
+          IO.popen(['pkg-config', '--modversion', query], &:read)
+        rescue SystemCallError
+          nil
+        end
+        found = output && $?.success?
+        answer = super
+        if answer == true && found
+          lines = output.lines.map(&:strip).uniq
+          version = lines.size == 1 ? lines.first : nil
+          reflect_packages << { name: name.to_s, query: version_query, version: version }
+          path = version && reflect_lifetime_file(name.to_s, version)
+          load_reflect_lifetime_file(path) if path
+        end
+        answer
+      end
+    end)) unless Specification.const_defined?(:ReflectSearchPackage, false)
+  end
+end
+
 MRuby::Gem::Specification.new('mruby-cpp-reflection') do |spec|
   spec.export_include_paths << "#{spec.dir}/include" if spec.respond_to?(:export_include_paths)
   spec.license = 'MPL-2'
