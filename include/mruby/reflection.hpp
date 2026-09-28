@@ -1066,10 +1066,9 @@ consteval std::string reflect_virtual_overriders_text(const std::span<const std:
 }
 
 template <auto Classes>
-inline constexpr auto reflect_virtual_overriders_printed = [] {
-    constexpr std::string_view body = std::define_static_string("BEGIN_MRB_CPP_REFLECTOR_VIRTUAL_OVERRIDERS\n" + reflect_virtual_overriders_text(Classes) +
-                                                                "END_MRB_CPP_REFLECTOR_VIRTUAL_OVERRIDERS\n");
-    std::array<char, body.size() + 1> text{};
+[[gnu::section(".mrb_cpp_reflector_virtual_overriders"), gnu::used]] static constexpr auto reflect_virtual_overriders_printed = [] {
+    constexpr std::string_view body = std::define_static_string(reflect_virtual_overriders_text(Classes));
+    std::array<char, body.size()> text{};
     std::ranges::copy(body, text.begin());
     return text;
 }();
@@ -3175,7 +3174,7 @@ template <auto Classes, reflect_options Options = reflect_options{}>
 void reflect_define(mrb_state *const mrb, RClass *const under = nullptr)
 {
 #if defined(MRB_CPP_REFLECTOR_GENERATE)
-    if constexpr (Options.virtual_overriders) std::fputs(reflect_virtual_overriders_printed<Classes>.data(), stdout);
+    if constexpr (Options.virtual_overriders) static_cast<void>(reflect_virtual_overriders_printed<Classes>);
     return;
 #endif
     reflect_definition definition(mrb);

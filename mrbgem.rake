@@ -422,8 +422,8 @@ end
 # Overriders for the virtual functions of the classes a source file lists
 # with reflect_options virtual_overriders. A first compile of the source
 # file, with MRB_CPP_REFLECTOR_GENERATE, writes the text of the overriders
-# into its object file between two marker lines. That text goes to
-# spec.build_dir, and include_virtual_overriders.cpp compiles the source
+# into the section .mrb_cpp_reflector_virtual_overriders of its object file.
+# objcopy of the toolchain copies that section to spec.build_dir, and include_virtual_overriders.cpp compiles the source
 # file with it, in place of the source file's own object.
 def reflect_virtual_overriders(spec, source)
   return unless spec.build.cxx.flags.flatten.any? { |f| f.to_s == '-freflection' }
@@ -433,18 +433,24 @@ def reflect_virtual_overriders(spec, source)
   msvc = spec.build.toolchains.include?('visualcpp')
   quoted = ->(path) { msvc ? %(\\"#{path}\\") : %('"#{path}"') }
   printed = "#{dir}/print_virtual_overriders#{spec.build.exts.object}"
+  section = "#{dir}/virtual_overriders.section"
   text = "#{dir}/virtual_overriders.inc"
+  objcopy = if spec.build.toolchains.include?('clang') then `#{spec.build.cxx.command} -print-prog-name=llvm-objcopy`.chomp
+            else spec.build.cxx.command.sub(/(?:g\+\+|gcc|c\+\+)(?:-[\d.]+)?\z/, 'objcopy')
+            end
   object = "#{dir}/include_virtual_overriders#{spec.build.exts.object}"
   replaced = spec.objfile(source.relative_path_from(spec.dir).pathmap("#{spec.build_dir}/%X"))
-  file printed => [source, "#{reflection.dir}/tools/print_virtual_overriders/print_virtual_overriders.cpp", "#{reflection.dir}/include/mruby/reflection.hpp"] do |t|
-    spec.cxx.run t.name, "#{reflection.dir}/tools/print_virtual_overriders/print_virtual_overriders.cpp", ["MRB_CPP_REFLECTOR_SOURCE=#{quoted.(source)}"], [], [msvc ? '/GL-' : '-fno-lto']
+  file printed => [source, "#{reflection.dir}/src/print_virtual_overriders.cpp", "#{reflection.dir}/include/mruby/reflection.hpp"] do |t|
+    spec.cxx.run t.name, "#{reflection.dir}/src/print_virtual_overriders.cpp", ["MRB_CPP_REFLECTOR_SOURCE=#{quoted.(source)}"], [], [msvc ? '/GL-' : '-fno-lto']
   end
-  file text => printed do |t|
-    blocks = File.binread(printed).scan(/BEGIN_MRB_CPP_REFLECTOR_VIRTUAL_OVERRIDERS\n(.*?)END_MRB_CPP_REFLECTOR_VIRTUAL_OVERRIDERS\n/m).flatten
-    File.write(t.name, blocks.flat_map { |b| b.split(/^(?=template <> struct)/) }.uniq.join)
+  file section => printed do |t|
+    sh "#{objcopy} -O binary --only-section=.mrb_cpp_reflector_virtual_overriders #{printed} #{t.name}"
   end
-  file object => [text, "#{reflection.dir}/tools/include_virtual_overriders/include_virtual_overriders.cpp"] do |t|
-    spec.cxx.run t.name, "#{reflection.dir}/tools/include_virtual_overriders/include_virtual_overriders.cpp",
+  file text => section do |t|
+    File.write(t.name, File.read(section).split(/^(?=template <> struct)/).uniq.join)
+  end
+  file object => [text, "#{reflection.dir}/src/include_virtual_overriders.cpp"] do |t|
+    spec.cxx.run t.name, "#{reflection.dir}/src/include_virtual_overriders.cpp",
                  ["MRB_CPP_REFLECTOR_SOURCE=#{quoted.(source)}", "MRB_CPP_REFLECTOR_VIRTUAL_OVERRIDERS=#{quoted.(text)}"]
   end
   if spec.test_objs.include?(replaced)
