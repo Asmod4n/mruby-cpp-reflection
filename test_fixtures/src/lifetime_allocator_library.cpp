@@ -90,13 +90,31 @@ struct c_library_context {
     int n;
 };
 
+/* As in Dear ImGui, the library keeps the last context it made as the
+ * current one, and forgets it when that context is destroyed. */
+static c_library_context *&current()
+{
+    static c_library_context *kept = nullptr;
+    return kept;
+}
+
 c_library_context *c_library::create_context()
 {
     ++c_library::contexts();
-    return new c_library_context{0};
+    current() = new c_library_context{0};
+    return current();
 }
 void c_library::destroy_context(c_library_context *const c)
 {
     --c_library::contexts();
+    if (current() == c) current() = nullptr;
     delete c;
+}
+c_library_context *c_library::current_context() { return current(); }
+
+/* A context that no allocator made: the gem tracks no Ruby object for it. */
+c_library_context *c_library::static_context()
+{
+    static c_library_context kept{0};
+    return &kept;
 }

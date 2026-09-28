@@ -30,6 +30,8 @@ namespace c_library {
 c_library_context *create_context();
 void destroy_context(c_library_context *c);
 int contexts_alive();
+c_library_context *current_context();
+c_library_context *static_context();
 }
 
 /* Functions that make handles of types that no declaration names. The
@@ -64,6 +66,8 @@ template <>
 inline constexpr auto mruby::cpp_reflection::object_lifetime<^^c_library_context> = std::array{
     allocator(^^c_library::create_context),
     deallocator(^^c_library::destroy_context, {.results_of = ^^c_library::create_context}),
+    borrowed(^^c_library::current_context),
+    borrowed(^^c_library::static_context),
 };
 template <>
 inline constexpr auto mruby::cpp_reflection::object_lifetime<^^c_library::counted> = std::array{

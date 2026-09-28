@@ -194,6 +194,14 @@ mrb_value reflect_after_declared_call(mrb_state *const mrb, const mrb_value self
         }
         mrb_raisef(mrb, E_RUNTIME_ERROR, "%s answered %v", declared.name, answer);
     }
+    if (declared.borrowed) {
+        const reflect_lifetime_base *const record = reflect_record(mrb, answer);
+        if (record == nullptr) return answer;
+        RObject *const known = reflect_identity(mrb, record->object, record->type);
+        if (known == nullptr) [[unlikely]]
+            mrb_raisef(mrb, E_TYPE_ERROR, "%s returned a borrowed pointer to an object that no Ruby object owns", declared.name);
+        return mrb_obj_value(known);
+    }
     return reflect_translate_exceptions(mrb, [&] {
         mrb_value result = answer;
         const mrb_value handle = mrb_undef_p(output) ? answer : output;

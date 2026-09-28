@@ -118,7 +118,7 @@ end
 # The block names the functions of the class, or the functions of the
 # scope around the class that take or make the class, with these words:
 # takes_ownership, ends_lifetime, retains, errors, stack_reserve, threadsafe,
-# allocator, deallocator and shared_ownership. Rake checks what the
+# allocator, deallocator, shared_ownership and borrowed. Rake checks what the
 # words say without the C++ types; the C++ side checks the rest when it
 # compiles the class.
 #
@@ -193,6 +193,10 @@ module MRuby
       def deallocator(function, results_of: [])
         allocators = results_of.is_a?(::Array) ? results_of : [results_of]
         add(word: :deallocator, function: function_name(function), results_of: allocators.map { |a| function_name(a) })
+      end
+
+      def borrowed(function)
+        add(word: :borrowed, function: function_name(function))
       end
 
       def shared_ownership(increment:, decrement:)
@@ -296,6 +300,7 @@ module MRuby
                   else ".error = #{reflect_object_lifetime_answer_text(word[:expected])}"
                   end
           ["#{call}(#{function}, {#{given}, .sets_errno = #{word[:sets_errno]}})"]
+        when :borrowed then ["#{call}(#{function})"]
         when :stack_reserve then ["#{call}(#{function}, #{word[:stack_reserve]})"]
         when :threadsafe then ["#{call}(#{function}, false)"]
         when :allocator

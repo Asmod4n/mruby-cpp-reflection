@@ -18,7 +18,7 @@ namespace mruby::cpp_reflection {
 
 enum class reflect_answer_test : unsigned char { none, success, error, negative };
 
-enum class reflect_word : unsigned char { takes_ownership, ends_lifetime, retains, errors, stack_reserve, threadsafe, allocator, deallocator, shared_ownership };
+enum class reflect_word : unsigned char { takes_ownership, ends_lifetime, retains, errors, stack_reserve, threadsafe, allocator, deallocator, shared_ownership, borrowed };
 
 struct reflect_parameter {
     consteval reflect_parameter() {}
@@ -151,6 +151,11 @@ consteval mruby::cpp_reflection::reflect_object_lifetime_word deallocator(const 
     return {.word = mruby::cpp_reflection::reflect_word::deallocator,
             .function = function,
             .results_of = given.results_of == std::meta::info{} ? std::define_static_string("") : mruby::cpp_reflection::reflect_lifetime_function_name(given.results_of)};
+}
+
+consteval mruby::cpp_reflection::reflect_object_lifetime_word borrowed(const std::meta::info function)
+{
+    return {.word = mruby::cpp_reflection::reflect_word::borrowed, .function = function};
 }
 
 consteval mruby::cpp_reflection::reflect_object_lifetime_word shared_ownership(const mruby::cpp_reflection::reflect_shared_ownership given)

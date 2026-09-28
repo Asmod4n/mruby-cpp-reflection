@@ -163,6 +163,7 @@ struct reflect_function_lifetime {
     bool sets_errno = false;
     std::size_t stack_reserve = 0;
     bool allocates = false;
+    bool borrowed = false;
     bool shared = false;
     void (*deallocator)(void *object) = nullptr;
     void (*increment)(void *object) = nullptr;
@@ -376,6 +377,9 @@ consteval std::string_view reflect_object_lifetime_error(const std::meta::info k
             case reflect_word::deallocator:
                 if (reflect_releases_class(function, klass)) applies++;
                 break;
+            case reflect_word::borrowed:
+                if (reflect_made_class(function) == klass && reflect_output_position(function) == reflect_nowhere) applies++;
+                break;
             case reflect_word::stack_reserve:
             case reflect_word::shared_ownership: applies++; break;
             }
@@ -383,6 +387,7 @@ consteval std::string_view reflect_object_lifetime_error(const std::meta::info k
         if (applies > 0) continue;
         if (word.word == reflect_word::allocator) return reflect_object_lifetime_message(klass, reflect_lifetime_function_name(word.function), "makes no object of the class");
         if (word.word == reflect_word::deallocator) return reflect_object_lifetime_message(klass, reflect_lifetime_function_name(word.function), "takes no pointer to the class as its only parameter");
+        if (word.word == reflect_word::borrowed) return reflect_object_lifetime_message(klass, reflect_lifetime_function_name(word.function), "returns no pointer to the class");
         return reflect_object_lifetime_message(klass, reflect_lifetime_function_name(word.function), "has no pointer or reference to a class at the named parameter");
     }
     for (const reflect_object_lifetime_word &word : words) {
@@ -480,6 +485,11 @@ consteval reflect_function_lifetime reflect_object_lifetime_for(const std::meta:
                 if (lifetime.allocates) throw reflect_declared_twice(function, "allocator");
                 lifetime.allocates = true;
                 break;
+            case reflect_word::borrowed:
+                if (reflect_made_class(function) != klass) continue;
+                if (lifetime.borrowed) throw reflect_declared_twice(function, "borrowed");
+                lifetime.borrowed = true;
+                break;
             case reflect_word::deallocator:
                 if (!reflect_releases_class(function, klass)) continue;
                 if (lifetime.ended != reflect_nowhere && lifetime.ended != 0) throw reflect_declared_twice(function, "ends_lifetime");
@@ -552,7 +562,7 @@ consteval std::string_view reflect_missing_object_lifetime(const std::meta::info
 {
     if (!reflect_makes_handle(function)) return {};
     const reflect_function_lifetime lifetime = reflect_object_lifetime_for(type, function);
-    if (lifetime.allocates || lifetime.shared) return {};
+    if (lifetime.allocates || lifetime.borrowed || lifetime.shared) return {};
     const std::meta::info made = reflect_made_class(function);
     const int output = reflect_output_position(function);
     std::string where = "the result";

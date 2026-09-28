@@ -162,4 +162,28 @@ if Object.const_defined?(:CLibrary)
     full_gc
     assert_equal before, CLibrary.contexts_alive
   end
+  assert('a borrowed result is the Ruby object that owns the C++ object') do
+    # current_context returns the context that create_context made, and
+    # the caller does not free it. The gem answers the object it already
+    # tracks, so no second Ruby object points at the context.
+    c = CLibrary.create_context
+    assert_same c, CLibrary.current_context
+    assert_same c, CLibrary.current_context
+    CLibrary.destroy_context(c)
+  end
+
+  assert('a borrowed result after the deallocator is what the C++ returns') do
+    # destroy_context ends the record of the context, and the library
+    # forgets its current context, so current_context returns NULL.
+    c = CLibrary.create_context
+    CLibrary.destroy_context(c)
+    assert_nil CLibrary.current_context
+  end
+
+  assert('a borrowed pointer to an object that the gem does not track raises') do
+    # A Ruby object for static_context would own nothing and could
+    # outlive the C++ object, so the call raises.
+    e = assert_raise(TypeError) { CLibrary.static_context }
+    assert_include e.message, 'static_context'
+  end
 end

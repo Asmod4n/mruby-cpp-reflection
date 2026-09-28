@@ -78,6 +78,7 @@ assert('ReflectObjectLifetimeTest: every word reaches the header') do
       allocator :open_handle, output_parameter: :made
       deallocator :close_handle
       shared_ownership increment: :ref, decrement: :unref
+      borrowed :current
     end
     text = header
     [
@@ -91,9 +92,10 @@ assert('ReflectObjectLifetimeTest: every word reaches the header') do
       'threadsafe(^^::lib::handle::start, false)',
       'allocator(^^::lib::handle::open_handle, {.output_parameter = "made"})',
       'deallocator(^^::lib::handle::close_handle)',
-      'shared_ownership({.increment = ^^::lib::handle::ref, .decrement = ^^::lib::handle::unref})'
+      'shared_ownership({.increment = ^^::lib::handle::ref, .decrement = ^^::lib::handle::unref})',
+      'borrowed(^^::lib::handle::current)'
     ].each { |word| assert_true(text.include?("    mruby::cpp_reflection::#{word},\n"), word) }
-    assert_equal(11, text.scan(/^    mruby::cpp_reflection::/).size)
+    assert_equal(12, text.scan(/^    mruby::cpp_reflection::/).size)
   ensure
     FileUtils.remove_entry(@dir)
   end
