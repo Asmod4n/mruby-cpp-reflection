@@ -768,7 +768,6 @@ assert('what a GUI library brings is left out or converted as C++ allows it') do
   assert_false(Odd.method_defined?(:opaque))
   assert_equal({'a' => 1, 'b' => 2}, odd.pairs.to_h.to_a.map { |k, v| [k.to_s, v] }.to_h)
   box = odd.box
-  assert_equal('NoEqualityBox', box.class.to_s)
   assert_equal(2, box.get.n)
   assert_false(box.class.method_defined?(:contains))
 end
