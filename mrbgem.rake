@@ -333,33 +333,43 @@ module MRuby
 end
 
 # spec.reflect writes the C++ of a gem that binds a library, so the gem
-# carries no C++ of its own. It takes the headers of the library and an
-# allowlist of scopes: namespaces and classes, named as C++ names them.
-# The generated source includes the headers, then the varargs header of
+# carries no C++ of its own. Its arguments are the scopes, namespaces
+# and classes named as C++ names them, in the order of reflect<...>().
+# headers: names the headers of the library. The generated source
+# includes the headers, then the cxx: text, then the varargs header of
 # the gem if spec.reflect_varargs wrote one, the lifetime header if
 # spec.reflect_object_lifetime wrote one, then the gem, and defines
 # gem_init and gem_final. reflect_with_signature_types adds every class
 # and enum that a function of a listed scope takes or answers, so a
 # handle type is a Ruby class before any function has made one.
 #
-# The source goes to build_dir/reflect/reflect.cpp, and is written again
-# only when its text changes.
+# The source goes to build_dir/reflect/reflect.cpp. The c: text goes to
+# build_dir/reflect/reflect_c.c, one more object of the gem that the C
+# compiler compiles. The cxx: text goes to build_dir/reflect/reflect_cxx.cxx,
+# which reflect.cpp includes, so its definitions are compiled once. Each
+# file is written again only when its text changes.
 
 module MRuby
   module Gem
     class Specification
-      def reflect(headers:, scopes:)
+      def reflect(*scopes, headers:, c: nil, cxx: nil)
         unless headers.is_a?(Array) && !headers.empty? && headers.all? { |h| h.is_a?(String) }
           raise ArgumentError, "reflect: headers is a non-empty Array of header names"
         end
-        unless scopes.is_a?(Array) && !scopes.empty? && scopes.all? { |s| s.is_a?(String) }
-          raise ArgumentError, "reflect: scopes is a non-empty Array of C++ names"
+        unless !scopes.empty? && scopes.all? { |s| s.is_a?(String) }
+          raise ArgumentError, "reflect: the scopes are one or more C++ names as Strings"
         end
-        source = reflect_source
-        text = reflect_source_text(headers, scopes)
-        FileUtils.mkdir_p(File.dirname(source))
-        File.write(source, text) unless File.exist?(source) && File.read(source) == text
-        object = objfile(source.pathmap("%X"))
+        [[:c, c], [:cxx, cxx]].each do |key, text|
+          raise ArgumentError, "reflect: #{key}: is a String of source text" unless text.nil? || text.is_a?(String)
+        end
+        reflect_write(reflect_cxx_source, cxx) if cxx
+        if c
+          reflect_write(reflect_c_source, c)
+          object = objfile(reflect_c_source.pathmap("%X"))
+          objs << object unless objs.include?(object)
+        end
+        reflect_write(reflect_source, reflect_source_text(headers, scopes, cxx ? reflect_cxx_source : nil))
+        object = objfile(reflect_source.pathmap("%X"))
         objs << object unless objs.include?(object)
       end
 
@@ -367,12 +377,21 @@ module MRuby
         "#{build_dir}/reflect/reflect.cpp"
       end
 
-      def reflect_source_text(headers, scopes)
+      def reflect_c_source
+        "#{build_dir}/reflect/reflect_c.c"
+      end
+
+      def reflect_cxx_source
+        "#{build_dir}/reflect/reflect_cxx.cxx"
+      end
+
+      def reflect_source_text(headers, scopes, cxx_source = nil)
         includes = headers.map { |h| "#include <#{h}>\n" }.join
+        included = cxx_source ? "#include <mruby.h>\n#include <mruby/cpp_reflection_lifetime.hpp>\n#include \"#{cxx_source}\"\n" : ''
         listed = scopes.map { |s| "^^#{s.start_with?('::') ? s : "::#{s}"}" }.join(', ')
         <<~CPP
           #{includes.chomp}
-          #include <mruby.h>
+          #{included}#include <mruby.h>
           #if __has_include(<mruby/reflect_varargs.h>)
           #include <mruby/reflect_varargs.h>
           #endif
@@ -394,6 +413,13 @@ module MRuby
 
           extern "C" void mrb_#{funcname}_gem_final(mrb_state *) {}
         CPP
+      end
+
+      private
+
+      def reflect_write(path, text)
+        FileUtils.mkdir_p(File.dirname(path))
+        File.write(path, text) unless File.exist?(path) && File.read(path) == text
       end
     end
   end

@@ -122,6 +122,10 @@ lifetime at runtime. The words:
   - for a pointer to an incomplete type. The build stops at a reflected
   function that makes such a handle when its class declares none of these,
   and the message names the declaration that is missing.
+- `borrowed(^^lib::current)` - the function returns a pointer that the
+  caller does not free. The call returns the Ruby object that already
+  owns the C++ object, and raises `TypeError` when no Ruby object owns
+  it. A null pointer is `nil`.
 
 `spec.reflect_object_lifetime 'lib::Klass' do ... end` in `mrbgem.rake` or
 in the `conf.gem` block of the build config writes the same C++ into
@@ -141,9 +145,23 @@ as a TOML file that a future native C++ library reads, not this gem.
 
 ## Generated bindings
 
-`spec.reflect headers: ['lib.h'], scopes: ['lib']` in `mrbgem.rake`
+`spec.reflect 'lib', 'lib::Klass', headers: ['lib.h']` in `mrbgem.rake`
 writes the C++ of a gem: the listed namespaces and classes, and every
-class and enum their functions take or answer.
+class and enum their functions take or answer, with `gem_init` and
+`gem_final`, so the gem needs no `src/`. The arguments are the scopes, in
+the order of `reflect<^^lib, ^^lib::Klass>()`.
+`c: <<~C` and `cxx: <<~CXX` take C and C++ text. The build writes the C
+text into `reflect/reflect_c.c` of the build directory, which `spec.cc`
+compiles. It writes the C++ text into `reflect/reflect_cxx.cxx`, which
+the generated source includes after the headers and before the
+reflection, so the reflection sees its declarations; `spec.cxx` compiles
+it once, as a part of that source. The C++ text holds lifetime
+declarations and the template instances the gem uses.
+A class template instance is reflected only when a declaration names
+it: a type alias or a derived class in the scope of the template, in the
+`cxx:` text or in the C++ source of the gem. The build stops at any
+other instance, and the message names it. An instance of a template of
+namespace `std` is not affected.
 The lists of trailing types of a function with `...` are declared in
 C++:
 
