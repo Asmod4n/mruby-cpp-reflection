@@ -182,7 +182,7 @@ static mrb_value object_lifetime_declaration_errors_m(mrb_state *const mrb, mrb_
     return errors;
 }
 
-void lifetime_dsl_gem_test(mrb_state *const mrb)
+void lifetime_dsl_gem_init(mrb_state *const mrb)
 {
     mrb_define_module_function(mrb, mrb->kernel_module, "retained_count", retained_count_m, MRB_ARGS_REQ(1));
     mrb_define_module_function(mrb, mrb->kernel_module, "callback_roots", callback_roots_m, MRB_ARGS_NONE());
@@ -192,5 +192,5 @@ void lifetime_dsl_gem_test(mrb_state *const mrb)
     mrb_cpp_reflector::reflect_define<lifetime_classes>(mrb);
 }
 #else
-void lifetime_dsl_gem_test(mrb_state *) {}
+void lifetime_dsl_gem_init(mrb_state *) {}
 #endif

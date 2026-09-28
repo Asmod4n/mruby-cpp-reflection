@@ -25,10 +25,10 @@ inline constexpr reflect_attributes reflect_attributes_of<^^::attributes::read> 
 
 constexpr auto attribute_classes = mrb_cpp_reflector::reflect<^^attributes, ^^attributes::Box>();
 
-void attributes_gem_test(mrb_state *const mrb)
+void attributes_gem_init(mrb_state *const mrb)
 {
     mrb_cpp_reflector::reflect_define<attribute_classes>(mrb);
 }
 #else
-void attributes_gem_test(mrb_state *) {}
+void attributes_gem_init(mrb_state *) {}
 #endif

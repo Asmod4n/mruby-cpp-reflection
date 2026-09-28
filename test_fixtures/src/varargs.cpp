@@ -14,10 +14,10 @@
 
 constexpr auto varargs_classes = mrb_cpp_reflector::reflect<^^varargs>();
 
-void varargs_gem_test(mrb_state *const mrb)
+void varargs_gem_init(mrb_state *const mrb)
 {
     mrb_cpp_reflector::reflect_define<varargs_classes>(mrb);
 }
 #else
-void varargs_gem_test(mrb_state *) {}
+void varargs_gem_init(mrb_state *) {}
 #endif

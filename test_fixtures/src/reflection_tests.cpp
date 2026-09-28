@@ -885,11 +885,11 @@ static mrb_value callback_after_close_q(mrb_state *mrb, mrb_value)
 }
 
 bool aborts_in_child(void (*run)());
-void lifetime_dsl_gem_test(mrb_state *mrb);
-void lifetime_allocator_gem_test(mrb_state *mrb);
-void function_pointers_gem_test(mrb_state *mrb);
-void varargs_gem_test(mrb_state *mrb);
-void attributes_gem_test(mrb_state *mrb);
+void lifetime_dsl_gem_init(mrb_state *mrb);
+void lifetime_allocator_gem_init(mrb_state *mrb);
+void function_pointers_gem_init(mrb_state *mrb);
+void varargs_gem_init(mrb_state *mrb);
+void attributes_gem_init(mrb_state *mrb);
 
 /* One thread owns an mrb_state. A call into Ruby from another thread
  * would race with that thread, so the process ends instead. */
@@ -903,7 +903,7 @@ static mrb_value callback_from_other_thread_aborts_q(mrb_state *mrb, mrb_value)
     return mrb_bool_value(aborted);
 }
 
-extern "C" void mrb_mruby_cpp_reflection_gem_test(mrb_state *mrb)
+extern "C" void mrb_mruby_cpp_reflection_test_fixtures_gem_init(mrb_state *mrb)
 {
     mrb_define_module_function(mrb, mrb->kernel_module, "callback_after_close?", callback_after_close_q, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "callback_from_other_thread_aborts?", callback_from_other_thread_aborts_q, MRB_ARGS_NONE());
@@ -923,12 +923,14 @@ extern "C" void mrb_mruby_cpp_reflection_gem_test(mrb_state *mrb)
     mrb_cpp_reflector::reflect_define<variables>(mrb);
     mrb_cpp_reflector::reflect_define<overridable, {.virtual_overriders = true}>(mrb);
     mrb_cpp_reflector::reflect_define<instantiated, {.templates = true}>(mrb);
-    lifetime_dsl_gem_test(mrb);
-    lifetime_allocator_gem_test(mrb);
-    function_pointers_gem_test(mrb);
-    varargs_gem_test(mrb);
-    attributes_gem_test(mrb);
+    lifetime_dsl_gem_init(mrb);
+    lifetime_allocator_gem_init(mrb);
+    function_pointers_gem_init(mrb);
+    varargs_gem_init(mrb);
+    attributes_gem_init(mrb);
 }
 #else
-extern "C" void mrb_mruby_cpp_reflection_gem_test(mrb_state *) {}
+extern "C" void mrb_mruby_cpp_reflection_test_fixtures_gem_init(mrb_state *) {}
 #endif
+
+extern "C" void mrb_mruby_cpp_reflection_test_fixtures_gem_final(mrb_state *) {}

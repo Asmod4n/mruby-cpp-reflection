@@ -496,12 +496,6 @@ MRuby::Gem::Specification.new('mruby-cpp-reflection') do |spec|
   spec.summary = 'A C++ class is a Ruby class: C++26 reflection defines it, methods, attributes, overloads and all'
   spec.add_dependency 'mruby-proc-ext', core: 'mruby-proc-ext'
   spec.add_dependency 'mruby-c-ext-helpers', github: 'Asmod4n/mruby-c-ext-helpers', branch: 'mrb-value-to'
-  spec.add_test_dependency 'mruby-string-ext', core: 'mruby-string-ext'
-  spec.add_test_dependency 'mruby-errno', core: 'mruby-errno'
-  spec.add_test_dependency 'mruby-metaprog', core: 'mruby-metaprog'
-  spec.add_test_dependency 'mruby-class-ext', core: 'mruby-class-ext'
-  spec.add_test_dependency 'mruby-method', core: 'mruby-method'
-  spec.add_test_dependency 'mruby-enumerator', core: 'mruby-enumerator'
   spec.build.enable_cxx_exception
   relink = "#{spec.dir}/bin/relink"
   spec.build.linker.command = %("#{RbConfig.ruby}" "#{relink}" "#{spec.build.linker.command}") unless spec.build.linker.command.include?(relink)

@@ -174,8 +174,12 @@ Nothing of it is in the tree.
 
 ## Tests
 
-The C++ classes that the tests reflect are in `test/`, and a test
-build of this gem builds them.
+The C++ classes that the tests reflect are in `src/` of the gem
+`mruby-cpp-reflection-test_fixtures` in `test_fixtures/`. That gem
+depends on this gem as any other gem does, and its `test/` holds the
+Ruby tests. `test_fixtures/build_config.rb` builds and tests it:
+
+    MRUBY_CONFIG=path/to/test_fixtures/build_config.rb rake test
 
 `bintest/` tests the Rake API of `mrbgem.rake` in CRuby.
 

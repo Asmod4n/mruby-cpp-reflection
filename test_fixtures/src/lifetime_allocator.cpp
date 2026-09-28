@@ -116,7 +116,7 @@ static mrb_value missing_lifetime_errors_m(mrb_state *const mrb, mrb_value)
     return errors;
 }
 
-void lifetime_allocator_gem_test(mrb_state *const mrb)
+void lifetime_allocator_gem_init(mrb_state *const mrb)
 {
     mrb_define_module_function(mrb, mrb->kernel_module, "allocator_declaration_errors", allocator_declaration_errors_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "missing_lifetime_errors", missing_lifetime_errors_m, MRB_ARGS_NONE());
@@ -125,5 +125,5 @@ void lifetime_allocator_gem_test(mrb_state *const mrb)
     mrb_cpp_reflector::reflect_define<allocator_classes>(mrb);
 }
 #else
-void lifetime_allocator_gem_test(mrb_state *) {}
+void lifetime_allocator_gem_init(mrb_state *) {}
 #endif
