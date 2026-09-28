@@ -768,6 +768,7 @@ assert('what a GUI library brings is left out or converted as C++ allows it') do
   assert_false(Odd.method_defined?(:opaque))
   assert_equal({'a' => 1, 'b' => 2}, odd.pairs.to_h.to_a.map { |k, v| [k.to_s, v] }.to_h)
   box = odd.box
+  assert_equal('NoEqualityBox', box.class.to_s)
   assert_equal(2, box.get.n)
   assert_false(box.class.method_defined?(:contains))
 end
@@ -1442,4 +1443,10 @@ assert('a std::optional is its value or nil') do
   assert_nil(shelf.measure(false))
   assert_equal(4, shelf.value_or_minus_one(4))
   assert_equal(-1, shelf.value_or_minus_one(nil))
+end
+
+# A template instance that no declaration names is a build error, so
+# the reflection never makes a class that the user did not ask for.
+assert('a template instance is reflected only when a declaration names it') do
+  assert_true(unrequested_instance_refused?)
 end

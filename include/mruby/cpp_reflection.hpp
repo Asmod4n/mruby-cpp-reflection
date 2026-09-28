@@ -1169,9 +1169,32 @@ RClass *reflect_class(reflect_definition<Names> &definition)
     return mrb_class_ptr(mrb_iv_get(mrb, mrb_obj_value(mrb->object_class), key));
 }
 
+consteval std::vector<std::meta::info> reflect_alias_scopes(std::meta::info type);
+
+consteval bool reflect_requested(const std::meta::info bare)
+{
+    if (!std::meta::is_class_type(bare) || !std::meta::has_template_arguments(bare) || reflect_in_namespace_std(std::meta::template_of(bare))) return true;
+    for (const std::meta::info scope : reflect_alias_scopes(bare))
+        for (const std::meta::info m : std::meta::members_of(scope, std::meta::access_context::current())) {
+            if (std::meta::is_type_alias(m) && std::meta::dealias(m) == bare) return true;
+            if (std::meta::is_type(m) && !std::meta::is_type_alias(m) && std::meta::is_class_type(m) && std::meta::is_complete_type(m) &&
+                std::ranges::any_of(std::meta::bases_of(m, std::meta::access_context::unchecked()), [&](const std::meta::info b) { return std::meta::dealias(std::meta::type_of(b)) == bare; }))
+                return true;
+        }
+    return false;
+}
+
+consteval void reflect_raise_on_unrequested(const std::meta::info bare)
+{
+    if (reflect_requested(bare)) return;
+    const std::string name(std::meta::display_string_of(bare));
+    throw std::define_static_string(name + " is a template instance that nothing requests; declare it in the cxx: heredoc of spec.reflect or in the C++ source of the gem, for example: using Name = " + name + ";");
+}
+
 template <std::meta::info Type>
 RClass *reflect_class(mrb_state *const mrb)
 {
+    reflect_raise_on_unrequested(std::meta::dealias(std::meta::remove_cvref(Type)));
     reflect_definition<reflect_call_names<std::array{std::meta::dealias(std::meta::remove_cvref(Type))}>> definition(mrb);
     RClass *const klass = reflect_class<Type>(definition);
     definition.finish();

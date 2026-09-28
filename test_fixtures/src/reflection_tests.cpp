@@ -443,6 +443,10 @@ struct Box {
     bool contains(const T &x) const { return item == x; }
     const T &get() const { return item; }
 };
+/* Odd::box answers a Box<NoEquality>. The build reflects a template
+ * instance only when a declaration names it, and this alias is that
+ * declaration. */
+using NoEqualityBox = Box<NoEquality>;
 struct KeyValues {
     std::vector<std::string> keys{"a", "b"};
     std::vector<mrb_int> values{1, 2};
@@ -910,8 +914,19 @@ static mrb_value callback_from_other_thread_aborts_q(mrb_state *mrb, mrb_value)
     return mrb_bool_value(aborted);
 }
 
+/* Box<Plain> has no alias and no derived class, so a function that
+ * answers it would stop the build; Box<NoEquality> has the alias above,
+ * and an instance of a template of namespace std converts or is
+ * reflected as before. */
+static mrb_value unrequested_instance_refused_q(mrb_state *, mrb_value)
+{
+    return mrb_bool_value(!mruby::cpp_reflection::reflect_requested(^^Box<Plain>) && mruby::cpp_reflection::reflect_requested(^^Box<NoEquality>) &&
+                          mruby::cpp_reflection::reflect_requested(^^std::vector<Plain>) && mruby::cpp_reflection::reflect_requested(^^Plain));
+}
+
 extern "C" void mrb_mruby_cpp_reflection_test_fixtures_gem_init(mrb_state *mrb)
 {
+    mrb_define_module_function(mrb, mrb->kernel_module, "unrequested_instance_refused?", unrequested_instance_refused_q, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "callback_after_close?", callback_after_close_q, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "callback_from_other_thread_aborts?", callback_from_other_thread_aborts_q, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "undefined_after_other_state", undefined_after_other_state_m, MRB_ARGS_NONE());
