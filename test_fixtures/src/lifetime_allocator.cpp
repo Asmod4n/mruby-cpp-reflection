@@ -10,13 +10,13 @@
 #if defined(__cpp_impl_reflection)
 #include "lifetime_allocator_library.hpp"
 #include "lifetime_dsl.hpp"
-#include <mruby/reflection.hpp>
+#include <mruby/cpp_reflection.hpp>
 #include <mruby/compile.h>
 #include <mruby/hash.h>
 
 /* Only the namespace is listed: its classes are the types its functions
  * take and answer, as spec.reflect generates the list. */
-constexpr auto allocator_classes = mrb_cpp_reflector::reflect_with_signature_types<mrb_cpp_reflector::reflect<^^c_library>()>();
+constexpr auto allocator_classes = mruby::cpp_reflection::reflect_with_signature_types<mruby::cpp_reflection::reflect<^^c_library>()>();
 
 bool aborts_in_child(void (*run)());
 
@@ -32,7 +32,7 @@ static mrb_value callback_in_deallocator_aborts_q(mrb_state *, mrb_value)
 {
     return mrb_bool_value(aborts_in_child([] {
         mrb_state *const other = mrb_open();
-        mrb_cpp_reflector::reflect_define<allocator_classes>(other);
+        mruby::cpp_reflection::reflect_define<allocator_classes>(other);
         mrb_load_string(other, "def watcher\n"
                                "  -> { :called }\n"
                                "end\n"
@@ -53,7 +53,7 @@ static mrb_value watched_handle_freed_at_close_q(mrb_state *, mrb_value)
 {
     const int before = c_library::handles_alive();
     mrb_state *const other = mrb_open();
-    mrb_cpp_reflector::reflect_define<allocator_classes>(other);
+    mruby::cpp_reflection::reflect_define<allocator_classes>(other);
     mrb_load_string(other, "$kept = CLibrary.handle_make(1)\n"
                            "CLibrary.handle_watch($kept, -> { :called })\n");
     const bool raised = other->exc != nullptr;
@@ -80,7 +80,7 @@ constexpr auto right = std::array{allocator(^^c_library::handle_open, {.output_p
 
 static mrb_value allocator_declaration_errors_m(mrb_state *const mrb, mrb_value)
 {
-    using mrb_cpp_reflector::reflect_object_lifetime_error;
+    using mruby::cpp_reflection::reflect_object_lifetime_error;
     const mrb_value errors = mrb_hash_new(mrb);
     const auto set = [&](const char *const key, const std::string_view error) {
         mrb_hash_set(mrb, errors, mrb_str_new_cstr(mrb, key), error.empty() ? mrb_nil_value() : mrb_str_new(mrb, error.data(), static_cast<mrb_int>(error.size())));
@@ -101,7 +101,7 @@ static mrb_value allocator_declaration_errors_m(mrb_state *const mrb, mrb_value)
  * the compile runs; nil is a function that the build takes. */
 static mrb_value missing_lifetime_errors_m(mrb_state *const mrb, mrb_value)
 {
-    using mrb_cpp_reflector::reflect_missing_object_lifetime;
+    using mruby::cpp_reflection::reflect_missing_object_lifetime;
     const mrb_value errors = mrb_hash_new(mrb);
     const auto set = [&](const char *const key, const std::string_view error) {
         mrb_hash_set(mrb, errors, mrb_str_new_cstr(mrb, key), error.empty() ? mrb_nil_value() : mrb_str_new(mrb, error.data(), static_cast<mrb_int>(error.size())));
@@ -122,7 +122,7 @@ void lifetime_allocator_gem_init(mrb_state *const mrb)
     mrb_define_module_function(mrb, mrb->kernel_module, "missing_lifetime_errors", missing_lifetime_errors_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "callback_in_deallocator_aborts?", callback_in_deallocator_aborts_q, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "watched_handle_freed_at_close?", watched_handle_freed_at_close_q, MRB_ARGS_NONE());
-    mrb_cpp_reflector::reflect_define<allocator_classes>(mrb);
+    mruby::cpp_reflection::reflect_define<allocator_classes>(mrb);
 }
 #else
 void lifetime_allocator_gem_init(mrb_state *) {}

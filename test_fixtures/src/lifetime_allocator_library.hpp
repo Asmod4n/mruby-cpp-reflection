@@ -1,6 +1,6 @@
 #pragma once
 #include <functional>
-#include <mruby/cpp_reflection.hpp>
+#include <mruby/cpp_reflection_lifetime.hpp>
 
 /* The declarations of a C library, as its header shows them: the types
  * are incomplete, so only pointers to them cross the interface, and the

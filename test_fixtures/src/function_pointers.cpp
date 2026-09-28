@@ -8,7 +8,7 @@
  */
 #include <mruby.h>
 #if defined(__cpp_impl_reflection)
-#include <mruby/reflection.hpp>
+#include <mruby/cpp_reflection.hpp>
 
 namespace function_pointers {
 inline int twice(const int n) { return n * 2; }
@@ -20,11 +20,11 @@ inline int (*none())(int) { return nullptr; }
 inline int apply(int (*const f)(int), const int n) { return f(n); }
 }
 
-constexpr auto function_pointer_classes = mrb_cpp_reflector::reflect<^^function_pointers>();
+constexpr auto function_pointer_classes = mruby::cpp_reflection::reflect<^^function_pointers>();
 
 void function_pointers_gem_init(mrb_state *const mrb)
 {
-    mrb_cpp_reflector::reflect_define<function_pointer_classes>(mrb);
+    mruby::cpp_reflection::reflect_define<function_pointer_classes>(mrb);
 }
 #else
 void function_pointers_gem_init(mrb_state *) {}

@@ -82,7 +82,7 @@ module MRuby
       private
 
       def write_reflect_varargs_header
-        text = +"#pragma once\n#include <mruby/cpp_reflection.hpp>\n#include <tuple>\n#if defined(__cpp_impl_reflection)\n"
+        text = +"#pragma once\n#include <mruby/cpp_reflection_lifetime.hpp>\n#include <tuple>\n#if defined(__cpp_impl_reflection)\n"
         reflect_varargs_declarations.sort.each do |name, lists|
           qualified = name.start_with?('::') ? name : "::#{name}"
           types = lists.map { |list| "^^std::tuple<#{list.join(', ')}>" }.join(', ')
@@ -130,7 +130,7 @@ end
 # Each call writes build_dir/include/mruby/reflect_object_lifetimes.h again, and
 # only when its text changes. The header specializes
 # mruby::cpp_reflection::object_lifetime for each declared class with the
-# words of <mruby/cpp_reflection.hpp>, as a source of C++ does it by hand. A
+# words of <mruby/cpp_reflection_lifetime.hpp>, as a source of C++ does it by hand. A
 # source includes it after the headers that declare every class it names.
 # Ruby code has no way to declare or change a lifetime at runtime.
 
@@ -309,12 +309,12 @@ module MRuby
       end
 
       def write_reflect_object_lifetime_header
-        text = +"#pragma once\n#include <mruby/cpp_reflection.hpp>\n#if defined(__cpp_impl_reflection)\n"
+        text = +"#pragma once\n#include <mruby/cpp_reflection_lifetime.hpp>\n#if defined(__cpp_impl_reflection)\n"
         reflect_object_lifetime_declarations.sort.each do |name, words|
           qualified = name.start_with?('::') ? name : "::#{name}"
           texts = words.flat_map { |w| reflect_object_lifetime_word_texts(qualified, w) }
           text << "template <>\ninline constexpr auto mruby::cpp_reflection::object_lifetime<^^#{qualified}> = "
-          text << (texts.empty? ? "std::array<mrb_cpp_reflector::reflect_object_lifetime_word, 0>{};\n" : "std::array{\n#{texts.map { |t| "    #{t},\n" }.join}};\n")
+          text << (texts.empty? ? "std::array<mruby::cpp_reflection::reflect_object_lifetime_word, 0>{};\n" : "std::array{\n#{texts.map { |t| "    #{t},\n" }.join}};\n")
         end
         text << "#endif\n"
         header = reflect_object_lifetime_header
@@ -374,14 +374,14 @@ module MRuby
           #if __has_include(<mruby/reflect_object_lifetimes.h>)
           #include <mruby/reflect_object_lifetimes.h>
           #endif
-          #include <mruby/reflection.hpp>
+          #include <mruby/cpp_reflection.hpp>
 
           #if defined(__cpp_impl_reflection)
-          constexpr auto mrb_#{funcname}_reflected = mrb_cpp_reflector::reflect_with_signature_types<mrb_cpp_reflector::reflect<#{listed}>()>();
+          constexpr auto mrb_#{funcname}_reflected = mruby::cpp_reflection::reflect_with_signature_types<mruby::cpp_reflection::reflect<#{listed}>()>();
 
           extern "C" void mrb_#{funcname}_gem_init(mrb_state *mrb)
           {
-              mrb_cpp_reflector::reflect_define<mrb_#{funcname}_reflected>(mrb);
+              mruby::cpp_reflection::reflect_define<mrb_#{funcname}_reflected>(mrb);
           }
           #else
           extern "C" void mrb_#{funcname}_gem_init(mrb_state *) {}
@@ -448,7 +448,7 @@ module MRuby
         text = "#{out}/virtual_overriders.inc"
         object = "#{out}/include_virtual_overriders#{build.exts.object}"
         replaced = source.start_with?("#{self.dir}/") ? objfile(source.relative_path_from(self.dir).pathmap("#{build_dir}/%X")) : objfile(source.pathmap('%X'))
-        headers = %w[reflection.hpp cpp_reflection.hpp reflect_members.hpp].map { |h| "#{reflection.dir}/include/mruby/#{h}" }
+        headers = %w[cpp_reflection.hpp cpp_reflection_lifetime.hpp reflect_members.hpp].map { |h| "#{reflection.dir}/include/mruby/#{h}" }
         file printed => [source, "#{reflection.dir}/src/print_virtual_overriders.cpp", *headers] do |t|
           cxx.run t.name, "#{reflection.dir}/src/print_virtual_overriders.cpp",
                   ["MRB_CPP_REFLECTOR_SOURCE=#{quoted.(source)}", 'MRB_NO_PRESYM'], [], [msvc ? '/GL-' : '-fno-lto']

@@ -44,7 +44,7 @@ end
 
 # The header is all the C++ side reads: one specialization of
 # mruby::cpp_reflection::object_lifetime per class, named as C++ names
-# it, with one word of <mruby/cpp_reflection.hpp> per entry, as a source
+# it, with one word of <mruby/cpp_reflection_lifetime.hpp> per entry, as a source
 # of C++ writes it by hand.
 assert('ReflectObjectLifetimeTest: the header specializes the words of the class') do
   @dir = Dir.mktmpdir
@@ -53,7 +53,7 @@ assert('ReflectObjectLifetimeTest: the header specializes the words of the class
     declare('ns::Tree') { takes_ownership :set_parent, by: 0 }
     assert_true(header.include?("template <>\ninline constexpr auto mruby::cpp_reflection::object_lifetime<^^::ns::Tree> = std::array{\n"))
     assert_true(header.include?("    mruby::cpp_reflection::takes_ownership(^^::ns::Tree::set_parent, {.by = 0}),\n};\n"))
-    assert_true(header.include?('#include <mruby/cpp_reflection.hpp>'))
+    assert_true(header.include?('#include <mruby/cpp_reflection_lifetime.hpp>'))
     assert_equal(["#{@dir}/include"], @spec.cxx.include_paths)
   ensure
     FileUtils.remove_entry(@dir)

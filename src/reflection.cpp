@@ -6,7 +6,7 @@
 #include <mruby/class.h>
 #include <mruby/string.h>
 #include <mruby/presym.h>
-#include <mruby/reflection.hpp>
+#include <mruby/cpp_reflection.hpp>
 #if defined(__cpp_impl_reflection) && defined(__GLIBC__)
 #include <pthread.h>
 #endif
@@ -14,7 +14,7 @@
 const struct mrb_data_type mrb_void_pointer_type = {"VoidPointer", nullptr};
 const struct mrb_data_type mrb_const_void_pointer_type = {"ConstVoidPointer", nullptr};
 
-namespace mrb_cpp_reflector {
+namespace mruby::cpp_reflection {
 void reflect_define_void_pointer(mrb_state *const mrb, const mrb_sym name)
 {
     RClass *const klass = mrb_define_class_id(mrb, name, mrb->object_class);
@@ -24,7 +24,7 @@ void reflect_define_void_pointer(mrb_state *const mrb, const mrb_sym name)
 }
 
 #if defined(__cpp_impl_reflection)
-namespace mrb_cpp_reflector {
+namespace mruby::cpp_reflection {
 [[noreturn]] void reflect_undefined()
 {
     throw reflect_undefined_call();
@@ -243,44 +243,44 @@ mrb_value reflect_after_declared_call(mrb_state *const mrb, const mrb_value self
 
 extern "C" void mrb_mruby_cpp_reflection_gem_init(mrb_state *const mrb)
 {
-    mrb_cpp_reflector::reflect_define_void_pointer(mrb, MRB_SYM(VoidPointer));
-    mrb_cpp_reflector::reflect_define_void_pointer(mrb, MRB_SYM(ConstVoidPointer));
+    mruby::cpp_reflection::reflect_define_void_pointer(mrb, MRB_SYM(VoidPointer));
+    mruby::cpp_reflection::reflect_define_void_pointer(mrb, MRB_SYM(ConstVoidPointer));
     mrb_define_class_id(mrb, MRB_SYM(CppCoroutineError), E_STANDARD_ERROR);
-    mrb_cpp_reflector::reflect_define_void_pointer(mrb, MRB_SYM(FunctionPointer));
-    mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), mrb_cpp_reflector::reflect_identities_key(mrb),
-               mrb_cptr_value(mrb, new mrb_cpp_reflector::reflect_identities()));
-    mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), mrb_cpp_reflector::reflect_callbacks_key(mrb),
-               mrb_cptr_value(mrb, new mrb_cpp_reflector::reflect_callbacks{std::this_thread::get_id()}));
-    mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), mrb_cpp_reflector::reflect_lifetimes_key(mrb),
-               mrb_cptr_value(mrb, new mrb_cpp_reflector::reflect_lifetimes()));
-    mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), mrb_cpp_reflector::reflect_symbols_key(mrb),
-               mrb_cptr_value(mrb, new mrb_cpp_reflector::reflect_symbols{mrb_cpp_reflector::reflect_intern_names(mrb, mrb_cpp_reflector::reflect_gem_names), {}, {}}));
+    mruby::cpp_reflection::reflect_define_void_pointer(mrb, MRB_SYM(FunctionPointer));
+    mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), mruby::cpp_reflection::reflect_identities_key(mrb),
+               mrb_cptr_value(mrb, new mruby::cpp_reflection::reflect_identities()));
+    mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), mruby::cpp_reflection::reflect_callbacks_key(mrb),
+               mrb_cptr_value(mrb, new mruby::cpp_reflection::reflect_callbacks{std::this_thread::get_id()}));
+    mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), mruby::cpp_reflection::reflect_lifetimes_key(mrb),
+               mrb_cptr_value(mrb, new mruby::cpp_reflection::reflect_lifetimes()));
+    mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), mruby::cpp_reflection::reflect_symbols_key(mrb),
+               mrb_cptr_value(mrb, new mruby::cpp_reflection::reflect_symbols{mruby::cpp_reflection::reflect_intern_names(mrb, mruby::cpp_reflection::reflect_gem_names), {}, {}}));
 }
 
 extern "C" void mrb_mruby_cpp_reflection_gem_final(mrb_state *const mrb)
 {
-    mrb_cpp_reflector::reflect_callbacks &callbacks = mrb_cpp_reflector::reflect_callbacks_of(mrb);
+    mruby::cpp_reflection::reflect_callbacks &callbacks = mruby::cpp_reflection::reflect_callbacks_of(mrb);
     callbacks.closed = true;
-    for (mrb_cpp_reflector::reflect_gc_root *const root : callbacks.roots) {
+    for (mruby::cpp_reflection::reflect_gc_root *const root : callbacks.roots) {
         if (root->released) delete root;
         else root->callbacks = nullptr;
     }
     callbacks.roots.clear();
-    mrb_objspace_each_objects(mrb, mrb_cpp_reflector::reflect_free_object, nullptr);
-    delete &mrb_cpp_reflector::reflect_identity_map(mrb);
-    mrb_iv_remove(mrb, mrb_obj_value(mrb->object_class), mrb_cpp_reflector::reflect_identities_key(mrb));
+    mrb_objspace_each_objects(mrb, mruby::cpp_reflection::reflect_free_object, nullptr);
+    delete &mruby::cpp_reflection::reflect_identity_map(mrb);
+    mrb_iv_remove(mrb, mrb_obj_value(mrb->object_class), mruby::cpp_reflection::reflect_identities_key(mrb));
     delete &callbacks;
-    mrb_iv_remove(mrb, mrb_obj_value(mrb->object_class), mrb_cpp_reflector::reflect_callbacks_key(mrb));
-    delete &mrb_cpp_reflector::reflect_lifetimes_of(mrb);
-    mrb_iv_remove(mrb, mrb_obj_value(mrb->object_class), mrb_cpp_reflector::reflect_lifetimes_key(mrb));
-    delete &mrb_cpp_reflector::reflect_symbols_of(mrb);
-    mrb_iv_remove(mrb, mrb_obj_value(mrb->object_class), mrb_cpp_reflector::reflect_symbols_key(mrb));
+    mrb_iv_remove(mrb, mrb_obj_value(mrb->object_class), mruby::cpp_reflection::reflect_callbacks_key(mrb));
+    delete &mruby::cpp_reflection::reflect_lifetimes_of(mrb);
+    mrb_iv_remove(mrb, mrb_obj_value(mrb->object_class), mruby::cpp_reflection::reflect_lifetimes_key(mrb));
+    delete &mruby::cpp_reflection::reflect_symbols_of(mrb);
+    mrb_iv_remove(mrb, mrb_obj_value(mrb->object_class), mruby::cpp_reflection::reflect_symbols_key(mrb));
 }
 #else
 extern "C" void mrb_mruby_cpp_reflection_gem_init(mrb_state *const mrb)
 {
-    mrb_cpp_reflector::reflect_define_void_pointer(mrb, MRB_SYM(VoidPointer));
-    mrb_cpp_reflector::reflect_define_void_pointer(mrb, MRB_SYM(ConstVoidPointer));
+    mruby::cpp_reflection::reflect_define_void_pointer(mrb, MRB_SYM(VoidPointer));
+    mruby::cpp_reflection::reflect_define_void_pointer(mrb, MRB_SYM(ConstVoidPointer));
 }
 
 extern "C" void mrb_mruby_cpp_reflection_gem_final(mrb_state *) {}

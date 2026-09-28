@@ -23,7 +23,7 @@ typedef struct mrb_state mrb_state;
 
 struct RClass;
 
-namespace mrb_cpp_reflector
+namespace mruby::cpp_reflection
 {
 
 consteval std::size_t reflect_skip(const std::meta::info function)

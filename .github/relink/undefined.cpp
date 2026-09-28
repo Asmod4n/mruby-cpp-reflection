@@ -1,4 +1,4 @@
 #include <cstdlib>
-namespace mrb_cpp_reflector {
+namespace mruby::cpp_reflection {
 [[noreturn]] void reflect_undefined() { std::exit(42); }
 }

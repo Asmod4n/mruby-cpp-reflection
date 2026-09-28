@@ -8,7 +8,7 @@
  */
 #include <mruby.h>
 #if defined(__cpp_impl_reflection)
-#include <mruby/reflection.hpp>
+#include <mruby/cpp_reflection.hpp>
 
 namespace attributes {
 struct Box {
@@ -18,16 +18,16 @@ inline int read(const Box *const box) { return box == nullptr ? -1 : box->n; }
 inline int read_or_none(const Box *const box) { return box == nullptr ? -1 : box->n; }
 }
 
-namespace mrb_cpp_reflector {
+namespace mruby::cpp_reflection {
 template <>
 inline constexpr reflect_attributes reflect_attributes_of<^^::attributes::read> = {.nonnull = std::define_static_array(std::array<int, 1>{1})};
 }
 
-constexpr auto attribute_classes = mrb_cpp_reflector::reflect<^^attributes, ^^attributes::Box>();
+constexpr auto attribute_classes = mruby::cpp_reflection::reflect<^^attributes, ^^attributes::Box>();
 
 void attributes_gem_init(mrb_state *const mrb)
 {
-    mrb_cpp_reflector::reflect_define<attribute_classes>(mrb);
+    mruby::cpp_reflection::reflect_define<attribute_classes>(mrb);
 }
 #else
 void attributes_gem_init(mrb_state *) {}

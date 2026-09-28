@@ -11,7 +11,7 @@
 #if defined(__cpp_impl_reflection)
 #include "lifetime_dsl.hpp"
 #include "lifetime_allocator_library.hpp"
-#include <mruby/reflection.hpp>
+#include <mruby/cpp_reflection.hpp>
 #include <mruby/array.h>
 #include <mruby/compile.h>
 #include <mruby/hash.h>
@@ -65,9 +65,9 @@ public:
     }
 };
 
-constexpr auto lifetime_classes = mrb_cpp_reflector::reflect<^^TreeObject, ^^Resource, ^^Layout, ^^Window, ^^Device, ^^Deep, ^^AdoptedLeaf, ^^Adopter, ^^Worker, ^^Blank, ^^Empty,
+constexpr auto lifetime_classes = mruby::cpp_reflection::reflect<^^TreeObject, ^^Resource, ^^Layout, ^^Window, ^^Device, ^^Deep, ^^AdoptedLeaf, ^^Adopter, ^^Worker, ^^Blank, ^^Empty,
                                                              ^^Watcher>();
-constexpr auto undeclared_classes = mrb_cpp_reflector::reflect<^^UndeclaredTree>();
+constexpr auto undeclared_classes = mruby::cpp_reflection::reflect<^^UndeclaredTree>();
 
 /* A test that expects a memory fault runs its part in a child process.
  * It answers whether the child ended by a signal or with a status other
@@ -92,7 +92,7 @@ static mrb_value undeclared_tree_fails_q(mrb_state *, mrb_value)
 {
     return mrb_bool_value(fails_in_child([] {
         mrb_state *const other = mrb_open();
-        mrb_cpp_reflector::reflect_define<undeclared_classes>(other);
+        mruby::cpp_reflection::reflect_define<undeclared_classes>(other);
         mrb_load_string(other, "def link\n"
                                "  parent = UndeclaredTree.new\n"
                                "  child = UndeclaredTree.new\n"
@@ -113,7 +113,7 @@ static mrb_value tree_freed_at_close_q(mrb_state *, mrb_value)
 {
     const mrb_int before = tree_objects_alive();
     mrb_state *const other = mrb_open();
-    mrb_cpp_reflector::reflect_define<lifetime_classes>(other);
+    mruby::cpp_reflection::reflect_define<lifetime_classes>(other);
     mrb_load_string(other, "$kept = []\n"
                            "30.times do\n"
                            "  parent = TreeObject.new\n"
@@ -145,7 +145,7 @@ static mrb_value retained_count_m(mrb_state *mrb, mrb_value)
  * calls a function of mruby. */
 static mrb_value callback_roots_m(mrb_state *mrb, mrb_value)
 {
-    return mrb_int_value(mrb, static_cast<mrb_int>(mrb_cpp_reflector::reflect_callbacks_of(mrb).roots.size()));
+    return mrb_int_value(mrb, static_cast<mrb_int>(mruby::cpp_reflection::reflect_callbacks_of(mrb).roots.size()));
 }
 
 namespace declared_wrong {
@@ -167,7 +167,7 @@ constexpr auto right = std::array{takes_ownership(^^TreeObject::set_parent, {.by
 
 static mrb_value object_lifetime_declaration_errors_m(mrb_state *const mrb, mrb_value)
 {
-    using mrb_cpp_reflector::reflect_object_lifetime_error;
+    using mruby::cpp_reflection::reflect_object_lifetime_error;
     const mrb_value errors = mrb_hash_new(mrb);
     const auto set = [&](const char *const key, const std::string_view error) {
         mrb_hash_set(mrb, errors, mrb_str_new_cstr(mrb, key), error.empty() ? mrb_nil_value() : mrb_str_new(mrb, error.data(), static_cast<mrb_int>(error.size())));
@@ -189,7 +189,7 @@ void lifetime_dsl_gem_init(mrb_state *const mrb)
     mrb_define_module_function(mrb, mrb->kernel_module, "undeclared_tree_fails?", undeclared_tree_fails_q, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "tree_freed_at_close_with_takes_ownership?", tree_freed_at_close_q, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "object_lifetime_declaration_errors", object_lifetime_declaration_errors_m, MRB_ARGS_NONE());
-    mrb_cpp_reflector::reflect_define<lifetime_classes>(mrb);
+    mruby::cpp_reflection::reflect_define<lifetime_classes>(mrb);
 }
 #else
 void lifetime_dsl_gem_init(mrb_state *) {}

@@ -44,8 +44,8 @@ assert('ReflectTest: the source includes the headers before the gem') do
     text = File.read(@spec.reflect_source)
     assert_operator(text.index('#include <sqlite3.h>'), :<, text.index('#include <mruby/reflect_varargs.h>'))
     assert_operator(text.index('#include <sqlite3.h>'), :<, text.index('#include <mruby/reflect_object_lifetimes.h>'))
-    assert_operator(text.index('#include <mruby/reflect_varargs.h>'), :<, text.index('#include <mruby/reflection.hpp>'))
-    assert_operator(text.index('#include <mruby/reflect_object_lifetimes.h>'), :<, text.index('#include <mruby/reflection.hpp>'))
+    assert_operator(text.index('#include <mruby/reflect_varargs.h>'), :<, text.index('#include <mruby/cpp_reflection.hpp>'))
+    assert_operator(text.index('#include <mruby/reflect_object_lifetimes.h>'), :<, text.index('#include <mruby/cpp_reflection.hpp>'))
   ensure
     FileUtils.remove_entry(@dir)
   end

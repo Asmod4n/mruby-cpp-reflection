@@ -6,7 +6,7 @@ defines the class, its methods, its attributes and its overloads.
 ## Use
 
 ```cpp
-#include <mruby/reflection.hpp>
+#include <mruby/cpp_reflection.hpp>
 
 struct Counter {
     mrb_int total = 0;
@@ -18,11 +18,11 @@ private:
     std::vector<mrb_int> seen;
 };
 
-constexpr auto classes = mrb_cpp_reflector::reflect<^^Counter>();
+constexpr auto classes = mruby::cpp_reflection::reflect<^^Counter>();
 
 extern "C" void mrb_my_gem_gem_init(mrb_state *mrb)
 {
-    mrb_cpp_reflector::reflect_define<classes>(mrb);
+    mruby::cpp_reflection::reflect_define<classes>(mrb);
 }
 ```
 
@@ -81,7 +81,7 @@ end
 
 ## Lifetimes that the types do not state
 
-`<mruby/cpp_reflection.hpp>` declares what the C++ types of a class do
+`<mruby/cpp_reflection_lifetime.hpp>` declares what the C++ types of a class do
 not say, after the declaration of the class:
 
 ```cpp

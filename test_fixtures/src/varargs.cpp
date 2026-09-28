@@ -10,13 +10,13 @@
 #include <mruby.h>
 #if defined(__cpp_impl_reflection)
 #include "varargs.hpp"
-#include <mruby/reflection.hpp>
+#include <mruby/cpp_reflection.hpp>
 
-constexpr auto varargs_classes = mrb_cpp_reflector::reflect<^^varargs>();
+constexpr auto varargs_classes = mruby::cpp_reflection::reflect<^^varargs>();
 
 void varargs_gem_init(mrb_state *const mrb)
 {
-    mrb_cpp_reflector::reflect_define<varargs_classes>(mrb);
+    mruby::cpp_reflection::reflect_define<varargs_classes>(mrb);
 }
 #else
 void varargs_gem_init(mrb_state *) {}

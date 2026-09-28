@@ -5,7 +5,7 @@
 # earlier lacks, a marker only ever named in decltype. Before the link,
 # nm -P lists what the objects need and what the objects and libraries of
 # the link define. Each C++ function that nothing defines gets a
-# definition that calls mrb_cpp_reflector::reflect_undefined, which raises
+# definition that calls mruby::cpp_reflection::reflect_undefined, which raises
 # NotImplementedError when Ruby calls it.
 require 'open3'
 require 'tmpdir'
@@ -54,7 +54,7 @@ $stderr.puts "relink: #{missing.size} undefined"
 Dir.mktmpdir do |dir|
   source = "#{dir}/reflect_missing.cpp"
   object = "#{dir}/reflect_missing.o"
-  File.write(source, "namespace mrb_cpp_reflector {\n[[noreturn]] void reflect_undefined();\nextern \"C\" {\n" +
+  File.write(source, "namespace mruby::cpp_reflection {\n[[noreturn]] void reflect_undefined();\nextern \"C\" {\n" +
                      missing.each_with_index.map { |name, i| "[[noreturn]] void reflect_missing_#{i}() __asm__(\"#{name}\");\nvoid reflect_missing_#{i}() { reflect_undefined(); }\n" }.join +
                      "}\n}\n")
   system(%(#{driver} -c "#{source}" -o "#{object}")) or abort "relink: #{source} did not compile"

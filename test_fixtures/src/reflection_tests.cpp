@@ -17,7 +17,7 @@
 #include <generator>
 #include <mruby.h>
 #if defined(__cpp_impl_reflection)
-#include <mruby/reflection.hpp>
+#include <mruby/cpp_reflection.hpp>
 #include <mruby/compile.h>
 #include <compare>
 #include <functional>
@@ -756,28 +756,28 @@ struct TakesFragile {
 struct FragileHolder {
     Fragile item;
 };
-constexpr auto classes = mrb_cpp_reflector::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Leaf, ^^Forest, ^^Hand, ^^Sharer, ^^SelfSharer, ^^WatchedHolder, ^^Lender, ^^Shelf, ^^PlainSharer, ^^Fragile, ^^TakesFragile, ^^FragileHolder, ^^Scored, ^^Measure, ^^Link, ^^Groups, ^^free_functions, ^^Odd, ^^Converts, ^^Outer, ^^Diamond, ^^TakesRvalues, ^^Flags, ^^Declared, ^^Unbuilt, ^^Held<long>, ^^Color, ^^Flag, ^^Palette, ^^Mark, ^^Choices, ^^Grid, ^^Counting, ^^Keeper, ^^ConvertsExplicitly, ^^std::pair<const std::string, int>, ^^std::pair<std::string, int>>();
-constexpr auto under = mrb_cpp_reflector::reflect<^^Plain>();
-constexpr auto nested = mrb_cpp_reflector::reflect<^^Holder>();
-constexpr auto named = mrb_cpp_reflector::reflect<^^fruit::Basket::count<fruit::Apple>>();
-constexpr auto operators = mrb_cpp_reflector::reflect<^^ops, ^^ops::Vec, ^^ops::Log>();
-constexpr auto variables = mrb_cpp_reflector::reflect<^^globals, ^^globals::Registry, ^^only_one::picked>();
-constexpr auto overridable = mrb_cpp_reflector::reflect<^^shapes::Shape, ^^shapes::Square>();
-constexpr auto instantiated = mrb_cpp_reflector::reflect<^^fruit, ^^fruit::Apple, ^^fruit::Pear, ^^fruit::Kind, ^^fruit::Scale>();
+constexpr auto classes = mruby::cpp_reflection::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Leaf, ^^Forest, ^^Hand, ^^Sharer, ^^SelfSharer, ^^WatchedHolder, ^^Lender, ^^Shelf, ^^PlainSharer, ^^Fragile, ^^TakesFragile, ^^FragileHolder, ^^Scored, ^^Measure, ^^Link, ^^Groups, ^^free_functions, ^^Odd, ^^Converts, ^^Outer, ^^Diamond, ^^TakesRvalues, ^^Flags, ^^Declared, ^^Unbuilt, ^^Held<long>, ^^Color, ^^Flag, ^^Palette, ^^Mark, ^^Choices, ^^Grid, ^^Counting, ^^Keeper, ^^ConvertsExplicitly, ^^std::pair<const std::string, int>, ^^std::pair<std::string, int>>();
+constexpr auto under = mruby::cpp_reflection::reflect<^^Plain>();
+constexpr auto nested = mruby::cpp_reflection::reflect<^^Holder>();
+constexpr auto named = mruby::cpp_reflection::reflect<^^fruit::Basket::count<fruit::Apple>>();
+constexpr auto operators = mruby::cpp_reflection::reflect<^^ops, ^^ops::Vec, ^^ops::Log>();
+constexpr auto variables = mruby::cpp_reflection::reflect<^^globals, ^^globals::Registry, ^^only_one::picked>();
+constexpr auto overridable = mruby::cpp_reflection::reflect<^^shapes::Shape, ^^shapes::Square>();
+constexpr auto instantiated = mruby::cpp_reflection::reflect<^^fruit, ^^fruit::Apple, ^^fruit::Pear, ^^fruit::Kind, ^^fruit::Scale>();
 
-static_assert(std::string_view(mrb_cpp_reflector::reflect_get_args_format<std::meta::members_of(^^Reflected, std::meta::access_context::current())[2]>().data()) == "si");
+static_assert(std::string_view(mruby::cpp_reflection::reflect_get_args_format<std::meta::members_of(^^Reflected, std::meta::access_context::current())[2]>().data()) == "si");
 
 static mrb_value symbols_ok_q(mrb_state *mrb, mrb_value)
 {
-    constexpr auto &names = mrb_cpp_reflector::reflect_call_names<classes>;
-    const auto &bridge = mrb_cpp_reflector::reflect_intern_bridge<names>(mrb);
-    const auto &gem = mrb_cpp_reflector::reflect_symbols_of(mrb).gem;
+    constexpr auto &names = mruby::cpp_reflection::reflect_call_names<classes>;
+    const auto &bridge = mruby::cpp_reflection::reflect_intern_bridge<names>(mrb);
+    const auto &gem = mruby::cpp_reflection::reflect_symbols_of(mrb).gem;
     const auto interned = [mrb](const std::string_view name) { return mrb_intern(mrb, name.data(), name.size()); };
     const bool listed = std::ranges::contains(names, std::string_view("same")) && std::ranges::contains(names, std::string_view("Reflected")) &&
-                        std::ranges::contains(mrb_cpp_reflector::reflect_gem_names, std::string_view("each"));
+                        std::ranges::contains(mruby::cpp_reflection::reflect_gem_names, std::string_view("each"));
     return mrb_bool_value(listed && std::ranges::equal(bridge, names | std::views::transform(interned)) &&
-                          std::ranges::equal(gem, mrb_cpp_reflector::reflect_gem_names | std::views::transform(interned)) &&
-                          mrb_cpp_reflector::reflect_symbol<mrb_cpp_reflector::kEach>(mrb) == MRB_SYM(each));
+                          std::ranges::equal(gem, mruby::cpp_reflection::reflect_gem_names | std::views::transform(interned)) &&
+                          mruby::cpp_reflection::reflect_symbol<mruby::cpp_reflection::kEach>(mrb) == MRB_SYM(each));
 }
 
 static mrb_value constructed_m(mrb_state *mrb, mrb_value)
@@ -794,7 +794,7 @@ static mrb_value constructed_m(mrb_state *mrb, mrb_value)
 static mrb_value second_state_m(mrb_state *mrb, mrb_value)
 {
     mrb_state *const other = mrb_open();
-    mrb_cpp_reflector::reflect_define<classes>(other);
+    mruby::cpp_reflection::reflect_define<classes>(other);
     const mrb_value answer = mrb_load_string(other, "[D.new.f, D.new.b, S.new(7).v, D.ancestors.size, Static.twice(3)]");
     const mrb_value inspected = other->exc ? mrb_obj_value(other->exc) : answer;
     const mrb_value text = mrb_inspect(other, inspected);
@@ -811,7 +811,7 @@ static mrb_value second_state_m(mrb_state *mrb, mrb_value)
 static void *cancel_in_state(void *)
 {
     mrb_state *const other = mrb_open();
-    mrb_cpp_reflector::reflect_define<classes>(other);
+    mruby::cpp_reflection::reflect_define<classes>(other);
     mrb_load_string(other, "Thrower.new.cancel");
     return nullptr;
 }
@@ -833,7 +833,7 @@ static mrb_value tree_freed_at_close_q(mrb_state *mrb, mrb_value)
     const mrb_int nodes = nodes_alive();
     const mrb_int leaves = leaves_alive();
     mrb_state *const other = mrb_open();
-    mrb_cpp_reflector::reflect_define<classes>(other);
+    mruby::cpp_reflection::reflect_define<classes>(other);
     mrb_load_string(other, "$kept = []\n"
                            "30.times do\n"
                            "  r = Node.new; r.grow; r.grow; r.first.grow\n"
@@ -868,7 +868,7 @@ static mrb_value live_objects_m(mrb_state *mrb, mrb_value)
 static mrb_value undefined_after_other_state_m(mrb_state *mrb, mrb_value)
 {
     mrb_state *const other = mrb_open();
-    mrb_cpp_reflector::reflect_define<classes>(other);
+    mruby::cpp_reflection::reflect_define<classes>(other);
     mrb_load_string(other, "Callback.new.apply(->(n) { n }, 1)");
     mrb_close(other);
     return mrb_load_string(mrb, "begin; Declared.new.undefined; rescue NotImplementedError; :raised_here; end");
@@ -880,7 +880,7 @@ static mrb_value undefined_after_other_state_m(mrb_state *mrb, mrb_value)
 static mrb_value callback_after_close_q(mrb_state *mrb, mrb_value)
 {
     mrb_state *const other = mrb_open();
-    mrb_cpp_reflector::reflect_define<classes>(other);
+    mruby::cpp_reflection::reflect_define<classes>(other);
     mrb_load_string(other, "Callback.keep_outside(->(n) { n * 2 })");
     const bool raised = other->exc != nullptr;
     const bool called = kept_outside()(3) == 6;
@@ -921,14 +921,14 @@ extern "C" void mrb_mruby_cpp_reflection_test_fixtures_gem_init(mrb_state *mrb)
     mrb_define_module_function(mrb, mrb->kernel_module, "second_state", second_state_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "constructed", constructed_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "reflect_symbols_ok?", symbols_ok_q, MRB_ARGS_NONE());
-    mrb_cpp_reflector::reflect_define<classes>(mrb);
-    mrb_cpp_reflector::reflect_define<under>(mrb, mrb_define_module(mrb, "Under"));
-    mrb_cpp_reflector::reflect_define<nested, {.nested_types = true}>(mrb);
-    mrb_cpp_reflector::reflect_define<named>(mrb);
-    mrb_cpp_reflector::reflect_define<operators>(mrb);
-    mrb_cpp_reflector::reflect_define<variables>(mrb);
-    mrb_cpp_reflector::reflect_define<overridable, {.virtual_overriders = true}>(mrb);
-    mrb_cpp_reflector::reflect_define<instantiated, {.templates = true}>(mrb);
+    mruby::cpp_reflection::reflect_define<classes>(mrb);
+    mruby::cpp_reflection::reflect_define<under>(mrb, mrb_define_module(mrb, "Under"));
+    mruby::cpp_reflection::reflect_define<nested, {.nested_types = true}>(mrb);
+    mruby::cpp_reflection::reflect_define<named>(mrb);
+    mruby::cpp_reflection::reflect_define<operators>(mrb);
+    mruby::cpp_reflection::reflect_define<variables>(mrb);
+    mruby::cpp_reflection::reflect_define<overridable, {.virtual_overriders = true}>(mrb);
+    mruby::cpp_reflection::reflect_define<instantiated, {.templates = true}>(mrb);
     lifetime_dsl_gem_init(mrb);
     lifetime_allocator_gem_init(mrb);
     function_pointers_gem_init(mrb);

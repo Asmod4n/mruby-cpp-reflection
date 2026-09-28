@@ -3,7 +3,7 @@
  * Functions whose last parameter is ..., and the lists of trailing types
  * that the tests declare for two of them. undeclared has no list.
  */
-#include <mruby/cpp_reflection.hpp>
+#include <mruby/cpp_reflection_lifetime.hpp>
 #include <cstdarg>
 #include <cstring>
 

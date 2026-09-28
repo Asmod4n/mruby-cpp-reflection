@@ -6,7 +6,7 @@
  * the same declaration. lifetime_dsl.rb drives them.
  */
 #include <mruby.h>
-#include <mruby/cpp_reflection.hpp>
+#include <mruby/cpp_reflection_lifetime.hpp>
 #include <cerrno>
 #include <functional>
 #include <utility>
