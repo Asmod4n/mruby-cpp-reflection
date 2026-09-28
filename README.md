@@ -166,10 +166,10 @@ that state. A class that is defined later, when a value of its type
 reaches Ruby, has a list and a bridge of its own. The names that no class
 owns have one list, which the gem interns in its `gem_init`.
 
-The build finds each C++ source that contains `reflect_define<` and
-`virtual_overriders`, in `src/` and `test/` of every gem of the build and
-in the source that `spec.reflect` writes. It compiles such a source once
-more, and the object file carries the virtual overriders in a section.
+The build compiles each C++ source in `src/` and `test/` of every gem
+that depends on this gem, and the source that `spec.reflect` writes,
+once more. The object file of that compile carries the virtual
+overriders in a section, and a source without them carries none.
 Nothing of it is in the tree.
 
 ## Tests

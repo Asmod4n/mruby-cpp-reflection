@@ -408,18 +408,17 @@ module MRuby
   end
 end
 
-# The generator of a source that calls reflect_define with the option
-# virtual_overriders. The build finds such a source by the texts
-# reflect_define< and virtual_overriders in it, among the C++ sources of
-# src/, of test/ in a build with tests, and the source that spec.reflect
-# writes, in every gem of a build that loads this gem.
+# The generator of the virtual overriders. The build compiles each C++
+# source of src/, of test/ in a build with tests, and the source that
+# spec.reflect writes, of every gem that depends on this gem, twice.
 #
 # A first compile of the source, with MRB_CPP_REFLECTOR_GENERATE, writes
 # the overriders of the classes it lists with reflect_options
 # virtual_overriders into the section
-# .mrb_cpp_reflector_virtual_overriders of its object file. objcopy copies
-# the section out. The text of the overriders runs the compile from its
-# own action, so the compile is no prerequisite of a product.
+# .mrb_cpp_reflector_virtual_overriders of its object file. A source
+# without such a class writes no section. objcopy copies the section
+# out. The text of the overriders runs the compile from its own action,
+# so the compile is no prerequisite of a product.
 # include_virtual_overriders.cpp compiles the source with its overriders,
 # in place of the source's own object, in the object list that
 # lib/mruby/gem.rb already gave to libmruby. Nothing of it enters the
@@ -428,26 +427,20 @@ end
 module MRuby
   module Gem
     class Specification
-      def reflect_define_sources
-        sources = Dir.glob("#{dir}/src/*.{cpp,cxx,cc}")
-        sources += Dir.glob("#{dir}/test/*.{cpp,cxx,cc}") if build.test_enabled?
-        sources << reflect_source if File.exist?(reflect_source)
-        sources.select { |source| File.read(source).then { |text| text.include?('reflect_define<') && text.include?('virtual_overriders') } }
-      end
-
       def reflect_generate
         return unless build.cxx.flags.flatten.any? { |f| f.to_s == '-freflection' }
         reflection = build.gems.detect { |g| g.name == 'mruby-cpp-reflection' }
-        return unless reflection
-        sources = reflect_define_sources
-        return if sources.empty?
+        return unless reflection && dependencies.any? { |d| d[:gem] == reflection.name }
+        sources = Dir.glob("#{dir}/src/*.{cpp,cxx,cc}")
+        sources += Dir.glob("#{dir}/test/*.{cpp,cxx,cc}") if build.test_enabled?
+        sources << reflect_source if File.exist?(reflect_source)
         sources.each { |source| reflect_virtual_overriders(reflection, source) }
       end
 
       private
 
       def reflect_virtual_overriders(reflection, source)
-        out = "#{build_dir}/reflect_generate/#{File.basename(source, '.*')}"
+        out = "#{build_dir}/reflect_generate/#{File.basename(File.dirname(source))}/#{File.basename(source, '.*')}"
         msvc = build.toolchains.include?('visualcpp')
         quoted = ->(path) { msvc ? %(\\"#{path}\\") : %('"#{path}"') }
         printed = "#{out}/print_virtual_overriders#{build.exts.object}"
