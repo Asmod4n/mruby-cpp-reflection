@@ -99,8 +99,15 @@ consteval std::meta::info reflect_bare(const std::meta::info type)
 
 consteval bool reflect_is_coroutine(std::meta::info type);
 
+consteval bool reflect_is_optional(const std::meta::info type)
+{
+    const std::meta::info t = reflect_bare(type);
+    return std::meta::is_class_type(t) && std::meta::has_template_arguments(t) && std::meta::template_of(t) == ^^std::optional;
+}
+
 consteval bool reflect_is_view(const std::meta::info bare)
 {
+    if (reflect_is_optional(bare)) return false;
     if (std::meta::has_template_arguments(bare) && (std::meta::template_of(bare) == ^^std::span || std::meta::template_of(bare) == ^^std::basic_string_view)) return true;
     if (!std::meta::is_class_type(bare) || !std::meta::is_complete_type(bare) || reflect_is_coroutine(bare)) return false;
     return std::meta::extract<bool>(std::meta::substitute(^^std::ranges::view, {bare}));
@@ -109,7 +116,7 @@ consteval bool reflect_is_view(const std::meta::info bare)
 consteval bool reflect_is_object(const std::meta::info type)
 {
     const std::meta::info bare = reflect_bare(type);
-    if (bare == std::meta::dealias(^^mrb_value) || bare == std::meta::dealias(^^std::string_view) || reflect_is_view(bare)) return false;
+    if (bare == std::meta::dealias(^^mrb_value) || bare == std::meta::dealias(^^std::string_view) || reflect_is_view(bare) || reflect_is_optional(bare)) return false;
     return std::meta::is_class_type(bare) || std::meta::is_enum_type(bare);
 }
 
@@ -238,6 +245,10 @@ consteval bool reflect_is_variant(const std::meta::info type)
 consteval bool reflect_parameter_supported(const std::meta::info type)
 {
     if (reflect_is_opaque_pointer(type) || reflect_is_output_parameter(type) || reflect_is_function_pointer(type)) return true;
+    if (reflect_is_optional(type)) {
+        const std::meta::info held = std::meta::dealias(std::meta::template_arguments_of(reflect_bare(type))[0]);
+        return !reflect_mutates(type) && (held == ^^bool || std::meta::is_arithmetic_type(held) || held == std::meta::dealias(^^std::string));
+    }
     if (reflect_is_variant(type)) {
         if (reflect_mutates(type)) return false;
         for (const std::meta::info a : std::meta::template_arguments_of(reflect_bare(type)))
@@ -278,6 +289,7 @@ consteval bool reflect_result_supported(const std::meta::info type)
             if (!reflect_result_supported(a)) return false;
         return true;
     }
+    if (reflect_is_optional(bare)) return reflect_result_supported(std::meta::template_arguments_of(bare)[0]);
     if (std::meta::is_array_type(bare))
         return std::meta::extent(bare) > 0 && !std::meta::is_array_type(std::meta::remove_extent(bare)) && reflect_result_supported(std::meta::remove_extent(bare));
     if (bare == ^^void || bare == std::meta::dealias(^^mrb_value) || bare == ^^bool || std::meta::is_arithmetic_type(bare) || std::meta::is_enum_type(bare)) return true;

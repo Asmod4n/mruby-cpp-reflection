@@ -1428,3 +1428,18 @@ end
 assert('mrb_close deletes a live tree once, children before parents') do
   assert_true(tree_freed_at_close?)
 end
+
+# std::optional is a range in C++26. A result is its value or nil, and
+# not an Array of zero or one elements; nil is an empty optional.
+assert('a std::optional is its value or nil') do
+  shelf = Shelf.new
+  assert_equal(1, shelf.first)
+  assert_nil(shelf.last_of_empty)
+  assert_equal('shelf', shelf.label(true).to_s)
+  assert_nil(shelf.label(false))
+  assert_kind_of(Measure, shelf.measure(true))
+  assert_equal(2.5, shelf.measure(true).v)
+  assert_nil(shelf.measure(false))
+  assert_equal(4, shelf.value_or_minus_one(4))
+  assert_equal(-1, shelf.value_or_minus_one(nil))
+end

@@ -13,6 +13,7 @@
 #include <map>
 #include <set>
 #include <variant>
+#include <optional>
 #include <generator>
 #include <mruby.h>
 #if defined(__cpp_impl_reflection)
@@ -418,6 +419,11 @@ struct Shelf {
     int pick_back(int) const { return 1; }
     float fits_float(float f) const { return f; }
     std::size_t count_shorts(const std::vector<short> &v) const { return v.size(); }
+    std::optional<int> first() const { return full.empty() ? std::nullopt : std::optional<int>(full.front()); }
+    std::optional<int> last_of_empty() const { return empty.empty() ? std::nullopt : std::optional<int>(empty.back()); }
+    std::optional<std::string> label(const bool given) const { return given ? std::optional<std::string>("shelf") : std::nullopt; }
+    std::optional<Measure> measure(const bool given) const { return given ? std::optional<Measure>(Measure{2.5}) : std::nullopt; }
+    int value_or_minus_one(const std::optional<int> n) const { return n.value_or(-1); }
 };
 /* The cases a GUI library brings, rebuilt without it. A const value
  * that a method returns is copied. A member that is deleted is left

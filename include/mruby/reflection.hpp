@@ -1494,6 +1494,8 @@ auto reflect_argument(mrb_state *const mrb, const mrb_value v)
         std::optional<T> made = reflect_variant_from<T>(mrb, v);
         if (!made) [[unlikely]] mrb_raisef(mrb, E_TYPE_ERROR, "%T fits no alternative of the variant", v);
         return std::move(*made);
+    } else if constexpr (reflect_is_optional(type)) {
+        return mrb_value_to<T>(mrb, v);
     } else if constexpr (reflect_is_output_parameter(type)) {
         using P = [:std::meta::remove_pointer(std::meta::remove_pointer(std::meta::dealias(type))):];
         using U = std::remove_const_t<P>;
@@ -1631,7 +1633,7 @@ auto reflect_get_args(mrb_state *const mrb)
     return [&]<std::size_t... I>(std::index_sequence<I...>) {
         constexpr auto retrieving_type = []<std::meta::info P>() consteval {
             using T = [:reflect_bare(std::meta::type_of(P)):];
-            if constexpr (reflect_is_object(std::meta::type_of(P)) || (std::meta::is_pointer_type(std::meta::dealias(std::meta::type_of(P))) && !std::same_as<T, const char *>))
+            if constexpr (reflect_is_object(std::meta::type_of(P)) || reflect_is_optional(std::meta::type_of(P)) || (std::meta::is_pointer_type(std::meta::dealias(std::meta::type_of(P))) && !std::same_as<T, const char *>))
                 return std::type_identity<mrb_value>{};
             else if constexpr (std::same_as<T, std::string_view> || std::same_as<T, std::string>) return std::type_identity<std::pair<const char *, mrb_int>>{};
             else if constexpr (std::same_as<T, std::span<const mrb_value>>) return std::type_identity<std::pair<const mrb_value *, mrb_int>>{};
@@ -1770,6 +1772,9 @@ mrb_value reflect_result(mrb_state *const mrb, const mrb_value self, R &&value)
         mrb_ary_push(mrb, pair, reflect_result(mrb, self, value.first));
         mrb_ary_push(mrb, pair, reflect_result(mrb, self, value.second));
         return pair;
+    } else if constexpr (mrbcpp::value_converter::is_std_optional<T>::value) {
+        if (!value.has_value()) return mrb_nil_value();
+        return reflect_result(mrb, self, *std::forward<R>(value));
     } else if constexpr (reflect_is_view(^^T)) {
         using E = std::ranges::range_value_t<T>;
         if constexpr (std::same_as<std::remove_cv_t<E>, char> && std::ranges::contiguous_range<T> && std::ranges::sized_range<T>) {
@@ -2085,6 +2090,11 @@ bool reflect_get_args_match(mrb_state *const mrb, const std::span<const mrb_valu
                     fits = fits || mrb_data_check_get_ptr(mrb, v, &mrb_const_void_pointer_type) != nullptr;
             } else if constexpr (letter == 'o' && reflect_is_variant(std::meta::type_of(P))) {
                 fits = reflect_variant_from<typename [:reflect_bare(std::meta::type_of(P)):]>(mrb, v).has_value();
+            } else if constexpr (letter == 'o' && reflect_is_optional(std::meta::type_of(P))) {
+                using H = typename [:reflect_bare(std::meta::type_of(P)):]::value_type;
+                if constexpr (std::same_as<H, bool>) fits = true;
+                else if constexpr (std::is_arithmetic_v<H>) fits = mrb_nil_p(v) || mrb_integer_p(v) || mrb_float_p(v);
+                else fits = mrb_nil_p(v) || mrb_string_p(v);
             } else if constexpr (letter == 'o' && reflect_is_object(std::meta::type_of(P))) {
                 using T = [:reflect_bare(std::meta::type_of(P)):];
                 fits = reflect_ptr<T>(mrb, v) != nullptr || ((!reflect_mutates(std::meta::type_of(P)) && reflect_from_mrb<T>) ||
