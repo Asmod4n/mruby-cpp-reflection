@@ -400,10 +400,6 @@ module MRuby
   class Build
     attr_writer :objcopy
 
-    def reflect_presym_sections
-      @reflect_presym_sections ||= []
-    end
-
     def objcopy
       @objcopy ||= if toolchains.include?('clang') then `#{cxx.command} -print-prog-name=llvm-objcopy`.chomp
                    else cxx.command.sub(/(?:g\+\+|gcc|c\+\+)(?:-[\d.]+)?\z/, 'objcopy')
@@ -412,24 +408,20 @@ module MRuby
   end
 end
 
-# The generators of a source that calls reflect_define. The build finds
-# such a source by the text reflect_define< in it, among the C++ sources
-# of src/, of test/ in a build with tests, and the source that
-# spec.reflect writes, in every gem of a build that loads this gem.
+# The generator of a source that calls reflect_define with the option
+# virtual_overriders. The build finds such a source by the texts
+# reflect_define< and virtual_overriders in it, among the C++ sources of
+# src/, of test/ in a build with tests, and the source that spec.reflect
+# writes, in every gem of a build that loads this gem.
 #
 # A first compile of the source, with MRB_CPP_REFLECTOR_GENERATE, writes
-# the presyms of the reflected names into the section
-# .mrb_cpp_reflector_presyms of its object file, and the overriders of the
-# classes it lists with reflect_options virtual_overriders into the
-# section .mrb_cpp_reflector_virtual_overriders. objcopy copies both
-# sections out. The presyms of every such source go to
-# build/<name>/include/mruby/presym/reflect.h before the presym scan, and a
-# generated source of the gem includes that header, so the scanner reads
-# the MRB_SYM tokens like any other source's. The header and the text of
-# the overriders run the compile from their own action, so the compile is
-# no prerequisite of a product, and the presym scan does not wait for it. include_virtual_overriders.cpp
-# compiles the source with its overriders, in place of the source's own
-# object. Nothing of it enters the tree.
+# the overriders of the classes it lists with reflect_options
+# virtual_overriders into the section
+# .mrb_cpp_reflector_virtual_overriders of its object file. objcopy copies
+# the section out. The text of the overriders runs the compile from its
+# own action, so the compile is no prerequisite of a product.
+# include_virtual_overriders.cpp compiles the source with its overriders,
+# in place of the source's own object. Nothing of it enters the tree.
 
 module MRuby
   module Gem
@@ -438,7 +430,7 @@ module MRuby
         sources = Dir.glob("#{dir}/src/*.{cpp,cxx,cc}")
         sources += Dir.glob("#{dir}/test/*.{cpp,cxx,cc}") if build.test_enabled?
         sources << reflect_source if File.exist?(reflect_source)
-        sources.select { |source| File.read(source).include?('reflect_define<') }
+        sources.select { |source| File.read(source).then { |text| text.include?('reflect_define<') && text.include?('virtual_overriders') } }
       end
 
       def reflect_generate
@@ -447,28 +439,7 @@ module MRuby
         return unless reflection
         sources = reflect_define_sources
         return if sources.empty?
-        header = "#{build.build_dir}/include/mruby/presym/reflect.h"
-        sections = build.reflect_presym_sections
-        sources.each { |source| sections << reflect_virtual_overriders(reflection, source) }
-        unless Rake::Task.task_defined?(header)
-          file header do |t|
-            sections.map { |section| Thread.new { Rake::Task[section].invoke } }.each(&:join)
-            entries = sections.flat_map { |section| File.read(section).delete("\0").lines }.uniq.sort
-            text = "#pragma once\n#include <array>\n#include <string_view>\n#include <utility>\n#include <mruby.h>\n" \
-                   "inline constexpr std::array<std::pair<std::string_view, mrb_sym>, #{entries.size}> reflect_presyms{{\n#{entries.join}}};\n"
-            FileUtils.mkdir_p(File.dirname(t.name))
-            File.write(t.name, text) unless File.exist?(t.name) && File.read(t.name) == text
-          end
-          Rake::Task[header].define_singleton_method(:needed?) { true }
-        end
-        source = "#{build_dir}/reflect_presyms/reflect_presyms.cpp"
-        file source => header do |t|
-          FileUtils.mkdir_p(File.dirname(t.name))
-          File.write(t.name, "#include <mruby.h>\n#include <mruby/presym/reflect.h>\n")
-        end
-        obj = objfile(source.pathmap("#{build_dir}/reflect_presyms/%n"))
-        file obj => source
-        objs << obj unless objs.include?(obj)
+        sources.each { |source| reflect_virtual_overriders(reflection, source) }
       end
 
       private
@@ -478,18 +449,14 @@ module MRuby
         msvc = build.toolchains.include?('visualcpp')
         quoted = ->(path) { msvc ? %(\\"#{path}\\") : %('"#{path}"') }
         printed = "#{out}/print_virtual_overriders#{build.exts.object}"
-        presyms = "#{out}/presyms.section"
         section = "#{out}/virtual_overriders.section"
         text = "#{out}/virtual_overriders.inc"
         object = "#{out}/include_virtual_overriders#{build.exts.object}"
         replaced = source.start_with?("#{self.dir}/") ? objfile(source.relative_path_from(self.dir).pathmap("#{build_dir}/%X")) : objfile(source.pathmap('%X'))
-        headers = %w[reflection.hpp cpp_reflection.hpp reflect_presyms.hpp].map { |h| "#{reflection.dir}/include/mruby/#{h}" }
+        headers = %w[reflection.hpp cpp_reflection.hpp reflect_members.hpp].map { |h| "#{reflection.dir}/include/mruby/#{h}" }
         file printed => [source, "#{reflection.dir}/src/print_virtual_overriders.cpp", *headers] do |t|
           cxx.run t.name, "#{reflection.dir}/src/print_virtual_overriders.cpp",
-                  ["MRB_CPP_REFLECTOR_SOURCE=#{quoted.(source)}", 'MRB_NO_PRESYM', 'MRB_REFLECT_NO_PRESYMS'], [], [msvc ? '/GL-' : '-fno-lto']
-        end
-        file presyms => printed do |t|
-          sh "#{build.objcopy} -O binary --only-section=.mrb_cpp_reflector_presyms #{printed} #{t.name}"
+                  ["MRB_CPP_REFLECTOR_SOURCE=#{quoted.(source)}", 'MRB_NO_PRESYM'], [], [msvc ? '/GL-' : '-fno-lto']
         end
         file section => printed do |t|
           sh "#{build.objcopy} -O binary --only-section=.mrb_cpp_reflector_virtual_overriders #{printed} #{t.name}"
@@ -500,7 +467,7 @@ module MRuby
           File.write(t.name, overriders) unless File.exist?(t.name) && File.read(t.name) == overriders
         end
         Rake::Task[text].define_singleton_method(:needed?) { true }
-        file object => [text, "#{reflection.dir}/src/include_virtual_overriders.cpp"] do |t|
+        file object => [text, source, "#{reflection.dir}/src/include_virtual_overriders.cpp", *headers] do |t|
           cxx.run t.name, "#{reflection.dir}/src/include_virtual_overriders.cpp",
                   ["MRB_CPP_REFLECTOR_SOURCE=#{quoted.(source)}", "MRB_CPP_REFLECTOR_VIRTUAL_OVERRIDERS=#{quoted.(text)}"]
         end
@@ -509,7 +476,6 @@ module MRuby
         else
           self.objs = objs.map { |o| o == replaced ? object : o }
         end
-        presyms
       end
     end
 

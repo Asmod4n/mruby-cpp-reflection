@@ -761,10 +761,17 @@ constexpr auto instantiated = mrb_cpp_reflector::reflect<^^fruit, ^^fruit::Apple
 
 static_assert(std::string_view(mrb_cpp_reflector::reflect_get_args_format<std::meta::members_of(^^Reflected, std::meta::access_context::current())[2]>().data()) == "si");
 
-static mrb_value presym_ok_q(mrb_state *mrb, mrb_value)
+static mrb_value symbols_ok_q(mrb_state *mrb, mrb_value)
 {
-    return mrb_bool_value(mrb_cpp_reflector::reflect_presym("same") == mrb_intern_lit(mrb, "same") &&
-                          mrb_cpp_reflector::reflect_presym("Reflected") == mrb_intern_lit(mrb, "Reflected"));
+    constexpr auto &names = mrb_cpp_reflector::reflect_call_names<classes>;
+    const auto &bridge = mrb_cpp_reflector::reflect_intern_bridge<names>(mrb);
+    const auto &gem = mrb_cpp_reflector::reflect_symbols_of(mrb).gem;
+    const auto interned = [mrb](const std::string_view name) { return mrb_intern(mrb, name.data(), name.size()); };
+    const bool listed = std::ranges::contains(names, std::string_view("same")) && std::ranges::contains(names, std::string_view("Reflected")) &&
+                        std::ranges::contains(mrb_cpp_reflector::reflect_gem_names, std::string_view("each"));
+    return mrb_bool_value(listed && std::ranges::equal(bridge, names | std::views::transform(interned)) &&
+                          std::ranges::equal(gem, mrb_cpp_reflector::reflect_gem_names | std::views::transform(interned)) &&
+                          mrb_cpp_reflector::reflect_symbol<mrb_cpp_reflector::kEach>(mrb) == MRB_SYM(each));
 }
 
 static mrb_value constructed_m(mrb_state *mrb, mrb_value)
@@ -907,7 +914,7 @@ extern "C" void mrb_mruby_cpp_reflection_gem_test(mrb_state *mrb)
     mrb_define_module_function(mrb, mrb->kernel_module, "cancelled_through_a_call?", cancelled_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "second_state", second_state_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "constructed", constructed_m, MRB_ARGS_NONE());
-    mrb_define_module_function(mrb, mrb->kernel_module, "reflect_presym_ok?", presym_ok_q, MRB_ARGS_NONE());
+    mrb_define_module_function(mrb, mrb->kernel_module, "reflect_symbols_ok?", symbols_ok_q, MRB_ARGS_NONE());
     mrb_cpp_reflector::reflect_define<classes>(mrb);
     mrb_cpp_reflector::reflect_define<under>(mrb, mrb_define_module(mrb, "Under"));
     mrb_cpp_reflector::reflect_define<nested, {.nested_types = true}>(mrb);

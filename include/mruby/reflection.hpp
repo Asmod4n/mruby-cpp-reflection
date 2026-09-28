@@ -24,7 +24,7 @@ extern const struct mrb_data_type mrb_const_void_pointer_type;
 #include <mruby/cpp_to_mrb_value.hpp>
 #include <mruby/mrb_value_to_cpp.hpp>
 #include <mruby/cpp_reflection.hpp>
-#include <mruby/reflect_presyms.hpp>
+#include <mruby/reflect_members.hpp>
 
 #if defined(__GLIBCXX__)
 #include <cxxabi.h>
@@ -61,21 +61,8 @@ extern const struct mrb_data_type mrb_const_void_pointer_type;
 #include <utility>
 #include <vector>
 
-#if __has_include(<mruby/presym/reflect.h>) && !defined(MRB_REFLECT_NO_PRESYMS)
-#include <mruby/presym/reflect.h>
-#else
-inline constexpr std::array<std::pair<std::string_view, mrb_sym>, 0> reflect_presyms{};
-#endif
-
 namespace mrb_cpp_reflector
 {
-
-consteval mrb_sym reflect_presym(const std::string_view name)
-{
-    for (const auto &[known, sym] : reflect_presyms)
-        if (known == name) return sym;
-    return 0;
-}
 
 consteval std::string_view reflect_name(const std::meta::info named)
 {
@@ -83,25 +70,53 @@ consteval std::string_view reflect_name(const std::meta::info named)
     return reflect_identifier(named);
 }
 
-template <std::meta::info Named>
-mrb_sym reflect_intern(mrb_state *const mrb)
-{
-    constexpr std::string_view name = reflect_name(Named);
-    constexpr mrb_sym presym = reflect_presym(name);
-    if constexpr (presym != 0) return presym;
-    else return mrb_intern_static(mrb, name.data(), name.size());
-}
-
 inline constexpr std::string_view kInstanceMethods = "InstanceMethods", kOwner = "owner", kInitialize = "initialize", kReplace = "replace", kToS = "to_s",
                                   kToA = "to_a", kToH = "to_h", kEach = "each",
                                   kEnumerable = "Enumerable";
 
-template <const std::string_view &Name>
-mrb_sym reflect_sym(mrb_state *const mrb)
+inline constexpr auto reflect_gem_names = std::to_array<std::string_view>({
+    kInstanceMethods, kOwner, kInitialize, kReplace, kToS, kToA, kToH, kEach, kEnumerable,
+    "+@", "-@", "+", "-", "*", "&", "/", "%", "^", "|", "~", "!", "<<", ">>", "==", "!=", "<", ">", "<=", ">=", "<=>", "[]", "call", "call?",
+    "compare_three_way", "equal_to", "not_equal_to", "less", "greater", "less_equal", "greater_equal"});
+
+consteval std::size_t reflect_symbol_index(const std::span<const std::string_view> names, const std::string_view name)
 {
-    constexpr mrb_sym presym = reflect_presym(Name);
-    if constexpr (presym != 0) return presym;
-    else return mrb_intern_static(mrb, Name.data(), Name.size());
+    const auto found = std::ranges::find(names, name);
+    if (found == names.end()) throw "the symbol table of the scope has no entry for the name";
+    return static_cast<std::size_t>(std::ranges::distance(names.begin(), found));
+}
+
+template <std::size_t N>
+using mrb_symbol_bridge = std::array<mrb_sym, N>;
+
+template <std::size_t N>
+mrb_symbol_bridge<N> reflect_intern_names(mrb_state *const mrb, const std::array<std::string_view, N> &names)
+{
+    mrb_symbol_bridge<N> symbols{};
+    std::ranges::transform(names, symbols.begin(), [mrb](const std::string_view name) { return mrb_intern_static(mrb, name.data(), name.size()); });
+    return symbols;
+}
+
+struct reflect_symbols {
+    mrb_symbol_bridge<reflect_gem_names.size()> gem;
+    std::unordered_map<const void *, std::shared_ptr<const void>> bridges;
+    std::unordered_map<const void *, std::vector<mrb_sym>> virtuals;
+};
+
+inline mrb_sym reflect_symbols_key(mrb_state *const mrb)
+{
+    return MRB_SYM(__reflected_symbols__);
+}
+
+inline reflect_symbols &reflect_symbols_of(mrb_state *const mrb)
+{
+    return *static_cast<reflect_symbols *>(mrb_cptr(mrb_iv_get(mrb, mrb_obj_value(mrb->object_class), reflect_symbols_key(mrb))));
+}
+
+template <const std::string_view &Name>
+mrb_sym reflect_symbol(mrb_state *const mrb)
+{
+    return std::get<reflect_symbol_index(reflect_gem_names, Name)>(reflect_symbols_of(mrb).gem);
 }
 
 struct reflect_upcast {
@@ -922,11 +937,31 @@ struct reflect_undefined_call : std::exception {
     const char *what() const noexcept override { return "no linked library defines this function"; }
 };
 
+consteval std::vector<const char *> reflect_call_names_of(std::span<const std::meta::info> classes);
+
+template <auto Classes>
+inline constexpr auto reflect_call_names = [] {
+    constexpr auto texts = std::define_static_array(reflect_call_names_of(Classes));
+    std::array<std::string_view, texts.size()> names{};
+    std::ranges::copy(texts, names.begin());
+    return names;
+}();
+
+template <const auto &Names>
+const mrb_symbol_bridge<Names.size()> &reflect_intern_bridge(mrb_state *const mrb)
+{
+    const auto [at, added] = reflect_symbols_of(mrb).bridges.try_emplace(&Names);
+    if (added) at->second = std::make_shared<const mrb_symbol_bridge<Names.size()>>(reflect_intern_names(mrb, Names));
+    return *static_cast<const mrb_symbol_bridge<Names.size()> *>(at->second.get());
+}
+
+template <const auto &Names>
 struct reflect_definition {
     using registration = void (*)(reflect_definition &, RClass *);
     mrb_state *mrb;
+    const mrb_symbol_bridge<Names.size()> &bridge;
     std::vector<std::pair<registration, RClass *>> pending;
-    explicit reflect_definition(mrb_state *const state) : mrb(state) {}
+    explicit reflect_definition(mrb_state *const state) : mrb(state), bridge(reflect_intern_bridge<Names>(state)) {}
     reflect_definition(const reflect_definition &) = delete;
     reflect_definition &operator=(const reflect_definition &) = delete;
     void finish()
@@ -938,6 +973,20 @@ struct reflect_definition {
         }
     }
 };
+
+template <const char *Name, const auto &Names>
+mrb_sym reflect_symbol(const reflect_definition<Names> &definition)
+{
+    constexpr std::string_view name = Name;
+    if constexpr (std::ranges::contains(reflect_gem_names, name)) return std::get<reflect_symbol_index(reflect_gem_names, name)>(reflect_symbols_of(definition.mrb).gem);
+    else return std::get<reflect_symbol_index(Names, name)>(definition.bridge);
+}
+
+template <std::meta::info Named, const auto &Names>
+mrb_sym reflect_symbol(const reflect_definition<Names> &definition)
+{
+    return reflect_symbol<std::define_static_string(reflect_name(Named)), Names>(definition);
+}
 
 struct reflect_options {
     bool templates = false;
@@ -1057,19 +1106,11 @@ template <auto Classes>
     return text;
 }();
 
-template <auto Classes>
-[[gnu::section(".mrb_cpp_reflector_presyms"), gnu::used]] static constexpr auto reflect_presyms_printed = [] {
-    constexpr std::string_view body = std::define_static_string(reflect_presym_entries<Classes>());
-    std::array<char, body.size()> text{};
-    std::ranges::copy(body, text.begin());
-    return text;
-}();
+template <std::meta::info Type, reflect_options Options = reflect_options{}, auto Instances = std::array<std::meta::info, 0>{}, const auto &Names>
+RClass *reflect_define_class(reflect_definition<Names> &definition, RClass *super);
 
-template <std::meta::info Type, reflect_options Options = reflect_options{}, auto Instances = std::array<std::meta::info, 0>{}>
-RClass *reflect_define_class(reflect_definition &definition, RClass *super);
-
-template <std::meta::info Type>
-RClass *reflect_define_enum(reflect_definition &definition, RClass *under);
+template <std::meta::info Type, const auto &Names>
+RClass *reflect_define_enum(reflect_definition<Names> &definition, RClass *under);
 
 template <std::meta::info Bare>
 mrb_sym reflect_class_key(mrb_state *const mrb)
@@ -1092,8 +1133,8 @@ RClass *reflect_module(mrb_state *const mrb)
     return mrb_nil_p(found) ? nullptr : mrb_class_ptr(found);
 }
 
-template <std::meta::info Type>
-RClass *reflect_class(reflect_definition &definition)
+template <std::meta::info Type, const auto &Names>
+RClass *reflect_class(reflect_definition<Names> &definition)
 {
     mrb_state *const mrb = definition.mrb;
     constexpr std::meta::info bare = std::meta::dealias(std::meta::remove_cvref(Type));
@@ -1108,7 +1149,7 @@ RClass *reflect_class(reflect_definition &definition)
 template <std::meta::info Type>
 RClass *reflect_class(mrb_state *const mrb)
 {
-    reflect_definition definition(mrb);
+    reflect_definition<reflect_call_names<std::array{std::meta::dealias(std::meta::remove_cvref(Type))}>> definition(mrb);
     RClass *const klass = reflect_class<Type>(definition);
     definition.finish();
     return klass;
@@ -1227,7 +1268,7 @@ mrb_value reflect_borrowed(mrb_state *const mrb, T *const ref, const mrb_value o
     reflect_lifetime_base &record = reflect_new_lifetime<T>(mrb, object);
     record.object = ref;
     record.alive = true;
-    mrb_iv_set(mrb, object, reflect_sym<kOwner>(mrb), owner);
+    mrb_iv_set(mrb, object, reflect_symbol<kOwner>(mrb), owner);
     if (frozen) mrb_obj_freeze(mrb, object);
     reflect_identity_set(record);
     return object;
@@ -1909,7 +1950,9 @@ auto reflect_call_virtual_overrider(Self &self, bool &running, const Base &base,
     mrb_state *const mrb = self.record->mrb;
     if (mrb->gc.collecting || mrb_object_dead_p(mrb, reinterpret_cast<RBasic *>(self.record->ruby))) return base();
     const mrb_value object = mrb_obj_value(self.record->ruby);
-    const mrb_sym name = reflect_intern<Function>(mrb);
+    constexpr auto &functions = reflect_virtual_overrider<std::meta::dealias(^^typename Self::overridden)>::functions;
+    constexpr std::size_t at = static_cast<std::size_t>(std::ranges::distance(functions.begin(), std::ranges::find(functions, Function)));
+    const mrb_sym name = reflect_symbols_of(mrb).virtuals.at(&reflect_data_type_of<typename Self::overridden>())[at];
     RClass *owner = mrb_class(mrb, object);
     const mrb_method_t method = mrb_method_search_vm(mrb, &owner, name);
     if (MRB_METHOD_UNDEF_P(method) || MRB_METHOD_CFUNC_P(method)) return base();
@@ -2219,15 +2262,15 @@ consteval std::string reflect_predicate_name(const std::meta::info function)
     return std::string(name) + "?";
 }
 
-template <std::meta::info Type, std::meta::info... Overloads>
-void reflect_define_method(mrb_state *const mrb, RClass *const klass, const mrb_sym name)
+template <std::meta::info Type, std::meta::info... Overloads, const auto &Names>
+void reflect_define_method(const reflect_definition<Names> &definition, RClass *const klass, const mrb_sym name)
 {
+    mrb_state *const mrb = definition.mrb;
     constexpr std::meta::info first = std::array{Overloads...}[0];
     constexpr std::string_view standard = reflect_standard_name(first);
     mrb_sym defined = name;
     if constexpr (!standard.empty()) {
-        constexpr mrb_sym presym = reflect_presym(standard.data());
-        defined = presym != 0 ? presym : mrb_intern_static(mrb, standard.data(), standard.size());
+        defined = reflect_symbol<std::define_static_string(standard)>(definition);
     }
     static constexpr std::array arities{(reflect_takes_block(Overloads) ? std::meta::parameters_of(Overloads).size() : std::size_t{0})...};
     if constexpr (std::meta::is_operator_function(first) && (std::meta::operator_of(first) == std::meta::operators::op_equals_equals ||
@@ -2271,8 +2314,7 @@ void reflect_define_method(mrb_state *const mrb, RClass *const klass, const mrb_
     if constexpr (!standard.empty() && (reflect_answers_as_ruby(Overloads) && ...)) ::mrb_define_alias_id(mrb, klass, name, defined);
     if constexpr ((reflect_predicate(Overloads) && ...)) {
         constexpr auto predicate = std::define_static_string(reflect_predicate_name(first));
-        constexpr mrb_sym presym = reflect_presym(predicate);
-        ::mrb_define_alias_id(mrb, klass, presym != 0 ? presym : mrb_intern_static(mrb, predicate, std::string_view(predicate).size()), defined);
+        ::mrb_define_alias_id(mrb, klass, reflect_symbol<predicate>(definition), defined);
     }
 }
 
@@ -2323,17 +2365,18 @@ mrb_value reflect_child(mrb_state *const mrb, const mrb_value self)
     record.field = &reflect_field_address<Field>;
     record.object = current;
     record.alive = true;
-    mrb_iv_set(mrb, made, reflect_sym<kOwner>(mrb), self);
+    mrb_iv_set(mrb, made, reflect_symbol<kOwner>(mrb), self);
     if (frozen) mrb_obj_freeze(mrb, made);
     reflect_identity_set(record);
     return made;
 }
 
-template <std::meta::info Field>
-void reflect_define_field(mrb_state *const mrb, RClass *const klass)
+template <std::meta::info Field, const auto &Names>
+void reflect_define_field(const reflect_definition<Names> &definition, RClass *const klass)
 {
+    mrb_state *const mrb = definition.mrb;
     using T = [:std::meta::parent_of(Field):];
-    ::mrb_define_method_id(mrb, klass, reflect_intern<Field>(mrb), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+    ::mrb_define_method_id(mrb, klass, reflect_symbol<Field>(definition), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
         return reflect_translate_exceptions(mrb, [&]() -> mrb_value {
             T *const object = reflect_ptr<T>(mrb, self);
             if (object == nullptr) mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
@@ -2350,10 +2393,8 @@ void reflect_define_field(mrb_state *const mrb, RClass *const klass)
     }, MRB_ARGS_NONE());
     if constexpr (!std::meta::is_const_type(std::meta::type_of(Field)) && !reflect_is_view(reflect_bare(std::meta::type_of(Field))) &&
                   (std::is_copy_assignable_v<typename [:reflect_bare(std::meta::type_of(Field)):]> || std::is_array_v<typename [:reflect_bare(std::meta::type_of(Field)):]>)) {
-        constexpr std::string_view name = std::meta::identifier_of(Field);
-        constexpr auto setter = std::define_static_string(std::string(name) + "=");
-        constexpr mrb_sym presym = reflect_presym(setter);
-        const mrb_sym sym = presym != 0 ? presym : mrb_intern_static(mrb, setter, name.size() + 1);
+        constexpr auto setter = std::define_static_string(std::string(std::meta::identifier_of(Field)) + "=");
+        const mrb_sym sym = reflect_symbol<setter>(definition);
         ::mrb_define_method_id(mrb, klass, sym, [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
             std::array records = reflect_call_records<1>(mrb, self);
             const reflect_call_end<1> ended(&records);
@@ -2472,7 +2513,7 @@ void reflect_define_conversions(mrb_state *const mrb, RClass *const klass)
             const T &object = reflect_receiver_or_raise<T>(mrb, self);
             return mrb_str_new(mrb, std::ranges::data(object), static_cast<mrb_int>(std::ranges::size(object)));
         };
-        ::mrb_define_method_id(mrb, klass, reflect_sym<kToS>(mrb), to_s, MRB_ARGS_NONE());
+        ::mrb_define_method_id(mrb, klass, reflect_symbol<kToS>(mrb), to_s, MRB_ARGS_NONE());
     } else if constexpr (reflect_map<T>) {
         constexpr auto to_h = [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
             return reflect_translate_exceptions(mrb, [&]() -> mrb_value {
@@ -2491,7 +2532,7 @@ void reflect_define_conversions(mrb_state *const mrb, RClass *const klass)
                 return hash;
             });
         };
-        ::mrb_define_method_id(mrb, klass, reflect_sym<kToH>(mrb), to_h, MRB_ARGS_NONE());
+        ::mrb_define_method_id(mrb, klass, reflect_symbol<kToH>(mrb), to_h, MRB_ARGS_NONE());
     } else if constexpr (std::ranges::input_range<T> && !std::ranges::forward_range<T>) {
         constexpr auto each = [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
             mrb_value block;
@@ -2536,11 +2577,11 @@ void reflect_define_conversions(mrb_state *const mrb, RClass *const klass)
                 return array;
             });
         };
-        ::mrb_define_method_id(mrb, klass, reflect_sym<kEach>(mrb), each, MRB_ARGS_BLOCK());
+        ::mrb_define_method_id(mrb, klass, reflect_symbol<kEach>(mrb), each, MRB_ARGS_BLOCK());
         ::mrb_define_method_id(mrb, klass, MRB_SYM(next), next, MRB_ARGS_NONE());
-        ::mrb_define_method_id(mrb, klass, reflect_sym<kToA>(mrb), to_a, MRB_ARGS_NONE());
-        if (mrb_class_defined_id(mrb, reflect_sym<kEnumerable>(mrb)))
-            mrb_include_module(mrb, klass, mrb_module_get_id(mrb, reflect_sym<kEnumerable>(mrb)));
+        ::mrb_define_method_id(mrb, klass, reflect_symbol<kToA>(mrb), to_a, MRB_ARGS_NONE());
+        if (mrb_class_defined_id(mrb, reflect_symbol<kEnumerable>(mrb)))
+            mrb_include_module(mrb, klass, mrb_module_get_id(mrb, reflect_symbol<kEnumerable>(mrb)));
     } else if constexpr (std::ranges::range<T>) {
         constexpr auto to_a = [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
             return reflect_translate_exceptions(mrb, [&]() -> mrb_value {
@@ -2551,13 +2592,13 @@ void reflect_define_conversions(mrb_state *const mrb, RClass *const klass)
                 return array;
             });
         };
-        ::mrb_define_method_id(mrb, klass, reflect_sym<kToA>(mrb), to_a, MRB_ARGS_NONE());
+        ::mrb_define_method_id(mrb, klass, reflect_symbol<kToA>(mrb), to_a, MRB_ARGS_NONE());
         if constexpr (std::ranges::random_access_range<T> && std::ranges::sized_range<T>) {
             constexpr auto each = [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
                 return reflect_translate_exceptions(mrb, [&]() -> mrb_value {
                     mrb_value block;
                     mrb_get_args(mrb, "&", &block);
-                    if (mrb_nil_p(block)) return mrb_funcall_id(mrb, self, MRB_SYM(to_enum), 1, mrb_symbol_value(reflect_sym<kEach>(mrb)));
+                    if (mrb_nil_p(block)) return mrb_funcall_id(mrb, self, MRB_SYM(to_enum), 1, mrb_symbol_value(reflect_symbol<kEach>(mrb)));
                     for (std::size_t i = 0;; ++i) {
                         T *const object = reflect_ptr<T>(mrb, self);
                         if (object == nullptr) [[unlikely]] mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
@@ -2566,9 +2607,9 @@ void reflect_define_conversions(mrb_state *const mrb, RClass *const klass)
                     }
                 });
             };
-            ::mrb_define_method_id(mrb, klass, reflect_sym<kEach>(mrb), each, MRB_ARGS_BLOCK());
-            if (mrb_class_defined_id(mrb, reflect_sym<kEnumerable>(mrb)))
-                mrb_include_module(mrb, klass, mrb_module_get_id(mrb, reflect_sym<kEnumerable>(mrb)));
+            ::mrb_define_method_id(mrb, klass, reflect_symbol<kEach>(mrb), each, MRB_ARGS_BLOCK());
+            if (mrb_class_defined_id(mrb, reflect_symbol<kEnumerable>(mrb)))
+                mrb_include_module(mrb, klass, mrb_module_get_id(mrb, reflect_symbol<kEnumerable>(mrb)));
         }
     }
 }
@@ -2576,7 +2617,7 @@ void reflect_define_conversions(mrb_state *const mrb, RClass *const klass)
 template <class T>
 void reflect_define_replace(mrb_state *const mrb, RClass *const klass)
 {
-    ::mrb_define_method_id(mrb, klass, reflect_sym<kReplace>(mrb), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+    ::mrb_define_method_id(mrb, klass, reflect_symbol<kReplace>(mrb), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
         std::array records = reflect_call_records<1>(mrb, self);
         const reflect_call_end<1> ended(&records);
         return reflect_translate_exceptions(mrb, [&]() -> mrb_value {
@@ -2597,22 +2638,22 @@ void reflect_define_replace(mrb_state *const mrb, RClass *const klass)
     }, MRB_ARGS_REQ(1));
 }
 
-template <std::meta::info Member>
-void reflect_define_static_data_member(mrb_state *const mrb, RClass *const scope, RClass *const singleton)
+template <std::meta::info Member, const auto &Names>
+void reflect_define_static_data_member(const reflect_definition<Names> &definition, RClass *const scope, RClass *const singleton)
 {
+    mrb_state *const mrb = definition.mrb;
     using G = [:reflect_bare(std::meta::type_of(Member)):];
     if constexpr (std::is_class_v<G>)
-        ::mrb_define_const_id(mrb, scope, reflect_intern<Member>(mrb),
+        ::mrb_define_const_id(mrb, scope, reflect_symbol<Member>(definition),
                               reflect_borrowed<G>(mrb, const_cast<G *>(&[:Member:]), mrb_obj_value(scope), std::meta::is_const_type(std::meta::type_of(Member))));
-    ::mrb_define_method_id(mrb, singleton, reflect_intern<Member>(mrb), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
+    ::mrb_define_method_id(mrb, singleton, reflect_symbol<Member>(definition), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
         using F = [:reflect_bare(std::meta::type_of(Member)):];
-        if constexpr (std::is_class_v<F>) return mrb_const_get(mrb, self, reflect_intern<Member>(mrb));
+        if constexpr (std::is_class_v<F>) return mrb_const_get(mrb, self, mrb_get_mid(mrb));
         else return reflect_result(mrb, self, [:Member:]);
     }, MRB_ARGS_NONE());
     if constexpr (!std::meta::is_const_type(std::meta::type_of(Member)) && std::is_copy_assignable_v<typename [:reflect_bare(std::meta::type_of(Member)):]>) {
         constexpr auto setter = std::define_static_string(std::string(std::meta::identifier_of(Member)) + "=");
-        constexpr mrb_sym presym = reflect_presym(setter);
-        const mrb_sym sym = presym != 0 ? presym : mrb_intern_static(mrb, setter, std::meta::identifier_of(Member).size() + 1);
+        const mrb_sym sym = reflect_symbol<setter>(definition);
         ::mrb_define_method_id(mrb, singleton, sym, [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
             using F = [:reflect_bare(std::meta::type_of(Member)):];
             mrb_value v;
@@ -2693,8 +2734,78 @@ consteval std::vector<std::meta::info> reflect_alias_scopes(const std::meta::inf
     return scopes;
 }
 
-template <std::meta::info Type>
-void reflect_register_specialization(reflect_definition &definition, RClass *const klass)
+consteval std::vector<const char *> reflect_symbol_names_of(const std::meta::info scope)
+{
+    const std::meta::info bare = std::meta::is_type(scope) ? std::meta::dealias(std::meta::remove_cvref(scope)) : scope;
+    std::vector<std::string> names;
+    for (const std::meta::info n : reflect_namespaces(scope)) names.push_back(reflect_class_name(n));
+    names.push_back(reflect_class_name(scope));
+    if (std::meta::is_type(bare) && std::meta::has_template_arguments(bare))
+        for (const std::meta::info s : reflect_alias_scopes(bare))
+            for (const std::meta::info m : std::meta::members_of(s, std::meta::access_context::current()))
+                if (std::meta::is_type_alias(m) && std::meta::dealias(m) == bare)
+                    for (const std::meta::info n : reflect_namespaces(m)) names.push_back(reflect_class_name(n));
+    if (std::meta::is_namespace(bare) || (std::meta::is_class_type(bare) && std::meta::is_complete_type(bare))) {
+        for (const std::meta::info m : std::meta::members_of(bare, std::meta::access_context::current())) {
+            if (!std::meta::has_identifier(m) || std::meta::is_type(m) || std::meta::is_namespace(m)) continue;
+            const std::string_view id = std::meta::identifier_of(m);
+            if (std::meta::is_function(m) || std::meta::is_function_template(m)) {
+                names.emplace_back(id);
+                if (std::meta::is_function_template(m) || reflect_predicate(m))
+                    names.push_back(std::string(id.starts_with("is_") && id.size() > 3 ? id.substr(3) : id) + "?");
+            } else if (std::meta::is_variable(m) || std::meta::is_nonstatic_data_member(m)) {
+                names.emplace_back(id);
+                names.push_back(std::string(id) + "=");
+            }
+        }
+    }
+    if (std::meta::is_type(bare) && reflect_overridable(bare))
+        for (const std::meta::info f : reflect_virtual_functions(bare)) names.emplace_back(std::meta::identifier_of(f));
+    std::ranges::sort(names);
+    const auto [first, last] = std::ranges::unique(names);
+    names.erase(first, last);
+    std::vector<const char *> texts;
+    for (const std::string &name : names) texts.push_back(std::define_static_string(name));
+    return texts;
+}
+
+consteval std::vector<std::meta::info> reflect_call_scopes(const std::span<const std::meta::info> classes)
+{
+    std::vector<std::meta::info> scopes = reflect_scopes(classes);
+    const auto add = [&scopes](const std::meta::info scope) {
+        if (std::ranges::find(scopes, scope) == scopes.end()) scopes.push_back(scope);
+    };
+    for (std::size_t i = 0; i < scopes.size(); i++) {
+        const std::meta::info scope = scopes.at(i);
+        if (std::meta::is_namespace(scope)) {
+            for (const std::meta::info f : reflect_free_operators(scope, reflect_instances_computed(scope, classes, true))) add(reflect_operand_class(f));
+            continue;
+        }
+        if (!std::meta::is_type(scope)) continue;
+        const std::meta::info bare = std::meta::dealias(std::meta::remove_cvref(scope));
+        add(bare);
+        const std::meta::info enclosing = std::meta::parent_of(bare);
+        if (std::meta::is_type(enclosing) && std::meta::is_class_type(enclosing) && !reflect_reserved(enclosing)) add(enclosing);
+        if (!std::meta::is_class_type(bare) || !std::meta::is_complete_type(bare)) continue;
+        for (const std::meta::info base : reflect_direct_bases(bare)) add(std::meta::dealias(base));
+        for (const std::meta::info nested : reflect_nested_types(bare)) add(nested);
+    }
+    return scopes;
+}
+
+consteval std::vector<const char *> reflect_call_names_of(const std::span<const std::meta::info> classes)
+{
+    std::vector<const char *> texts;
+    for (const std::meta::info scope : reflect_call_scopes(classes))
+        if (std::meta::is_namespace(scope) || std::meta::is_type(scope)) std::ranges::copy(reflect_symbol_names_of(scope), std::back_inserter(texts));
+    std::ranges::sort(texts, {}, [](const char *const text) { return std::string_view(text); });
+    const auto [first, last] = std::ranges::unique(texts, {}, [](const char *const text) { return std::string_view(text); });
+    texts.erase(first, last);
+    return texts;
+}
+
+template <std::meta::info Type, const auto &Names>
+void reflect_register_specialization(reflect_definition<Names> &definition, RClass *const klass)
 {
     mrb_state *const mrb = definition.mrb;
     constexpr std::meta::info t = std::meta::dealias(Type);
@@ -2706,7 +2817,7 @@ void reflect_register_specialization(reflect_definition &definition, RClass *con
             if constexpr (std::meta::dealias(alias) == t) {
                 RClass *alias_outer = mrb->object_class;
                 template for (constexpr std::meta::info named : std::define_static_array(reflect_namespaces(alias)))
-                    alias_outer = ::mrb_define_module_under_id(mrb, alias_outer, reflect_intern<named>(mrb));
+                    alias_outer = ::mrb_define_module_under_id(mrb, alias_outer, reflect_symbol<named>(definition));
                 static constexpr auto alias_name = std::define_static_string(reflect_class_name(alias));
                 mrb_define_const(mrb, alias_outer, alias_name, mrb_obj_value(klass));
                 if (!named_by_alias) {
@@ -2721,25 +2832,25 @@ void reflect_register_specialization(reflect_definition &definition, RClass *con
     }
 }
 
-template <std::meta::info Type>
-RClass *reflect_enclosing_scope(reflect_definition &definition, RClass *const under)
+template <std::meta::info Type, const auto &Names>
+RClass *reflect_enclosing_scope(reflect_definition<Names> &definition, RClass *const under)
 {
     mrb_state *const mrb = definition.mrb;
     RClass *outer = under;
     template for (constexpr std::meta::info scope : std::define_static_array(reflect_namespaces(Type)))
-        outer = ::mrb_define_module_under_id(mrb, outer, reflect_intern<scope>(mrb));
+        outer = ::mrb_define_module_under_id(mrb, outer, reflect_symbol<scope>(definition));
     constexpr std::meta::info enclosing = std::meta::parent_of(std::meta::dealias(Type));
     if constexpr (std::meta::is_type(enclosing) && std::meta::is_class_type(enclosing) && !reflect_reserved(enclosing)) outer = reflect_class<enclosing>(definition);
     return outer;
 }
 
-template <std::meta::info Type>
-RClass *reflect_define_enum(reflect_definition &definition, RClass *const under)
+template <std::meta::info Type, const auto &Names>
+RClass *reflect_define_enum(reflect_definition<Names> &definition, RClass *const under)
 {
     mrb_state *const mrb = definition.mrb;
     using E = [:std::meta::dealias(Type):];
     RClass *const outer = reflect_enclosing_scope<Type>(definition, under);
-    const mrb_sym name = reflect_intern<Type>(mrb);
+    const mrb_sym name = reflect_symbol<Type>(definition);
     if (mrb_const_defined_at(mrb, mrb_obj_value(outer), name)) [[unlikely]]
         mrb_raisef(mrb, E_NAME_ERROR, "%n is already defined in %C", name, outer);
     RClass *const klass = ::mrb_define_class_under_id(mrb, outer, name, mrb->object_class);
@@ -2747,7 +2858,7 @@ RClass *reflect_define_enum(reflect_definition &definition, RClass *const under)
     mrb_undef_class_method_id(mrb, klass, MRB_SYM(new));
     mrb_iv_set(mrb, mrb_obj_value(klass), reflect_reflected_key(mrb), mrb_true_value());
     mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), reflect_class_key<std::meta::dealias(Type)>(mrb), mrb_obj_value(klass));
-    RClass *const methods = ::mrb_define_module_under_id(mrb, klass, reflect_sym<kInstanceMethods>(mrb));
+    RClass *const methods = ::mrb_define_module_under_id(mrb, klass, reflect_symbol<kInstanceMethods>(mrb));
     mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), reflect_module_key<std::meta::dealias(Type)>(mrb), mrb_obj_value(methods));
     constexpr auto to_i = [](mrb_state *const mrb, const mrb_value self) -> mrb_value { return mrb_convert_number(mrb, reflect_receiver_or_raise<E>(mrb, self)); };
     ::mrb_define_method_id(mrb, methods, MRB_SYM(to_i), to_i, MRB_ARGS_NONE());
@@ -2792,10 +2903,10 @@ RClass *reflect_define_enum(reflect_definition &definition, RClass *const under)
         template for (constexpr std::meta::info enumerator : std::define_static_array(std::meta::enumerators_of(std::meta::dealias(Type)))) {
             if (value == [:enumerator:]) return mrb_str_new_static(mrb, std::meta::identifier_of(enumerator).data(), std::meta::identifier_of(enumerator).size());
         }
-        return mrb_funcall_id(mrb, mrb_convert_number(mrb, value), reflect_sym<kToS>(mrb), 0);
+        return mrb_funcall_id(mrb, mrb_convert_number(mrb, value), reflect_symbol<kToS>(mrb), 0);
     }, MRB_ARGS_NONE());
     ::mrb_define_method_id(mrb, methods, MRB_SYM(inspect), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
-        return mrb_format(mrb, "#<%C %v>", mrb_obj_class(mrb, self), mrb_funcall_id(mrb, self, reflect_sym<kToS>(mrb), 0));
+        return mrb_format(mrb, "#<%C %v>", mrb_obj_class(mrb, self), mrb_funcall_id(mrb, self, reflect_symbol<kToS>(mrb), 0));
     }, MRB_ARGS_NONE());
     mrb_include_module(mrb, klass, mrb_module_get_id(mrb, MRB_SYM(Comparable)));
     mrb_include_module(mrb, klass, methods);
@@ -2864,12 +2975,12 @@ void reflect_define_comparisons(mrb_state *const mrb, RClass *const methods)
     }
 }
 
-template <std::meta::info Type>
-RClass *reflect_define_opaque_class(reflect_definition &definition, RClass *const under)
+template <std::meta::info Type, const auto &Names>
+RClass *reflect_define_opaque_class(reflect_definition<Names> &definition, RClass *const under)
 {
     mrb_state *const mrb = definition.mrb;
     RClass *const outer = reflect_enclosing_scope<Type>(definition, under);
-    const mrb_sym name = reflect_intern<Type>(mrb);
+    const mrb_sym name = reflect_symbol<Type>(definition);
     if (mrb_const_defined_at(mrb, mrb_obj_value(outer), name)) [[unlikely]] mrb_raisef(mrb, E_NAME_ERROR, "%n is already defined in %C", name, outer);
     RClass *const klass = ::mrb_define_class_under_id(mrb, outer, name, mrb->object_class);
     MRB_SET_INSTANCE_TT(klass, MRB_TT_CDATA);
@@ -2877,24 +2988,24 @@ RClass *reflect_define_opaque_class(reflect_definition &definition, RClass *cons
     mrb_undef_class_method_id(mrb, klass, MRB_SYM(new));
     mrb_iv_set(mrb, mrb_obj_value(klass), reflect_reflected_key(mrb), mrb_true_value());
     mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), reflect_class_key<std::meta::dealias(Type)>(mrb), mrb_obj_value(klass));
-    RClass *const methods = ::mrb_define_module_under_id(mrb, klass, reflect_sym<kInstanceMethods>(mrb));
+    RClass *const methods = ::mrb_define_module_under_id(mrb, klass, reflect_symbol<kInstanceMethods>(mrb));
     mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), reflect_module_key<std::meta::dealias(Type)>(mrb), mrb_obj_value(methods));
     mrb_include_module(mrb, klass, methods);
     return klass;
 }
 
-template <std::meta::info Type, reflect_options Options, auto Instances>
-RClass *reflect_define_complete_class(reflect_definition &definition, RClass *under);
+template <std::meta::info Type, reflect_options Options, auto Instances, const auto &Names>
+RClass *reflect_define_complete_class(reflect_definition<Names> &definition, RClass *under);
 
-template <std::meta::info Type, reflect_options Options, auto Instances>
-RClass *reflect_define_class(reflect_definition &definition, RClass *const under)
+template <std::meta::info Type, reflect_options Options, auto Instances, const auto &Names>
+RClass *reflect_define_class(reflect_definition<Names> &definition, RClass *const under)
 {
     if constexpr (std::meta::is_complete_type(std::meta::dealias(Type))) return reflect_define_complete_class<Type, Options, Instances>(definition, under);
     else return reflect_define_opaque_class<Type>(definition, under);
 }
 
-template <std::meta::info Type, reflect_options Options, auto Instances>
-RClass *reflect_define_complete_class(reflect_definition &definition, RClass *const under)
+template <std::meta::info Type, reflect_options Options, auto Instances, const auto &Names>
+RClass *reflect_define_complete_class(reflect_definition<Names> &definition, RClass *const under)
 {
     mrb_state *const mrb = definition.mrb;
     using T = [:std::meta::dealias(Type):];
@@ -2905,9 +3016,9 @@ RClass *reflect_define_complete_class(reflect_definition &definition, RClass *co
     RClass *klass;
     if constexpr (std::meta::has_template_arguments(std::meta::dealias(Type))) {
         klass = mrb_class_new(mrb, superclass);
-        definition.pending.emplace_back(&reflect_register_specialization<std::meta::dealias(Type)>, klass);
+        definition.pending.emplace_back(&reflect_register_specialization<std::meta::dealias(Type), Names>, klass);
     } else if constexpr (std::meta::has_identifier(std::meta::dealias(Type))) {
-        const mrb_sym name = reflect_intern<Type>(mrb);
+        const mrb_sym name = reflect_symbol<Type>(definition);
         if (mrb_const_defined_at(mrb, mrb_obj_value(outer), name))
             mrb_raisef(mrb, E_NAME_ERROR, "%n is already defined in %C", name, outer);
         klass = ::mrb_define_class_under_id(mrb, outer, name, superclass);
@@ -2917,7 +3028,7 @@ RClass *reflect_define_complete_class(reflect_definition &definition, RClass *co
     MRB_SET_INSTANCE_TT(klass, MRB_TT_CDATA);
     mrb_iv_set(mrb, mrb_obj_value(klass), reflect_reflected_key(mrb), mrb_true_value());
     mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), reflect_class_key<std::meta::dealias(std::meta::remove_cvref(Type))>(mrb), mrb_obj_value(klass));
-    RClass *const methods = ::mrb_define_module_under_id(mrb, klass, reflect_sym<kInstanceMethods>(mrb));
+    RClass *const methods = ::mrb_define_module_under_id(mrb, klass, reflect_symbol<kInstanceMethods>(mrb));
     mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), reflect_module_key<std::meta::dealias(std::meta::remove_cvref(Type))>(mrb), mrb_obj_value(methods));
     template for (constexpr std::meta::info base : direct) {
         reflect_class<base>(definition);
@@ -2926,18 +3037,20 @@ RClass *reflect_define_complete_class(reflect_definition &definition, RClass *co
     if constexpr (Options.virtual_overriders && requires { typename reflect_virtual_overrider<std::meta::dealias(Type)>::type; } &&
                   reflect_constructors<Type>().size() > 0) {
         MRB_DEFINE_ALLOCATOR(klass);
+        std::vector<mrb_sym> &virtuals = reflect_symbols_of(mrb).virtuals[&reflect_data_type_of<T>()];
+        template for (constexpr std::meta::info function : reflect_virtual_overrider<std::meta::dealias(Type)>::functions)
+            virtuals.push_back(reflect_symbol<function>(definition));
         [&]<std::size_t... I>(std::index_sequence<I...>) {
-            reflect_define_method<^^typename reflect_virtual_overrider<std::meta::dealias(Type)>::type, reflect_constructors<Type>()[I]...>(
-                mrb, klass, reflect_sym<kInitialize>(mrb));
+            reflect_define_method<^^typename reflect_virtual_overrider<std::meta::dealias(Type)>::type, reflect_constructors<Type>()[I]...>(definition, klass, reflect_symbol<kInitialize>(mrb));
         }(std::make_index_sequence<reflect_constructors<Type>().size()>{});
     } else if constexpr (!std::is_abstract_v<T> && reflect_constructors<Type>().size() > 0) {
         MRB_DEFINE_ALLOCATOR(klass);
         [&]<std::size_t... I>(std::index_sequence<I...>) {
-            reflect_define_method<Type, reflect_constructors<Type>()[I]...>(mrb, klass, reflect_sym<kInitialize>(mrb));
+            reflect_define_method<Type, reflect_constructors<Type>()[I]...>(definition, klass, reflect_symbol<kInitialize>(mrb));
         }(std::make_index_sequence<reflect_constructors<Type>().size()>{});
     } else if constexpr (std::is_default_constructible_v<T> && !std::is_abstract_v<T>) {
         MRB_DEFINE_ALLOCATOR(klass);
-        ::mrb_define_method_id(mrb, klass, reflect_sym<kInitialize>(mrb),
+        ::mrb_define_method_id(mrb, klass, reflect_symbol<kInitialize>(mrb),
                                [](mrb_state *const mrb, const mrb_value self) {
                                    reflect_lifetime_base &record = reflect_new_lifetime<T>(mrb, self);
                                    return reflect_translate_exceptions(mrb, [&] {
@@ -2979,7 +3092,7 @@ RClass *reflect_define_complete_class(reflect_definition &definition, RClass *co
         if constexpr (reflect_first_of_its_name(instance_methods, member)) {
             static constexpr auto overloads = std::define_static_array(reflect_overloads_in(instance_methods, member));
             [&]<std::size_t... I>(std::index_sequence<I...>) {
-                reflect_define_method<Type, overloads[I]...>(mrb, methods, reflect_intern<member>(mrb));
+                reflect_define_method<Type, overloads[I]...>(definition, methods, reflect_symbol<member>(definition));
             }(std::make_index_sequence<overloads.size()>{});
         }
     }
@@ -2999,7 +3112,7 @@ RClass *reflect_define_complete_class(reflect_definition &definition, RClass *co
             reflect_define_element_assignment<Type, member>(mrb, methods);
     }
     template for (constexpr std::meta::info field : reflect_fields<Type>())
-        reflect_define_field<field>(mrb, methods);
+        reflect_define_field<field>(definition, methods);
     template for (constexpr std::meta::info function : reflect_conversion_functions<Type>())
         reflect_define_conversion_function<Type, function>(mrb, methods);
     RClass *const singleton = mrb_class_ptr(mrb_singleton_class(mrb, mrb_obj_value(klass)));
@@ -3008,12 +3121,12 @@ RClass *reflect_define_complete_class(reflect_definition &definition, RClass *co
         if constexpr (reflect_first_of_its_name(class_methods, function)) {
             static constexpr auto overloads = std::define_static_array(reflect_overloads_in(class_methods, function));
             [&]<std::size_t... I>(std::index_sequence<I...>) {
-                reflect_define_method<Type, overloads[I]...>(mrb, singleton, reflect_intern<function>(mrb));
+                reflect_define_method<Type, overloads[I]...>(definition, singleton, reflect_symbol<function>(definition));
             }(std::make_index_sequence<overloads.size()>{});
         }
     }
     template for (constexpr std::meta::info member : reflect_static_data_members<Type>())
-        reflect_define_static_data_member<member>(mrb, klass, singleton);
+        reflect_define_static_data_member<member>(definition, klass, singleton);
     mrb_include_module(mrb, klass, methods);
     if constexpr (std::ranges::any_of(reflect_members<Type>(), [](const std::meta::info m) {
                       return std::meta::is_operator_function(m) && std::meta::operator_of(m) == std::meta::operators::op_parentheses;
@@ -3041,8 +3154,8 @@ RClass *reflect_define_complete_class(reflect_definition &definition, RClass *co
     return klass;
 }
 
-template <std::meta::info Operand, std::meta::info Namespace, auto Instances>
-void reflect_define_operators(reflect_definition &definition)
+template <std::meta::info Operand, std::meta::info Namespace, auto Instances, const auto &Names>
+void reflect_define_operators(reflect_definition<Names> &definition)
 {
     mrb_state *const mrb = definition.mrb;
     reflect_class<Operand>(definition);
@@ -3064,7 +3177,7 @@ void reflect_define_operators(reflect_definition &definition)
         if constexpr (reflect_first_of_its_name(added, function)) {
             static constexpr auto overloads = std::define_static_array(reflect_overloads_in(own, function));
             [&]<std::size_t... I>(std::index_sequence<I...>) {
-                reflect_define_method<Operand, overloads[I]...>(mrb, methods, reflect_intern<function>(mrb));
+                reflect_define_method<Operand, overloads[I]...>(definition, methods, reflect_symbol<function>(definition));
             }(std::make_index_sequence<overloads.size()>{});
         }
     }
@@ -3115,14 +3228,14 @@ consteval std::vector<std::meta::info> reflect_varargs_calls(const std::meta::in
     return calls;
 }
 
-template <std::meta::info Namespace, auto Instances = std::array<std::meta::info, 0>{}, bool Listed = true>
-RClass *reflect_define_namespace(reflect_definition &definition, RClass *const under)
+template <std::meta::info Namespace, auto Instances = std::array<std::meta::info, 0>{}, bool Listed = true, const auto &Names>
+RClass *reflect_define_namespace(reflect_definition<Names> &definition, RClass *const under)
 {
     mrb_state *const mrb = definition.mrb;
     RClass *outer = under;
     template for (constexpr std::meta::info scope : std::define_static_array(reflect_namespaces(Namespace)))
-        outer = ::mrb_define_module_under_id(mrb, outer, reflect_intern<scope>(mrb));
-    RClass *const module = ::mrb_define_module_under_id(mrb, outer, reflect_intern<Namespace>(mrb));
+        outer = ::mrb_define_module_under_id(mrb, outer, reflect_symbol<scope>(definition));
+    RClass *const module = ::mrb_define_module_under_id(mrb, outer, reflect_symbol<Namespace>(definition));
     RClass *const singleton = mrb_class_ptr(mrb_singleton_class(mrb, mrb_obj_value(module)));
     static constexpr auto functions = std::define_static_array([] consteval {
         std::vector<std::meta::info> all;
@@ -3137,25 +3250,25 @@ RClass *reflect_define_namespace(reflect_definition &definition, RClass *const u
         return all;
     }());
     template for (constexpr std::meta::info variable : variables)
-        reflect_define_static_data_member<variable>(mrb, module, singleton);
+        reflect_define_static_data_member<variable>(definition, module, singleton);
     template for (constexpr std::meta::info function : functions) {
         if constexpr (reflect_first_of_its_name(functions, function)) {
             static constexpr auto overloads = std::define_static_array(reflect_overloads_in(functions, function));
             [&]<std::size_t... I>(std::index_sequence<I...>) {
-                reflect_define_method<Namespace, overloads[I]...>(mrb, singleton, reflect_intern<function>(mrb));
+                reflect_define_method<Namespace, overloads[I]...>(definition, singleton, reflect_symbol<function>(definition));
             }(std::make_index_sequence<overloads.size()>{});
         }
     }
     template for (constexpr std::meta::info function : std::define_static_array(Listed ? reflect_varargs_functions(Namespace) : std::vector<std::meta::info>{})) {
         static constexpr auto calls = std::define_static_array(reflect_varargs_calls(function, reflect_varargs_lists<function>));
         if constexpr (calls.empty()) {
-            ::mrb_define_method_id(mrb, singleton, reflect_intern<function>(mrb), [](mrb_state *const mrb, const mrb_value) -> mrb_value {
+            ::mrb_define_method_id(mrb, singleton, reflect_symbol<function>(definition), [](mrb_state *const mrb, const mrb_value) -> mrb_value {
                 mrb_raisef(mrb, E_NOTIMP_ERROR, "the arguments of %n after its named parameters are not declared", mrb_get_mid(mrb));
                 std::unreachable();
             }, MRB_ARGS_ANY());
         } else {
             [&]<std::size_t... I>(std::index_sequence<I...>) {
-                reflect_define_method<std::meta::parent_of(calls[0]), calls[I]...>(mrb, singleton, reflect_intern<function>(mrb));
+                reflect_define_method<std::meta::parent_of(calls[0]), calls[I]...>(definition, singleton, reflect_symbol<function>(definition));
             }(std::make_index_sequence<calls.size()>{});
         }
     }
@@ -3168,11 +3281,10 @@ template <auto Classes, reflect_options Options = reflect_options{}>
 void reflect_define(mrb_state *const mrb, RClass *const under = nullptr)
 {
 #if defined(MRB_CPP_REFLECTOR_GENERATE)
-    static_cast<void>(reflect_presyms_printed<Classes>);
     if constexpr (Options.virtual_overriders) static_cast<void>(reflect_virtual_overriders_printed<Classes>);
     return;
 #endif
-    reflect_definition definition(mrb);
+    reflect_definition<reflect_call_names<Classes>> definition(mrb);
     template for (constexpr std::meta::info type : std::define_static_array(reflect_scopes(Classes))) {
         constexpr auto instances = reflect_instances<type, Classes, Options.templates>();
         if constexpr (std::meta::is_namespace(type))

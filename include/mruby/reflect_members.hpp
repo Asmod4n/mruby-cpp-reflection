@@ -767,59 +767,6 @@ consteval auto reflect_overloads()
     return std::define_static_array(same);
 }
 
-template <std::meta::info Type>
-consteval void reflect_names_into(std::vector<std::string_view> &names)
-{
-    template for (constexpr std::meta::info scope : std::define_static_array(reflect_namespaces(Type)))
-        names.push_back(std::define_static_string(reflect_class_name(scope)));
-    names.push_back(std::define_static_string(reflect_class_name(Type)));
-    template for (constexpr std::meta::info member : reflect_members<Type>())
-        names.push_back(reflect_identifier(member));
-    template for (constexpr std::meta::info function : reflect_static_functions<Type>())
-        names.push_back(reflect_identifier(function));
-    template for (constexpr std::meta::info member : reflect_static_data_members<Type>())
-        names.push_back(std::meta::identifier_of(member));
-    template for (constexpr std::meta::info field : reflect_fields<Type>())
-        names.push_back(std::meta::identifier_of(field));
-}
-
-template <std::meta::info Type>
-consteval void reflect_setter_names_into(std::vector<std::string_view> &names)
-{
-    template for (constexpr std::meta::info field : reflect_fields<Type>())
-        if constexpr (!std::meta::is_const_type(std::meta::type_of(field))) names.push_back(std::meta::identifier_of(field));
-    template for (constexpr std::meta::info member : reflect_static_data_members<Type>())
-        if constexpr (!std::meta::is_const_type(std::meta::type_of(member))) names.push_back(std::meta::identifier_of(member));
-}
-
-template <auto Classes>
-consteval std::string reflect_presym_entries()
-{
-    std::vector<std::string_view> names, setters;
-    template for (constexpr std::meta::info type : Classes) {
-        if constexpr (std::meta::is_type(type) && std::meta::is_class_type(std::meta::dealias(type)) && std::meta::is_complete_type(std::meta::dealias(type))) {
-            reflect_names_into<type>(names);
-            reflect_setter_names_into<type>(setters);
-        }
-    }
-    for (const std::string_view fixed : {"to_s", "to_str", "to_a", "to_ary", "to_h", "to_hash", "each", "initialize", "owner", "Enumerable"})
-        names.push_back(fixed);
-    const auto identifier = [](const std::string_view name) {
-        const auto word = [](const char c) { return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'); };
-        return !name.empty() && !(name[0] >= '0' && name[0] <= '9') && std::ranges::all_of(name, word);
-    };
-    std::erase_if(names, [&](const std::string_view name) { return !identifier(name); });
-    std::erase_if(setters, [&](const std::string_view name) { return !identifier(name); });
-    std::string out;
-    const auto entry = [&](const std::string_view name, const std::string_view suffix, const std::string_view macro) {
-        for (const std::string_view part : {std::string_view("    {\""), name, suffix, std::string_view("\", "), macro, std::string_view("("), name, std::string_view(")},\n")})
-            std::ranges::copy(part, std::back_inserter(out));
-    };
-    for (const std::string_view name : names) entry(name, "", "MRB_SYM");
-    for (const std::string_view name : setters) entry(name, "=", "MRB_SYM_E");
-    return out;
-}
-
 }
 
 #endif

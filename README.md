@@ -158,13 +158,19 @@ A compiler with `__cpp_impl_reflection`, today g++ 16 with `-freflection`,
 and [mruby-c-ext-helpers](https://github.com/Asmod4n/mruby-c-ext-helpers)
 for the value conversions.
 
-Every reflected name is a presym. The build finds each C++ source that
-contains `reflect_define<`, in `src/` and `test/` of every gem of the
-build and in the source that `spec.reflect` writes. Before the presym
-scan it compiles such a source once more; the object file carries the
-names in a section, and the build writes them to
-`build/<name>/include/mruby/presym/reflect.h`. The same compile carries
-the virtual overriders. Nothing of it is in the tree.
+Each call of `reflect_define` has one list of the names that its classes
+need, which the compiler builds, with each name once. When the call runs
+for a state, it interns each name of the list once and keeps the symbols
+in the `mrb_symbol_bridge` of that call, in the record of the gem for
+that state. A class that is defined later, when a value of its type
+reaches Ruby, has a list and a bridge of its own. The names that no class
+owns have one list, which the gem interns in its `gem_init`.
+
+The build finds each C++ source that contains `reflect_define<` and
+`virtual_overriders`, in `src/` and `test/` of every gem of the build and
+in the source that `spec.reflect` writes. It compiles such a source once
+more, and the object file carries the virtual overriders in a section.
+Nothing of it is in the tree.
 
 ## Tests
 

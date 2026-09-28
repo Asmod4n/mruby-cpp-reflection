@@ -56,7 +56,7 @@ if Object.const_defined?(:Reflected)
     assert_equal('y', other.label.to_s)
     assert_equal(r.total, other.total)
     assert_equal(1, Under::Plain.new.n)
-    assert_true(reflect_presym_ok?)
+    assert_true(reflect_symbols_ok?)
   end
 end
 

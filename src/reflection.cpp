@@ -253,6 +253,8 @@ extern "C" void mrb_mruby_cpp_reflection_gem_init(mrb_state *const mrb)
                mrb_cptr_value(mrb, new mrb_cpp_reflector::reflect_callbacks{std::this_thread::get_id()}));
     mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), mrb_cpp_reflector::reflect_lifetimes_key(mrb),
                mrb_cptr_value(mrb, new mrb_cpp_reflector::reflect_lifetimes()));
+    mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), mrb_cpp_reflector::reflect_symbols_key(mrb),
+               mrb_cptr_value(mrb, new mrb_cpp_reflector::reflect_symbols{mrb_cpp_reflector::reflect_intern_names(mrb, mrb_cpp_reflector::reflect_gem_names), {}, {}}));
 }
 
 extern "C" void mrb_mruby_cpp_reflection_gem_final(mrb_state *const mrb)
@@ -271,6 +273,8 @@ extern "C" void mrb_mruby_cpp_reflection_gem_final(mrb_state *const mrb)
     mrb_iv_remove(mrb, mrb_obj_value(mrb->object_class), mrb_cpp_reflector::reflect_callbacks_key(mrb));
     delete &mrb_cpp_reflector::reflect_lifetimes_of(mrb);
     mrb_iv_remove(mrb, mrb_obj_value(mrb->object_class), mrb_cpp_reflector::reflect_lifetimes_key(mrb));
+    delete &mrb_cpp_reflector::reflect_symbols_of(mrb);
+    mrb_iv_remove(mrb, mrb_obj_value(mrb->object_class), mrb_cpp_reflector::reflect_symbols_key(mrb));
 }
 #else
 extern "C" void mrb_mruby_cpp_reflection_gem_init(mrb_state *const mrb)
