@@ -135,6 +135,10 @@ is a number or a Symbol (`takes_ownership :set_parent, by: 0`,
 The build config wins over the gem, and rake prints one line for each
 declaration it replaces.
 
+`spec.reflect_packages` records the name, the query and the version that
+`search_package` found. A `.lifetime` file of a found package is planned
+as a TOML file that a future native C++ library reads, not this gem.
+
 ## Generated bindings
 
 `spec.reflect headers: ['lib.h'], scopes: ['lib']` in `mrbgem.rake`
