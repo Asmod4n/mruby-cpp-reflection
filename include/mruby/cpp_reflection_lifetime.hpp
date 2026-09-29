@@ -87,7 +87,8 @@ struct reflect_object_lifetime_word {
 consteval const char *reflect_lifetime_function_name(const std::meta::info function)
 {
     if (std::meta::is_type(function) && std::meta::is_class_type(function)) return std::define_static_string("initialize");
-    if (!std::meta::is_function(function) || !std::meta::has_identifier(function)) throw "a lifetime word names a function or a class by its reflection";
+    if (std::meta::is_nonstatic_data_member(function) && std::meta::has_identifier(function)) return std::define_static_string(std::meta::identifier_of(function));
+    if (!std::meta::is_function(function) || !std::meta::has_identifier(function)) throw "a lifetime word names a function, a data member or a class by its reflection";
     return std::define_static_string(std::meta::identifier_of(function));
 }
 

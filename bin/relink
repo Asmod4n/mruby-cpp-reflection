@@ -16,12 +16,18 @@ link = ->(*extra) { system("#{driver} #{(arguments + extra).map { |a| %("#{a}") 
 nm = [ENV['NM'], 'llvm-nm', 'nm'].compact.find { |tool| system(tool, '--version', out: File::NULL, err: File::NULL) }
 link.() if nm.nil?
 
+# A shared library can have no symbol table beside the dynamic one, as
+# Fedora ships libstdc++.so, and nm -g then lists nothing; -D reads the
+# dynamic table, where a name carries its version after an @.
 def symbols(nm, file, kind)
-  output, status = Open3.capture2e(nm, '-P', '-g', file)
+  shared = file.match?(/\.(so|dylib)\z|\.so\.\d/)
+  output, status = Open3.capture2e(nm, '-P', '-g', *(shared ? ['-D'] : []), file)
+  output, status = Open3.capture2e(nm, '-P', '-g', file) if shared && !status.success?
   return [] unless status.success?
   output.each_line.filter_map do |line|
     name, type = line.split(' ', 3)
     next if name.nil? || type.nil? || name.end_with?(':')
+    name = name.sub(/@.*\z/, '')
     case kind
     when :needed then name if type == 'U'
     when :defined then name unless %w[U w v].include?(type)

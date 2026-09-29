@@ -345,6 +345,14 @@ consteval std::string_view reflect_object_lifetime_error(const std::meta::info k
 #if !defined(__GLIBC__)
         if (word.word == reflect_word::stack_reserve) return reflect_object_lifetime_message(klass, reflect_lifetime_function_name(word.function), "has a stack_reserve, which reads the thread stack with pthread_getattr_np");
 #endif
+        if (word.word == reflect_word::borrowed && std::meta::is_nonstatic_data_member(word.function)) {
+            const std::meta::info type = std::meta::dealias(std::meta::type_of(word.function));
+            if (word.owner != klass || std::meta::parent_of(word.function) != klass)
+                return reflect_object_lifetime_message(klass, reflect_lifetime_function_name(word.function), "is a data member, and owner: names no class that holds it and declares it");
+            if (!std::meta::is_pointer_type(type) || !std::meta::is_class_type(std::meta::dealias(std::meta::remove_cv(std::meta::remove_pointer(type)))))
+                return reflect_object_lifetime_message(klass, reflect_lifetime_function_name(word.function), "is a data member that holds no pointer to a class");
+            continue;
+        }
         if (word.word == reflect_word::borrowed && word.owner != std::meta::info{} &&
             (!std::meta::is_function(word.owner) || std::meta::is_class_member(word.owner) || !std::meta::parameters_of(word.owner).empty() ||
              !std::meta::is_pointer_type(std::meta::dealias(std::meta::return_type_of(word.owner))) || reflect_result_class(word.owner) == ^^void))
@@ -893,8 +901,16 @@ consteval bool reflect_owns_through_pointer(const std::meta::info field)
            std::meta::is_class_type(std::meta::dealias(std::meta::template_arguments_of(bare)[0]));
 }
 
+consteval bool reflect_borrowed_field(const std::meta::info field)
+{
+    const std::meta::info holder = std::meta::parent_of(field);
+    if (!std::meta::is_class_type(holder) || !std::meta::is_pointer_type(std::meta::dealias(std::meta::type_of(field)))) return false;
+    return std::ranges::any_of(reflect_words_of(holder), [&](const reflect_object_lifetime_word &w) { return w.word == reflect_word::borrowed && w.function == field; });
+}
+
 consteval bool reflect_owns(const std::meta::info field)
 {
+    if (reflect_borrowed_field(field)) return true;
     if (std::meta::is_reference_type(std::meta::type_of(field))) return false;
     const std::meta::info bare = reflect_bare(std::meta::type_of(field));
     return std::meta::is_class_type(bare) && !reflect_is_variant(bare) && !reflect_is_shared_ptr(bare) && !reflect_is_view(bare);
@@ -2429,7 +2445,8 @@ void *reflect_field_address(void *const holder)
 {
     using T = [:std::meta::parent_of(Field):];
     auto &field = static_cast<T *>(holder)->[:Field:];
-    if constexpr (reflect_owns_through_pointer(Field)) return const_cast<void *>(static_cast<const void *>(field.get()));
+    if constexpr (reflect_borrowed_field(Field)) return const_cast<void *>(static_cast<const void *>(field));
+    else if constexpr (reflect_owns_through_pointer(Field)) return const_cast<void *>(static_cast<const void *>(field.get()));
     else return const_cast<void *>(static_cast<const void *>(std::addressof(field)));
 }
 
@@ -2438,7 +2455,9 @@ mrb_value reflect_child(mrb_state *const mrb, const mrb_value self)
 {
     using T = [:std::meta::parent_of(Field):];
     constexpr std::meta::info bare = reflect_bare(std::meta::type_of(Field));
-    constexpr std::meta::info held = reflect_owns_through_pointer(Field) ? std::meta::template_arguments_of(bare)[0] : std::meta::type_of(Field);
+    constexpr std::meta::info held = reflect_borrowed_field(Field)       ? std::meta::remove_pointer(std::meta::dealias(std::meta::type_of(Field)))
+                                     : reflect_owns_through_pointer(Field) ? std::meta::template_arguments_of(bare)[0]
+                                                                           : std::meta::type_of(Field);
     using C = [:std::meta::dealias(std::meta::remove_cv(held)):];
     constexpr bool constant = std::meta::is_const_type(held) || std::meta::is_const_type(std::meta::type_of(Field));
     const bool frozen = constant || mrb_frozen_p(mrb_obj_ptr(self));

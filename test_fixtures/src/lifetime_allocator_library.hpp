@@ -44,6 +44,21 @@ settings &current_settings();
 int current_width();
 }
 
+/* As ImGuiIO::Fonts points to the font atlas that the context keeps, a
+ * class can hold a pointer to an object that outlives it. io_use_atlas
+ * points the field at the first or the second atlas, or at none. */
+namespace c_library {
+struct atlas {
+    int width = 0;
+};
+struct io {
+    atlas *fonts = nullptr;
+    int frame = 0;
+};
+void io_use_atlas(io &target, int which);
+int atlas_width(int which);
+}
+
 /* Functions that make handles of types that no declaration names. The
  * build refuses to reflect them, so lifetime_allocator.cpp only checks
  * them with the function that the compile runs, and nothing defines
@@ -82,6 +97,10 @@ inline constexpr auto mruby::cpp_reflection::object_lifetime<^^c_library_context
 template <>
 inline constexpr auto mruby::cpp_reflection::object_lifetime<^^c_library::settings> = std::array{
     borrowed(^^c_library::current_settings, {.owner = ^^c_library::current_context}),
+};
+template <>
+inline constexpr auto mruby::cpp_reflection::object_lifetime<^^c_library::io> = std::array{
+    borrowed(^^c_library::io::fonts, {.owner = ^^c_library::io}),
 };
 template <>
 inline constexpr auto mruby::cpp_reflection::object_lifetime<^^c_library::counted> = std::array{

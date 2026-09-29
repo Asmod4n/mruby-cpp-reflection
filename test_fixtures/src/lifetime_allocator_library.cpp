@@ -121,3 +121,14 @@ c_library_context *c_library::static_context()
     static c_library_context kept{0};
     return &kept;
 }
+
+namespace c_library {
+static atlas &atlas_at(const int which)
+{
+    static atlas first;
+    static atlas second;
+    return which == 1 ? first : second;
+}
+void io_use_atlas(io &target, const int which) { target.fonts = which == 0 ? nullptr : &atlas_at(which); }
+int atlas_width(const int which) { return atlas_at(which).width; }
+}

@@ -106,6 +106,11 @@ if Object.const_defined?(:CLibrary)
     # part, so it takes no argument and returns a pointer to a class.
     assert_true errors['owner_takes_argument'].include?('current_settings names as owner: no function that takes no argument and returns a pointer to a class')
     assert_nil errors['right_owner']
+    # A borrowed data member names the class that holds it as its owner,
+    # and holds a pointer to a class.
+    assert_true errors['field_owner_elsewhere'].include?('fonts is a data member, and owner: names no class that holds it and declares it')
+    assert_true errors['field_holds_no_pointer'].include?('frame is a data member that holds no pointer to a class')
+    assert_nil errors['right_field']
     assert_nil errors['right']
   end
 
@@ -222,6 +227,48 @@ if Object.const_defined?(:CLibrary)
     assert_nil CLibrary.current_context
     e = assert_raise(TypeError) { CLibrary.current_settings }
     assert_include e.message, 'current_context'
+  end
+
+  assert('a borrowed pointer field is the object it points to, changed in place') do
+    # io.fonts points to an atlas that C++ keeps, as ImGuiIO::Fonts does.
+    # Without the declaration the field would be a frozen copy, and a
+    # change would never reach the atlas.
+    io = CLibrary::Io.new
+    assert_nil io.fonts
+    CLibrary.io_use_atlas(io, 1)
+    fonts = io.fonts
+    assert_false fonts.frozen?
+    fonts.width = 640
+    assert_equal 640, CLibrary.atlas_width(1)
+    assert_same fonts, io.fonts
+  end
+
+  assert('a borrowed pointer field is read again at each access') do
+    # The field can point to another atlas or to none between two reads.
+    # The object of the old atlas ends, so it cannot reach the old memory.
+    io = CLibrary::Io.new
+    CLibrary.io_use_atlas(io, 1)
+    first = io.fonts
+    CLibrary.io_use_atlas(io, 2)
+    second = io.fonts
+    assert_not_same first, second
+    second.width = 7
+    assert_equal 7, CLibrary.atlas_width(2)
+    assert_raise(TypeError) { first.width }
+    CLibrary.io_use_atlas(io, 0)
+    assert_nil io.fonts
+  end
+
+  assert('a borrowed pointer field keeps the Ruby object that holds it') do
+    # The object of the atlas keeps the io that points to it, so the io
+    # stays while Ruby holds the atlas.
+    io = CLibrary::Io.new
+    CLibrary.io_use_atlas(io, 1)
+    fonts = io.fonts
+    io = nil
+    full_gc
+    fonts.width = 3
+    assert_equal 3, CLibrary.atlas_width(1)
   end
 
   assert('a borrowed pointer to an object that the gem does not track raises') do

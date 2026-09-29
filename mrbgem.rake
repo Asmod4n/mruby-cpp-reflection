@@ -195,8 +195,8 @@ module MRuby
         add(word: :deallocator, function: function_name(function), results_of: allocators.map { |a| function_name(a) })
       end
 
-      def borrowed(function)
-        add(word: :borrowed, function: function_name(function))
+      def borrowed(function, owner: nil)
+        add(word: :borrowed, function: function_name(function), owner: owner && function_name(owner))
       end
 
       def shared_ownership(increment:, decrement:)
@@ -300,7 +300,8 @@ module MRuby
                   else ".error = #{reflect_object_lifetime_answer_text(word[:expected])}"
                   end
           ["#{call}(#{function}, {#{given}, .sets_errno = #{word[:sets_errno]}})"]
-        when :borrowed then ["#{call}(#{function})"]
+        when :borrowed
+          [word[:owner].nil? ? "#{call}(#{function})" : "#{call}(#{function}, {.owner = #{reflect_object_lifetime_function_text(class_name, word[:owner])}})"]
         when :stack_reserve then ["#{call}(#{function}, #{word[:stack_reserve]})"]
         when :threadsafe then ["#{call}(#{function}, false)"]
         when :allocator

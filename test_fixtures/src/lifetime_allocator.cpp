@@ -75,6 +75,9 @@ constexpr auto no_deallocator = std::array{allocator(^^c_library_undeclared::loo
 constexpr auto no_decrement = std::array{shared_ownership({.increment = ^^c_library::counted_ref, .decrement = ^^c_library::counted_find})};
 constexpr auto owner_takes_argument = std::array{borrowed(^^c_library::current_settings, {.owner = ^^c_library::destroy_context})};
 constexpr auto right_owner = std::array{borrowed(^^c_library::current_settings, {.owner = ^^c_library::current_context})};
+constexpr auto field_owner_elsewhere = std::array{borrowed(^^c_library::io::fonts, {.owner = ^^c_library::atlas})};
+constexpr auto field_holds_no_pointer = std::array{borrowed(^^c_library::io::frame, {.owner = ^^c_library::io})};
+constexpr auto right_field = std::array{borrowed(^^c_library::io::fonts, {.owner = ^^c_library::io})};
 constexpr auto right = std::array{allocator(^^c_library::handle_open, {.output_parameter = "made"}), allocator(^^c_library::handle_popen),
                                   deallocator(^^c_library::handle_close, {.results_of = ^^c_library::handle_open}),
                                   deallocator(^^c_library::handle_pclose, {.results_of = ^^c_library::handle_popen})};
@@ -95,6 +98,9 @@ static mrb_value allocator_declaration_errors_m(mrb_state *const mrb, mrb_value)
     set("no_decrement", reflect_object_lifetime_error(^^c_library::counted, allocated_wrong::no_decrement));
     set("owner_takes_argument", reflect_object_lifetime_error(^^c_library::settings, allocated_wrong::owner_takes_argument));
     set("right_owner", reflect_object_lifetime_error(^^c_library::settings, allocated_wrong::right_owner));
+    set("field_owner_elsewhere", reflect_object_lifetime_error(^^c_library::io, allocated_wrong::field_owner_elsewhere));
+    set("field_holds_no_pointer", reflect_object_lifetime_error(^^c_library::io, allocated_wrong::field_holds_no_pointer));
+    set("right_field", reflect_object_lifetime_error(^^c_library::io, allocated_wrong::right_field));
     set("right", reflect_object_lifetime_error(^^c_library::handle, allocated_wrong::right));
     return errors;
 }
