@@ -119,6 +119,22 @@ assert('ReflectObjectLifetimeTest: results of gives one entry per allocator') do
   end
 end
 
+# borrowed takes owner:, the function that answers the object that holds
+# a borrowed reference, or the class that holds a borrowed pointer field.
+# Each is its C++ name, as a function beside the class is.
+assert('ReflectObjectLifetimeTest: borrowed names its owner') do
+  @dir = Dir.mktmpdir
+  @spec = MRuby::Gem::Specification.new(@dir)
+  begin
+    declare('lib::settings') { borrowed 'lib::current_settings', owner: 'lib::current_context' }
+    declare('ImGuiIO') { borrowed :Fonts, owner: 'ImGuiIO' }
+    assert_true(header.include?('mruby::cpp_reflection::borrowed(^^::lib::current_settings, {.owner = ^^::lib::current_context})'))
+    assert_true(header.include?('mruby::cpp_reflection::borrowed(^^::ImGuiIO::Fonts, {.owner = ^^::ImGuiIO})'))
+  ensure
+    FileUtils.remove_entry(@dir)
+  end
+end
+
 # An unchanged declaration leaves the header alone, so the build that
 # follows compiles nothing again.
 assert('ReflectObjectLifetimeTest: an unchanged declaration does not touch the header') do

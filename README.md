@@ -126,6 +126,15 @@ lifetime at runtime. The words:
   caller does not free. The call returns the Ruby object that already
   owns the C++ object, and raises `TypeError` when no Ruby object owns
   it. A null pointer is `nil`.
+- `borrowed(^^lib::settings_of, {.owner = ^^lib::current})` - the
+  function returns a reference or a pointer into the object that `owner`
+  returns. The answer is a part of that object: not frozen, the same Ruby
+  object on each call, and it keeps the Ruby object of the owner.
+- `borrowed(^^lib::Io::fonts, {.owner = ^^lib::Io})` - the pointer field
+  `fonts` of `Io` points to an object that lives as long as the `Io`.
+  The field is that object, not a frozen copy: it is read again at each
+  access, a null field is `nil`, the object of an old target ends when
+  the field points elsewhere, and it keeps the Ruby object of the `Io`.
 
 `spec.reflect_object_lifetime 'lib::Klass' do ... end` in `mrbgem.rake` or
 in the `conf.gem` block of the build config writes the same C++ into
@@ -134,6 +143,7 @@ headers of every class that it names. The words take the same arguments:
 a function of the class is a Symbol, the constructors are `:initialize`,
 a function beside the class is its C++ name as a String, and a position
 is a number or a Symbol (`takes_ownership :set_parent, by: 0`,
+`borrowed :fonts, owner: 'lib::Io'`,
 `errors :open, error: :negative, sets_errno: true`,
 `threadsafe :start, :no`, `deallocator 'lib::close', results_of: 'lib::open'`).
 The build config wins over the gem, and rake prints one line for each
