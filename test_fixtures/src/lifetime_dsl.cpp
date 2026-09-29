@@ -16,6 +16,9 @@
 #include <mruby/compile.h>
 #include <mruby/hash.h>
 #include <mruby/variable.h>
+#include <array>
+#include <cstdio>
+#include <string>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -72,17 +75,34 @@ constexpr auto undeclared_classes = mruby::cpp_reflection::reflect<^^UndeclaredT
 /* A test that expects a memory fault runs its part in a child process.
  * It answers whether the child ended by a signal or with a status other
  * than 0, which is how glibc and AddressSanitizer end a process that
- * frees memory twice. */
+ * frees memory twice. The standard error of the child goes into a pipe:
+ * the report of the expected fault is read here, so that it does not
+ * reach the log of the test run as a fault of the run. A report that
+ * names no fault of freed memory goes on to the standard error of the
+ * test run. */
 static bool fails_in_child(void (*const run)())
 {
+    std::array<int, 2> ends{};
+    if (pipe(ends.data()) != 0) return false;
     const pid_t child = fork();
     if (child == 0) {
+        close(ends[0]);
+        dup2(ends[1], STDERR_FILENO);
+        close(ends[1]);
         run();
         _exit(0);
     }
+    close(ends[1]);
+    std::string report;
+    std::array<char, 4096> buffer{};
+    for (ssize_t n = 0; (n = read(ends[0], buffer.data(), buffer.size())) > 0;) report.append(buffer.data(), static_cast<std::size_t>(n));
+    close(ends[0]);
     int status = 0;
     waitpid(child, &status, 0);
-    return !WIFEXITED(status) || WEXITSTATUS(status) != 0;
+    const bool freed = report.empty() || report.contains("AddressSanitizer: heap-use-after-free") || report.contains("AddressSanitizer: attempting double-free") ||
+                       report.contains("double free");
+    if (!freed) std::fwrite(report.data(), 1, report.size(), stderr);
+    return freed && (!WIFEXITED(status) || WEXITSTATUS(status) != 0);
 }
 
 /* The trace "today" of the lifetime model: set_parent links two objects
