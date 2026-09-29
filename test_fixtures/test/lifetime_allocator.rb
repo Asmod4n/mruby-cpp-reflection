@@ -233,7 +233,7 @@ if Object.const_defined?(:CLibrary)
     # io.fonts points to an atlas that C++ keeps, as ImGuiIO::Fonts does.
     # Without the declaration the field would be a frozen copy, and a
     # change would never reach the atlas.
-    io = CLibrary::Io.new
+    io = CLibrary.io_make
     assert_nil io.fonts
     CLibrary.io_use_atlas(io, 1)
     fonts = io.fonts
@@ -246,7 +246,7 @@ if Object.const_defined?(:CLibrary)
   assert('a borrowed pointer field is read again at each access') do
     # The field can point to another atlas or to none between two reads.
     # The object of the old atlas ends, so it cannot reach the old memory.
-    io = CLibrary::Io.new
+    io = CLibrary.io_make
     CLibrary.io_use_atlas(io, 1)
     first = io.fonts
     CLibrary.io_use_atlas(io, 2)
@@ -262,7 +262,7 @@ if Object.const_defined?(:CLibrary)
   assert('a borrowed pointer field keeps the Ruby object that holds it') do
     # The object of the atlas keeps the io that points to it, so the io
     # stays while Ruby holds the atlas.
-    io = CLibrary::Io.new
+    io = CLibrary.io_make
     CLibrary.io_use_atlas(io, 1)
     fonts = io.fonts
     io = nil

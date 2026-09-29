@@ -45,8 +45,9 @@ int current_width();
 }
 
 /* As ImGuiIO::Fonts points to the font atlas that the context keeps, a
- * class can hold a pointer to an object that outlives it. io_use_atlas
- * points the field at the first or the second atlas, or at none. */
+ * class can hold a pointer to an object that outlives it. io_make
+ * answers an io, which Ruby then owns, and io_use_atlas points its field
+ * at the first or the second atlas, or at none. */
 namespace c_library {
 struct atlas {
     int width = 0;
@@ -55,6 +56,7 @@ struct io {
     atlas *fonts = nullptr;
     int frame = 0;
 };
+io io_make();
 void io_use_atlas(io &target, int which);
 int atlas_width(int which);
 }

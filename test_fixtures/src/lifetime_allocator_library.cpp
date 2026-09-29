@@ -129,6 +129,7 @@ static atlas &atlas_at(const int which)
     static atlas second;
     return which == 1 ? first : second;
 }
+io io_make() { return {}; }
 void io_use_atlas(io &target, const int which) { target.fonts = which == 0 ? nullptr : &atlas_at(which); }
 int atlas_width(const int which) { return atlas_at(which).width; }
 }
