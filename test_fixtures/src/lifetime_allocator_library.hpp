@@ -61,6 +61,10 @@ io io_make();
  * a wrapper; only a member swap of a class asks whether the class is
  * swappable. */
 int swap(int a, int b);
+/* ImU32 is an unsigned int, as mrb_sym is a uint32_t and mrb_bool a
+ * uint8_t. Reflection sees the type and not the alias, so these are
+ * numbers. */
+unsigned int with_alpha(unsigned int rgb, unsigned char alpha);
 void io_use_atlas(io &target, int which);
 int atlas_width(int which);
 }

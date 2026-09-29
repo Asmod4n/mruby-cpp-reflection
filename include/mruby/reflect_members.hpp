@@ -154,8 +154,7 @@ consteval char reflect_get_args_letter(const std::meta::info type)
         return std::meta::is_class_type(to) ? 'o' : '\0';
     }
     if (t == std::meta::dealias(^^mrb_value)) return 'o';
-    if (t == ^^bool || t == std::meta::dealias(^^mrb_bool)) return 'b';
-    if (t == std::meta::dealias(^^mrb_sym)) return 'n';
+    if (t == ^^bool) return 'b';
     if (t == ^^RClass *) return 'c';
     if (t == std::meta::dealias(^^std::string_view)) return 's';
     if (t == std::meta::dealias(^^std::span<const mrb_value>)) return '*';

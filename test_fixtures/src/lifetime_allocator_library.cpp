@@ -131,6 +131,7 @@ static atlas &atlas_at(const int which)
 }
 io io_make() { return {}; }
 int swap(const int a, const int b) { return b * 10 + a; }
+unsigned int with_alpha(const unsigned int rgb, const unsigned char alpha) { return (static_cast<unsigned int>(alpha) << 24) | (rgb & 0xFFFFFFu); }
 void io_use_atlas(io &target, const int which) { target.fonts = which == 0 ? nullptr : &atlas_at(which); }
 int atlas_width(const int which) { return atlas_at(which).width; }
 }

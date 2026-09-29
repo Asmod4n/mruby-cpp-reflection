@@ -229,6 +229,14 @@ if Object.const_defined?(:CLibrary)
     assert_include e.message, 'current_context'
   end
 
+  assert('an unsigned int and an unsigned char parameter take numbers') do
+    # A color of Dear ImGui is an unsigned int. The gem read every
+    # uint32_t as mrb_sym and every uint8_t as mrb_bool, because reflection
+    # does not keep the alias, so a color raised TypeError.
+    assert_equal 0xFF203040, CLibrary.with_alpha(0x203040, 255)
+    assert_raise(RangeError) { CLibrary.with_alpha(0x203040, 256) }
+  end
+
   assert('a function of a namespace named swap is reflected') do
     # The check whether a class is swappable belongs to a member swap; a
     # namespace is no type, and the check refused the whole namespace.
