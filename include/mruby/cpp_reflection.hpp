@@ -206,6 +206,12 @@ consteval std::meta::info reflect_lent_class(const std::meta::info type)
     return ^^void;
 }
 
+consteval std::meta::info reflect_result_class(const std::meta::info function)
+{
+    if (std::meta::is_constructor(function)) return ^^void;
+    return reflect_lent_class(std::meta::return_type_of(function));
+}
+
 consteval bool reflect_releases_class(const std::meta::info function, const std::meta::info klass)
 {
     return reflect_releases(function) && reflect_lent_class(std::meta::type_of(std::meta::parameters_of(function)[0])) == klass;
@@ -248,7 +254,7 @@ consteval bool reflect_takes_only_copies(const std::meta::info function)
 
 consteval bool reflect_involves(const std::meta::info function, const std::meta::info klass)
 {
-    if (reflect_made_class(function) == klass) return true;
+    if (reflect_made_class(function) == klass || reflect_result_class(function) == klass) return true;
     if (reflect_skip(function) == 1 && reflect_bare(std::meta::type_of(std::meta::parameters_of(function)[0])) == klass) return true;
     if (std::meta::is_class_member(function) && !std::meta::is_static_member(function) && std::meta::dealias(std::meta::parent_of(function)) == klass) return true;
     return std::ranges::any_of(reflect_given_parameters(function), [&](const std::meta::info p) { return reflect_lent_class(std::meta::type_of(p)) == klass; });
@@ -339,6 +345,10 @@ consteval std::string_view reflect_object_lifetime_error(const std::meta::info k
 #if !defined(__GLIBC__)
         if (word.word == reflect_word::stack_reserve) return reflect_object_lifetime_message(klass, reflect_lifetime_function_name(word.function), "has a stack_reserve, which reads the thread stack with pthread_getattr_np");
 #endif
+        if (word.word == reflect_word::borrowed && word.owner != std::meta::info{} &&
+            (!std::meta::is_function(word.owner) || std::meta::is_class_member(word.owner) || !std::meta::parameters_of(word.owner).empty() ||
+             !std::meta::is_pointer_type(std::meta::dealias(std::meta::return_type_of(word.owner))) || reflect_result_class(word.owner) == ^^void))
+            return reflect_object_lifetime_message(klass, reflect_lifetime_function_name(word.function), "names as owner: no function that takes no argument and returns a pointer to a class");
         const std::vector<std::meta::info> functions = reflect_functions_named(klass, word.function);
         if (functions.empty()) return reflect_object_lifetime_message(klass, reflect_lifetime_function_name(word.function), "is no function of the class and no function beside it that takes or makes the class");
         std::size_t applies = 0;
@@ -378,7 +388,9 @@ consteval std::string_view reflect_object_lifetime_error(const std::meta::info k
                 if (reflect_releases_class(function, klass)) applies++;
                 break;
             case reflect_word::borrowed:
-                if (reflect_made_class(function) == klass && reflect_output_position(function) == reflect_nowhere) applies++;
+                if (word.owner == std::meta::info{} ? reflect_made_class(function) == klass && reflect_output_position(function) == reflect_nowhere
+                                                    : reflect_result_class(function) == klass && !std::meta::is_class_member(function))
+                    applies++;
                 break;
             case reflect_word::stack_reserve:
             case reflect_word::shared_ownership: applies++; break;
@@ -387,6 +399,8 @@ consteval std::string_view reflect_object_lifetime_error(const std::meta::info k
         if (applies > 0) continue;
         if (word.word == reflect_word::allocator) return reflect_object_lifetime_message(klass, reflect_lifetime_function_name(word.function), "makes no object of the class");
         if (word.word == reflect_word::deallocator) return reflect_object_lifetime_message(klass, reflect_lifetime_function_name(word.function), "takes no pointer to the class as its only parameter");
+        if (word.word == reflect_word::borrowed && word.owner != std::meta::info{})
+            return reflect_object_lifetime_message(klass, reflect_lifetime_function_name(word.function), "is a member of a class or returns no pointer and no reference to the class");
         if (word.word == reflect_word::borrowed) return reflect_object_lifetime_message(klass, reflect_lifetime_function_name(word.function), "returns no pointer to the class");
         return reflect_object_lifetime_message(klass, reflect_lifetime_function_name(word.function), "has no pointer or reference to a class at the named parameter");
     }
@@ -419,6 +433,7 @@ consteval std::vector<std::meta::info> reflect_declaring_classes(const std::meta
     if (reflect_skip(function) == 1) add(reflect_bare(std::meta::type_of(std::meta::parameters_of(function)[0])));
     for (const std::meta::info p : reflect_given_parameters(function)) add(reflect_lent_class(std::meta::type_of(p)));
     add(reflect_made_class(function));
+    add(reflect_result_class(function));
     return classes;
 }
 
@@ -486,7 +501,7 @@ consteval reflect_function_lifetime reflect_object_lifetime_for(const std::meta:
                 lifetime.allocates = true;
                 break;
             case reflect_word::borrowed:
-                if (reflect_made_class(function) != klass) continue;
+                if (reflect_made_class(function) != klass && (word.owner == std::meta::info{} || reflect_result_class(function) != klass)) continue;
                 if (lifetime.borrowed) throw reflect_declared_twice(function, "borrowed");
                 lifetime.borrowed = true;
                 break;
@@ -522,6 +537,15 @@ consteval bool reflect_declares(const std::meta::info type, const std::meta::inf
         }
     }
     return false;
+}
+
+consteval std::meta::info reflect_owner_function(const std::meta::info function)
+{
+    const std::meta::info klass = reflect_result_class(function);
+    if (klass == ^^void || std::meta::is_class_member(function)) return ^^void;
+    for (const reflect_object_lifetime_word &word : reflect_words_of(klass))
+        if (word.word == reflect_word::borrowed && word.owner != std::meta::info{} && std::ranges::contains(reflect_functions_named(klass, word.function), function)) return word.owner;
+    return ^^void;
 }
 
 consteval std::meta::info reflect_deallocator_for(const std::meta::info function)
@@ -623,6 +647,7 @@ inline reflect_lifetimes &reflect_lifetimes_of(mrb_state *const mrb)
 }
 
 void reflect_before_declared_call(mrb_state *mrb, mrb_value self, const reflect_function_lifetime &declared);
+void reflect_take_ownership(mrb_state *mrb, reflect_lifetime_base &of, reflect_lifetime_base &by);
 mrb_value reflect_after_declared_call(mrb_state *mrb, mrb_value self, const reflect_function_lifetime &declared, mrb_value answer, mrb_value output, int error_number);
 
 struct reflect_output_scope {
@@ -1318,6 +1343,16 @@ mrb_value reflect_borrowed(mrb_state *const mrb, T *const ref, const mrb_value o
     if (frozen) mrb_obj_freeze(mrb, object);
     reflect_identity_set(record);
     return object;
+}
+
+template <class T>
+mrb_value reflect_borrowed_part(mrb_state *const mrb, T *const part, const mrb_value owner)
+{
+    using U = std::remove_const_t<T>;
+    if (RObject *const known = reflect_known(mrb, const_cast<U *>(part)); known != nullptr) return mrb_obj_value(known);
+    const mrb_value made = reflect_borrowed<U>(mrb, const_cast<U *>(part), owner, std::is_const_v<T>);
+    reflect_take_ownership(mrb, *reflect_record(mrb, made), *reflect_record(mrb, owner));
+    return made;
 }
 
 template <class T>
@@ -2044,6 +2079,21 @@ mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
             } else {
                 return std::apply([&](auto &...held) -> mrb_value { return reflect_result(mrb, self, [:Function:](*object, reflect_pass(held)...)); }, args);
             }
+        });
+    } else if constexpr (reflect_owner_function(Function) != ^^void) {
+        constexpr std::meta::info owner = reflect_owner_function(Function);
+        using W = [:reflect_result_class(owner):];
+        return reflect_translate_exceptions(mrb, [&] {
+            auto args = reflect_get_args<Function, 0, Count>(mrb);
+            W *const whole = const_cast<W *>([:owner:]());
+            RObject *const known = whole == nullptr ? nullptr : reflect_known(mrb, whole);
+            if (known == nullptr) [[unlikely]]
+                mrb_raisef(mrb, E_TYPE_ERROR, "%s returned an object that no Ruby object owns", std::define_static_string(std::meta::identifier_of(owner)));
+            const mrb_value kept = mrb_obj_value(known);
+            mrb_gc_protect(mrb, kept);
+            auto &&part = std::apply([&](auto &...held) -> decltype(auto) { return [:Function:](reflect_pass(held)...); }, args);
+            if constexpr (std::is_pointer_v<std::remove_reference_t<decltype(part)>>) return part == nullptr ? mrb_nil_value() : reflect_borrowed_part(mrb, part, kept);
+            else return reflect_borrowed_part(mrb, std::addressof(part), kept);
         });
     } else if constexpr (!std::meta::is_class_member(Function)) {
         return reflect_translate_exceptions(mrb, [&] {

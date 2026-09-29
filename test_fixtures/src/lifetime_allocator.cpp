@@ -73,6 +73,8 @@ constexpr auto makes_nothing = std::array{allocator(^^c_library::handle_value), 
 constexpr auto frees_nothing = std::array{allocator(^^c_library::handle_make), deallocator(^^c_library::handle_make)};
 constexpr auto no_deallocator = std::array{allocator(^^c_library_undeclared::loose_make)};
 constexpr auto no_decrement = std::array{shared_ownership({.increment = ^^c_library::counted_ref, .decrement = ^^c_library::counted_find})};
+constexpr auto owner_takes_argument = std::array{borrowed(^^c_library::current_settings, {.owner = ^^c_library::destroy_context})};
+constexpr auto right_owner = std::array{borrowed(^^c_library::current_settings, {.owner = ^^c_library::current_context})};
 constexpr auto right = std::array{allocator(^^c_library::handle_open, {.output_parameter = "made"}), allocator(^^c_library::handle_popen),
                                   deallocator(^^c_library::handle_close, {.results_of = ^^c_library::handle_open}),
                                   deallocator(^^c_library::handle_pclose, {.results_of = ^^c_library::handle_popen})};
@@ -91,6 +93,8 @@ static mrb_value allocator_declaration_errors_m(mrb_state *const mrb, mrb_value)
     set("frees_nothing", reflect_object_lifetime_error(^^c_library::handle, allocated_wrong::frees_nothing));
     set("no_deallocator", reflect_object_lifetime_error(^^c_library_undeclared::loose, allocated_wrong::no_deallocator));
     set("no_decrement", reflect_object_lifetime_error(^^c_library::counted, allocated_wrong::no_decrement));
+    set("owner_takes_argument", reflect_object_lifetime_error(^^c_library::settings, allocated_wrong::owner_takes_argument));
+    set("right_owner", reflect_object_lifetime_error(^^c_library::settings, allocated_wrong::right_owner));
     set("right", reflect_object_lifetime_error(^^c_library::handle, allocated_wrong::right));
     return errors;
 }

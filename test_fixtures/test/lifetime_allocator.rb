@@ -102,6 +102,10 @@ if Object.const_defined?(:CLibrary)
     assert_true errors['frees_nothing'].include?('handle_make takes no pointer to the class as its only parameter')
     assert_true errors['no_deallocator'].include?('loose_make is an allocator without a deallocator')
     assert_true errors['no_decrement'].include?('counted_find takes no pointer to the class as its only parameter')
+    # owner: names a function that answers the object that holds the
+    # part, so it takes no argument and returns a pointer to a class.
+    assert_true errors['owner_takes_argument'].include?('current_settings names as owner: no function that takes no argument and returns a pointer to a class')
+    assert_nil errors['right_owner']
     assert_nil errors['right']
   end
 
@@ -178,6 +182,46 @@ if Object.const_defined?(:CLibrary)
     c = CLibrary.create_context
     CLibrary.destroy_context(c)
     assert_nil CLibrary.current_context
+  end
+
+  assert('a borrowed reference with an owner is a mutable part of the object of the owner') do
+    # current_settings answers a reference into the current context, which
+    # C++ does not copy. The Ruby object changes the settings in place, is
+    # the same object on each call, and ends with the context.
+    c = CLibrary.create_context
+    s = CLibrary.current_settings
+    assert_false s.frozen?
+    s.width = 800
+    assert_equal 800, CLibrary.current_width
+    assert_same s, CLibrary.current_settings
+    CLibrary.destroy_context(c)
+    assert_raise(TypeError) { s.width }
+  end
+
+  assert('a borrowed reference keeps the Ruby object of its owner') do
+    # The settings are memory of the context, so the context stays while
+    # a Ruby object of its settings stays.
+    full_gc
+    before = CLibrary.contexts_alive
+    c = CLibrary.create_context
+    s = CLibrary.current_settings
+    c = nil
+    full_gc
+    assert_equal before + 1, CLibrary.contexts_alive
+    s.width = 3
+    assert_equal 3, CLibrary.current_width
+    s = nil
+    full_gc
+    assert_equal before, CLibrary.contexts_alive
+  end
+
+  assert('a borrowed reference raises when no Ruby object owns its owner') do
+    # With no current context, current_settings reads through a null
+    # pointer, so the gem raises before it calls the function.
+    CLibrary.destroy_context(CLibrary.create_context)
+    assert_nil CLibrary.current_context
+    e = assert_raise(TypeError) { CLibrary.current_settings }
+    assert_include e.message, 'current_context'
   end
 
   assert('a borrowed pointer to an object that the gem does not track raises') do

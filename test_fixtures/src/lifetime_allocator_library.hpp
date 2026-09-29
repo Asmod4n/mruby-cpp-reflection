@@ -34,6 +34,16 @@ c_library_context *current_context();
 c_library_context *static_context();
 }
 
+/* As ImGui::GetIO answers the settings of the current context, a library
+ * can answer a reference to a part of an object that it keeps. */
+namespace c_library {
+struct settings {
+    int width = 0;
+};
+settings &current_settings();
+int current_width();
+}
+
 /* Functions that make handles of types that no declaration names. The
  * build refuses to reflect them, so lifetime_allocator.cpp only checks
  * them with the function that the compile runs, and nothing defines
@@ -68,6 +78,10 @@ inline constexpr auto mruby::cpp_reflection::object_lifetime<^^c_library_context
     deallocator(^^c_library::destroy_context, {.results_of = ^^c_library::create_context}),
     borrowed(^^c_library::current_context),
     borrowed(^^c_library::static_context),
+};
+template <>
+inline constexpr auto mruby::cpp_reflection::object_lifetime<^^c_library::settings> = std::array{
+    borrowed(^^c_library::current_settings, {.owner = ^^c_library::current_context}),
 };
 template <>
 inline constexpr auto mruby::cpp_reflection::object_lifetime<^^c_library::counted> = std::array{

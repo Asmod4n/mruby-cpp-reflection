@@ -88,6 +88,7 @@ int contexts_alive() { return contexts(); }
 
 struct c_library_context {
     int n;
+    c_library::settings settings;
 };
 
 /* As in Dear ImGui, the library keeps the last context it made as the
@@ -111,6 +112,8 @@ void c_library::destroy_context(c_library_context *const c)
     delete c;
 }
 c_library_context *c_library::current_context() { return current(); }
+c_library::settings &c_library::current_settings() { return current()->settings; }
+int c_library::current_width() { return current() == nullptr ? -1 : current()->settings.width; }
 
 /* A context that no allocator made: the gem tracks no Ruby object for it. */
 c_library_context *c_library::static_context()

@@ -57,6 +57,10 @@ struct reflect_deallocation {
     std::meta::info results_of{};
 };
 
+struct reflect_borrowing {
+    std::meta::info owner{};
+};
+
 struct reflect_shared_ownership {
     std::meta::info increment{};
     std::meta::info decrement{};
@@ -65,6 +69,7 @@ struct reflect_shared_ownership {
 struct reflect_object_lifetime_word {
     reflect_word word;
     std::meta::info function{};
+    std::meta::info owner{};
     reflect_parameter of{};
     reflect_parameter by{};
     reflect_parameter position{};
@@ -153,9 +158,9 @@ consteval mruby::cpp_reflection::reflect_object_lifetime_word deallocator(const 
             .results_of = given.results_of == std::meta::info{} ? std::define_static_string("") : mruby::cpp_reflection::reflect_lifetime_function_name(given.results_of)};
 }
 
-consteval mruby::cpp_reflection::reflect_object_lifetime_word borrowed(const std::meta::info function)
+consteval mruby::cpp_reflection::reflect_object_lifetime_word borrowed(const std::meta::info function, const mruby::cpp_reflection::reflect_borrowing given = {})
 {
-    return {.word = mruby::cpp_reflection::reflect_word::borrowed, .function = function};
+    return {.word = mruby::cpp_reflection::reflect_word::borrowed, .function = function, .owner = given.owner};
 }
 
 consteval mruby::cpp_reflection::reflect_object_lifetime_word shared_ownership(const mruby::cpp_reflection::reflect_shared_ownership given)
