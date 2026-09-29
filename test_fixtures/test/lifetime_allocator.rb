@@ -229,6 +229,12 @@ if Object.const_defined?(:CLibrary)
     assert_include e.message, 'current_context'
   end
 
+  assert('a function of a namespace named swap is reflected') do
+    # The check whether a class is swappable belongs to a member swap; a
+    # namespace is no type, and the check refused the whole namespace.
+    assert_equal 21, CLibrary.swap(1, 2)
+  end
+
   assert('a borrowed pointer field is the object it points to, changed in place') do
     # io.fonts points to an atlas that C++ keeps, as ImGuiIO::Fonts does.
     # Without the declaration the field would be a frozen copy, and a

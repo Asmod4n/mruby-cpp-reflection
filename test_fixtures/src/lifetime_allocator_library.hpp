@@ -57,6 +57,10 @@ struct io {
     int frame = 0;
 };
 io io_make();
+/* A function of a namespace can be named swap, as glfwSwapBuffers is in
+ * a wrapper; only a member swap of a class asks whether the class is
+ * swappable. */
+int swap(int a, int b);
 void io_use_atlas(io &target, int which);
 int atlas_width(int which);
 }

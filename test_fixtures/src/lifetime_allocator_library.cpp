@@ -130,6 +130,7 @@ static atlas &atlas_at(const int which)
     return which == 1 ? first : second;
 }
 io io_make() { return {}; }
+int swap(const int a, const int b) { return b * 10 + a; }
 void io_use_atlas(io &target, const int which) { target.fonts = which == 0 ? nullptr : &atlas_at(which); }
 int atlas_width(const int which) { return atlas_at(which).width; }
 }
