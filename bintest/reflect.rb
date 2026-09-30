@@ -10,7 +10,9 @@ require 'rake'
 module MRuby
   module Gem
     class Specification
+      include Rake::DSL
       attr_reader :build_dir, :objs, :funcname, :cxx
+      attr_accessor :build
 
       # mrbgem.rake ends with the Specification of the gem itself, and
       # that block needs a build, so it does not run here.
@@ -22,7 +24,13 @@ module MRuby
         @build_dir = build_dir
         @objs = []
         @funcname = 'mruby_sqlite'
-        @cxx = OpenStruct.new(include_paths: [])
+        @cxx = OpenStruct.new(include_paths: [], flags: [], defines: [])
+        @build = OpenStruct.new(cxx: OpenStruct.new(flags: []), build_dir: build_dir,
+                                exts: OpenStruct.new(executable: '', presym_preprocessed: '.pi'))
+      end
+
+      def name
+        'mruby-sqlite'
       end
 
       def objfile(name)
@@ -46,6 +54,45 @@ assert('ReflectTest: the source includes the headers before the gem') do
     assert_operator(text.index('#include <sqlite3.h>'), :<, text.index('#include <mruby/reflect_object_lifetimes.h>'))
     assert_operator(text.index('#include <mruby/reflect_varargs.h>'), :<, text.index('#include <mruby/cpp_reflection.hpp>'))
     assert_operator(text.index('#include <mruby/reflect_object_lifetimes.h>'), :<, text.index('#include <mruby/cpp_reflection.hpp>'))
+  ensure
+    FileUtils.remove_entry(@dir)
+  end
+end
+
+# The facts header names rows by the file of a header and holds macros
+# of the headers, so it comes after the headers. The cxx: text and the gem
+# read it, so it comes before both.
+assert('ReflectTest: the source includes the facts after the headers and before the cxx: text') do
+  @dir = Dir.mktmpdir
+  @spec = MRuby::Gem::Specification.new(@dir)
+  begin
+    @spec.reflect('sqlite', headers: ['sqlite3.h'], cxx: "int a;\n")
+    text = File.read(@spec.reflect_source)
+    assert_operator(text.index('#include <sqlite3.h>'), :<, text.index('#include <mruby/reflect_facts.h>'))
+    assert_operator(text.index('#include <mruby/reflect_facts.h>'), :<, text.index("#include \"#{@spec.reflect_cxx_source}\""))
+    assert_operator(text.index('#include <mruby/reflect_facts.h>'), :<, text.index('#include <mruby/cpp_reflection.hpp>'))
+  ensure
+    FileUtils.remove_entry(@dir)
+  end
+end
+
+# libclang runs only where reflection reads its answer. A build with
+# -freflection gets the source that libclang reads, the include path of
+# the header it writes, and the task that writes it before the source of
+# spec.reflect and its presym pass compile.
+assert('ReflectTest: a build with -freflection reads the facts of the headers') do
+  @dir = Dir.mktmpdir
+  @spec = MRuby::Gem::Specification.new(@dir)
+  begin
+    @spec.reflect('sqlite', headers: ['sqlite3.h'])
+    assert_false(File.exist?(@spec.reflect_facts_source))
+    @spec.build.cxx.flags << '-freflection'
+    @spec.reflect('sqlite', headers: ['sqlite3.h', 'sqlite3ext.h'])
+    assert_equal("#include <sqlite3.h>\n#include <sqlite3ext.h>\n", File.read(@spec.reflect_facts_source))
+    assert_include(@spec.cxx.include_paths, "#{@dir}/include")
+    object = @spec.objfile(@spec.reflect_source.pathmap('%X'))
+    assert_include(Rake::Task[object].prerequisites, @spec.reflect_facts_written)
+    assert_include(Rake::Task[object.ext('.pi')].prerequisites, @spec.reflect_facts_written)
   ensure
     FileUtils.remove_entry(@dir)
   end

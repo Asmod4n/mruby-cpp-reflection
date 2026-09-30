@@ -5,6 +5,18 @@
  * that spec.reflect, and Pair<Vec2> is declared in its cxx: text. */
 extern "C" int rake_only_c_answer(void);
 
+/* The facts that reflection cannot read and libclang reads for it: an
+ * array parameter of known extent, a format attribute, a va_list that
+ * is an array of one on x86-64 and is no array parameter, and three
+ * macros, of which the last is no constant expression. */
+#include <cstdarg>
+extern "C" double rake_only_sum_of_three(const double values[3]);
+extern "C" int rake_only_format(const char *format, ...) __attribute__((format(printf, 1, 2)));
+extern "C" int rake_only_vformat(const char *format, va_list arguments);
+#define RAKE_ONLY_ANSWER 42
+#define RAKE_ONLY_NAME "rake_only"
+#define RAKE_ONLY_NOT_A_CONSTANT rake_only_c_answer()
+
 namespace rake_only {
 struct Vec2 {
     double x = 0;

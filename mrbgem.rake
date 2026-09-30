@@ -372,6 +372,7 @@ module MRuby
         reflect_write(reflect_source, reflect_source_text(headers, scopes, cxx ? reflect_cxx_source : nil))
         object = objfile(reflect_source.pathmap("%X"))
         objs << object unless objs.include?(object)
+        reflect_facts(headers)
       end
 
       def reflect_source
@@ -392,6 +393,9 @@ module MRuby
         listed = scopes.map { |s| "^^#{s.start_with?('::') ? s : "::#{s}"}" }.join(', ')
         <<~CPP
           #{includes.chomp}
+          #if __has_include(<mruby/reflect_facts.h>)
+          #include <mruby/reflect_facts.h>
+          #endif
           #{included}#include <mruby.h>
           #if __has_include(<mruby/reflect_varargs.h>)
           #include <mruby/reflect_varargs.h>
@@ -421,6 +425,116 @@ module MRuby
       def reflect_write(path, text)
         FileUtils.mkdir_p(File.dirname(path))
         File.write(path, text) unless File.exist?(path) && File.read(path) == text
+      end
+    end
+  end
+end
+
+# The facts of the headers that C++26 reflection cannot read.
+# g++ adjusts a parameter `float col[3]` to `float *col` before
+# reflection sees it, reflection has no GNU attributes, and a macro is
+# gone before the compiler starts. libclang reads the same headers with
+# the include paths and defines of the gem and sees all three.
+#
+# spec.reflect, in a build with -freflection, writes
+# build_dir/reflect/reflect_facts.cpp, which includes the headers of the
+# call, and runs tool/write_reflect_facts on it. The tool writes
+# build_dir/include/mruby/reflect_facts.h, again only when its text
+# changes, and the source of spec.reflect includes it after the headers:
+#
+# - mruby::cpp_reflection::parameter_extents<file>, one row for each
+#   parameter that the header writes as an array of known extent;
+# - mruby::cpp_reflection::format_attributes<file>, one row for each
+#   format(archetype, string-index, first-to-check) attribute;
+# - mruby::cpp_reflection::macros, one constexpr variable for each object
+#   like macro of a header that is not a system header, when clang reads
+#   its expansion as a C++ constant expression.
+#
+# A row names the file, the line and the column of the function's name,
+# which is what std::meta::source_location_of answers for it. The tool
+# writes a dependency file, and a change of any header it read runs it
+# again.
+#
+# The build compiles the tool once with the C++ compiler of the build and
+# links it against libclang-cpp. conf.llvm_config = 'path' names the
+# llvm-config that gives the flags; the default is llvm-config.
+
+require 'shellwords'
+
+module MRuby
+  class Build
+    attr_writer :llvm_config
+
+    def llvm_config
+      @llvm_config ||= 'llvm-config'
+    end
+  end
+
+  module Gem
+    class Specification
+      REFLECT_FACTS_TOOL_SOURCE = File.expand_path('tool/write_reflect_facts.cpp', __dir__) unless const_defined?(:REFLECT_FACTS_TOOL_SOURCE, false)
+
+      def reflect_facts_source
+        "#{build_dir}/reflect/reflect_facts.cpp"
+      end
+
+      def reflect_facts_header
+        "#{build_dir}/include/mruby/reflect_facts.h"
+      end
+
+      def reflect_facts_written
+        "#{build_dir}/reflect/reflect_facts.written"
+      end
+
+      def reflect_facts_dependencies
+        "#{build_dir}/reflect/reflect_facts.d"
+      end
+
+      private
+
+      def reflect_facts(headers)
+        return unless build.cxx.flags.flatten.any? { |f| f.to_s == '-freflection' }
+        reflect_write(reflect_facts_source, headers.map { |h| "#include <#{h}>\n" }.join)
+        include_dir = "#{build_dir}/include"
+        cxx.include_paths << include_dir unless cxx.include_paths.include?(include_dir)
+        tool = reflect_facts_tool
+        read = File.exist?(reflect_facts_dependencies) ? File.read(reflect_facts_dependencies).gsub("\\\n", ' ').split(':', 2).last.split : []
+        file reflect_facts_written => [tool, reflect_facts_source, *read.select { |path| File.exist?(path) }] do |t|
+          flags = cxx.flags.flatten.map(&:to_s)
+          arguments = [flags.grep(/\A-std=/).last || '-std=c++26',
+                       *cxx.include_paths.map { |path| "-I#{path}" },
+                       *cxx.defines.map { |define| "-D#{define}" },
+                       *flags.grep(/\A-[ID]./),
+                       '-MD', '-MF', reflect_facts_dependencies, '-MT', t.name]
+          text = IO.popen([tool, reflect_facts_source, '--', *arguments], &:read)
+          raise "reflect: write_reflect_facts could not read the headers of #{name}" unless $?.success?
+          reflect_write(reflect_facts_header, text)
+          FileUtils.touch(t.name)
+        end
+        object = objfile(reflect_source.pathmap('%X'))
+        file object => reflect_facts_written
+        file object.ext(build.exts.presym_preprocessed) => reflect_facts_written
+      end
+
+      def reflect_facts_tool
+        tool = "#{build.build_dir}/reflect_facts/write_reflect_facts#{build.exts.executable}"
+        return tool if Rake::Task.task_defined?(tool)
+        file tool => REFLECT_FACTS_TOOL_SOURCE do |t|
+          llvm_config = ->(*options) do
+            answer = IO.popen([build.llvm_config, *options], &:read)
+            raise "reflect: #{build.llvm_config} #{options.join(' ')} failed" unless $?.success?
+            answer
+          rescue SystemCallError
+            raise "reflect: #{build.llvm_config} is not there, and libclang is what reads the facts of the headers"
+          end
+          FileUtils.mkdir_p(File.dirname(t.name))
+          sh(*Shellwords.split(build.cxx.command), '-std=c++23', '-O1',
+             *llvm_config.('--cxxflags').split.reject { |f| f.start_with?('-std=') },
+             %(-DWRITE_REFLECT_FACTS_LLVM_BINDIR="#{llvm_config.('--bindir').chomp}"),
+             REFLECT_FACTS_TOOL_SOURCE, '-o', t.name,
+             *llvm_config.('--ldflags').split, '-lclang-cpp', *llvm_config.('--libs', '--link-shared').split)
+        end
+        tool
       end
     end
   end
@@ -481,6 +595,7 @@ module MRuby
         object = "#{out}/include_virtual_overriders#{build.exts.object}"
         replaced = source.start_with?("#{self.dir}/") ? objfile(source.relative_path_from(self.dir).pathmap("#{build_dir}/%X")) : objfile(source.pathmap('%X'))
         headers = %w[cpp_reflection.hpp cpp_reflection_lifetime.hpp reflect_members.hpp].map { |h| "#{reflection.dir}/include/mruby/#{h}" }
+        headers << reflect_facts_written if source == reflect_source && Rake::Task.task_defined?(reflect_facts_written)
         file printed => [source, "#{reflection.dir}/src/print_virtual_overriders.cpp", *headers] do |t|
           cxx.run t.name, "#{reflection.dir}/src/print_virtual_overriders.cpp",
                   ["MRB_CPP_REFLECTOR_SOURCE=#{quoted.(source)}", 'MRB_NO_PRESYM'], [], [msvc ? '/GL-' : '-fno-lto']

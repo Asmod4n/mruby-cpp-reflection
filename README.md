@@ -184,11 +184,46 @@ inline constexpr auto mruby::cpp_reflection::varargs<^^lib::f> = std::array{^^st
 writes the same C++ into `<mruby/reflect_varargs.h>`, which a source
 includes after the header of the library.
 
+## Facts that reflection cannot read
+
+Three things of a header are gone before reflection sees them. g++
+adjusts `float col[3]` to `float *col`. Reflection has no GNU attributes,
+so it does not see `format(printf, 1, 2)`. The preprocessor removes every
+macro. In a build with `-freflection`, `spec.reflect` has libclang read
+the same headers, with the include paths and defines of the gem, and
+write what it finds into `<mruby/reflect_facts.h>`. The generated source
+includes it after the headers and before the `cxx:` text:
+
+```cpp
+mruby::cpp_reflection::reflect_parameter_extent(^^ImGui::ColorEdit3, 1); // 3
+mruby::cpp_reflection::reflect_format_attribute(^^ImGui::Text);         // printf, 1, 2
+std::meta::members_of(^^mruby::cpp_reflection::macros, ...);             // IMGUI_VERSION, ...
+```
+
+A row names the file, the line and the column of the name of a
+function, which is what `std::meta::source_location_of` answers for it.
+Each header file has its own table, so two gems that read one header
+define the same table. A `va_list` is an array of one on x86-64, and it
+is not a parameter of known extent. A macro is in
+`mruby::cpp_reflection::macros` only when it is object like, is in a
+header that is not a system header, and clang reads its expansion as a
+C++ constant expression. The variable has the name of the macro, so a
+source that names it in text gets the macro; reflection finds it by
+`identifier_of`.
+
+`tool/write_reflect_facts.cpp` is the program that reads the headers.
+The build compiles it once with the C++ compiler of the build and links
+it against `libclang-cpp`, with the flags of `llvm-config`.
+`conf.llvm_config = 'path'` in the build config names another one. It
+writes a dependency file, and a change of any header that it read runs
+it again.
+
 ## Build
 
 A compiler with `__cpp_impl_reflection`, today g++ 16 with `-freflection`,
-and [mruby-c-ext-helpers](https://github.com/Asmod4n/mruby-c-ext-helpers)
-for the value conversions.
+[mruby-c-ext-helpers](https://github.com/Asmod4n/mruby-c-ext-helpers)
+for the value conversions, and for `spec.reflect` the development files
+of libclang and LLVM (`clang-devel` and `llvm-devel` on Fedora).
 
 Each call of `reflect_define` has one list of the names that its classes
 need, which the compiler builds, with each name once. When the call runs

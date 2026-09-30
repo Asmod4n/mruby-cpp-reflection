@@ -12,6 +12,9 @@ typedef struct mrb_state mrb_state;
 #include <concepts>
 #include <cstddef>
 #include <meta>
+#include <optional>
+#include <source_location>
+#include <span>
 #include <string_view>
 
 namespace mruby::cpp_reflection {
@@ -103,6 +106,50 @@ inline constexpr std::array<mruby::cpp_reflection::reflect_object_lifetime_word,
 
 template <std::meta::info Function>
 inline constexpr std::array<std::meta::info, 0> varargs{};
+
+struct parameter_extent {
+    unsigned line;
+    unsigned column;
+    unsigned position;
+    std::size_t extent;
+};
+
+struct format_attribute {
+    unsigned line;
+    unsigned column;
+    const char *archetype;
+    unsigned string_index;
+    unsigned first_to_check;
+};
+
+template <const char *File>
+inline constexpr std::span<const mruby::cpp_reflection::parameter_extent> parameter_extents{};
+
+template <const char *File>
+inline constexpr std::span<const mruby::cpp_reflection::format_attribute> format_attributes{};
+
+template <class Row>
+consteval std::span<const Row> reflect_facts_of_file(const std::meta::info facts, const std::source_location where)
+{
+    return std::meta::extract<const std::span<const Row> &>(
+        std::meta::substitute(facts, {std::meta::reflect_constant(std::define_static_string(std::string_view(where.file_name())))}));
+}
+
+consteval std::size_t reflect_parameter_extent(const std::meta::info function, const unsigned position)
+{
+    const std::source_location where = std::meta::source_location_of(function);
+    for (const mruby::cpp_reflection::parameter_extent &row : mruby::cpp_reflection::reflect_facts_of_file<mruby::cpp_reflection::parameter_extent>(^^mruby::cpp_reflection::parameter_extents, where))
+        if (row.line == where.line() && row.column == where.column() && row.position == position) return row.extent;
+    return 0;
+}
+
+consteval std::optional<mruby::cpp_reflection::format_attribute> reflect_format_attribute(const std::meta::info function)
+{
+    const std::source_location where = std::meta::source_location_of(function);
+    for (const mruby::cpp_reflection::format_attribute &row : mruby::cpp_reflection::reflect_facts_of_file<mruby::cpp_reflection::format_attribute>(^^mruby::cpp_reflection::format_attributes, where))
+        if (row.line == where.line() && row.column == where.column()) return row;
+    return std::nullopt;
+}
 
 consteval mruby::cpp_reflection::reflect_object_lifetime_word takes_ownership(const std::meta::info function, const mruby::cpp_reflection::reflect_ownership given)
 {

@@ -12,3 +12,28 @@ assert('the cxx: text declares the template instance that the gem uses') do
   assert_equal 'RakeOnly::Corners', corners.class.to_s
   assert_equal 2.0, corners.second.y
 end
+
+# g++ adjusts a parameter written as an array of known extent to a
+# pointer before reflection sees it, reflection has no GNU attributes,
+# and the preprocessor removes every macro before the compiler starts.
+# libclang reads the headers of spec.reflect and writes these facts
+# into reflect_facts.h. A va_list on x86-64 is an array of one, and it
+# is no parameter of known extent.
+assert('libclang gives the extent of an array parameter') do
+  assert_true RakeOnly.array_parameter_has_its_extent
+  assert_true RakeOnly.va_list_parameter_has_no_extent
+end
+
+assert('libclang gives the format attribute of a function') do
+  assert_true RakeOnly.format_attribute_is_read
+  assert_true RakeOnly.function_without_format_has_none
+end
+
+# A macro enters mruby::cpp_reflection::macros only when clang reads its
+# expansion as a C++ constant expression. A macro that calls a function
+# is not one.
+assert('libclang gives the object like macros that are constants') do
+  assert_true RakeOnly.macro_number_is_read
+  assert_true RakeOnly.macro_string_is_read
+  assert_true RakeOnly.macro_call_is_left_out
+end
