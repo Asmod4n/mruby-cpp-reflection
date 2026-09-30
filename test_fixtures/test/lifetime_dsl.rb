@@ -210,6 +210,35 @@ if Object.const_defined?(:TreeObject)
     assert_equal 3, parent.first_child_layout_value
   end
 
+  # Security audit 2026-09-30, second pass, finding 4: an argument retained
+  # while the object was under one owner stayed on that owner, and a hand
+  # over to a second owner left it behind.
+  assert('a retained argument follows its receiver to a second owner') do
+    first = Frame.new
+    second = Frame.new
+    frame = Frame.new
+    frame.set_parent(first)
+    frame.set_layout(Layout.new)
+    frame.set_parent(second)
+    frame = first = nil
+    full_gc
+    full_gc
+    assert_equal 3, second.first_child_layout_value
+  end
+
+  # Security audit 2026-09-30, second pass, finding 2: nil gave an object
+  # back to Ruby that a C++ owner still held, when the function does not
+  # take it away from that owner.
+  assert('nil does not release an object that a C++ owner still holds') do
+    owner = Nest.new
+    nest = Nest.new
+    nest.set_owner(owner)
+    assert_raise(ArgumentError) { nest.set_owner(nil) }
+    owner = nest = nil
+    full_gc
+    full_gc
+  end
+
   assert('retains keeps an argument while the receiver lives') do
     w = Window.new
     w.set_layout(Layout.new)

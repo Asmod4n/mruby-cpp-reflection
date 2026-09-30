@@ -619,6 +619,16 @@ module MRuby
         else
           objs.map! { |o| o == replaced ? object : o }
         end
+        reflect_list_object(object)
+      end
+
+      def reflect_list_object(object)
+        listed = build.instance_variable_get(:@reflect_objects) || []
+        listed << object unless listed.include?(object)
+        build.instance_variable_set(:@reflect_objects, listed)
+        list = "#{build.build_dir}/reflect_objects.list"
+        FileUtils.mkdir_p(File.dirname(list))
+        File.write(list, listed.join("\n") + "\n") unless File.exist?(list) && File.read(list) == listed.join("\n") + "\n"
       end
     end
 
@@ -677,5 +687,5 @@ MRuby::Gem::Specification.new('mruby-cpp-reflection') do |spec|
   spec.add_dependency 'mruby-c-ext-helpers', github: 'Asmod4n/mruby-c-ext-helpers'
   spec.build.enable_cxx_exception
   relink = "#{spec.dir}/bin/relink"
-  spec.build.linker.command = %("#{RbConfig.ruby}" "#{relink}" "#{spec.build.linker.command}") unless spec.build.linker.command.include?(relink)
+  spec.build.linker.command = %("#{RbConfig.ruby}" "#{relink}" "--reflect-objects=#{spec.build.build_dir}/reflect_objects.list" "#{spec.build.linker.command}") unless spec.build.linker.command.include?(relink)
 end

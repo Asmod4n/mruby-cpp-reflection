@@ -232,7 +232,7 @@ struct DeclarationConsumer : clang::ASTConsumer {
             if (defined.isInvalid() || sources.isInSystemHeader(defined) || sources.isWrittenInBuiltinFile(defined) ||
                 sources.isWrittenInCommandLineFile(defined))
                 continue;
-            if (identifier->getName().starts_with("_"))
+            if (identifier->getName().starts_with("_") || identifier->isKeyword(preprocessor.getLangOpts()))
                 continue;
             facts.macro_candidates.push_back(identifier->getName().str());
         }

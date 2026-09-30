@@ -253,20 +253,21 @@ assert('a std::function parameter that answers a reference, a pointer or a view 
   assert_false(c.respond_to?(:same_void))
 end
 
-# A std::string_view or a const char * argument is lent for the call. It
-# points into a copy of the Ruby String that lives until the call ends, so
-# a callback that C++ calls while it reads the view can change the String,
-# and C++ still reads the bytes it was given. The String itself stays free
-# to change.
-assert('a view argument reads a copy of the String') do
+# A std::string_view or a const char * argument points into the Ruby
+# String itself, with no copy. The String is frozen for the call, so a
+# callback that C++ calls while it reads the view cannot change the bytes,
+# and it is thawed when the call ends.
+assert('a view argument reads the String, which is frozen for the call') do
   c = Callback.new
   s = 'x' * 100
-  assert_equal(120, c.first_after(s, ->(n) { s.replace('y' * 4000); n }))
-  assert_equal('y' * 4000, s)
+  assert_raise(FrozenError) { c.first_after(s, ->(n) { s.replace('y' * 4000); n }) }
   assert_false(s.frozen?)
+  s.replace('y' * 4000)
+  assert_equal('y' * 4000, s)
   t = 'x' * 100
-  assert_equal(100, c.length_after(t, ->(n) { t.replace('y' * 4000); n }))
-  assert_equal('y' * 4000, t)
+  assert_raise(FrozenError) { c.length_after(t, ->(n) { t.replace('y' * 4000); n }) }
+  assert_false(t.frozen?)
+  assert_equal(100, c.length_after(t, ->(n) { n }))
 end
 
 # The copy ends with the call, also when the call raises, so many calls
@@ -404,16 +405,36 @@ assert('an argument stays alive while a kept Proc runs inside the call') do
   assert_equal 100, c.size_after_kept(c.make_text)
 end
 
-assert('the compiler decides which calls can run Ruby') do
-  assert_true call_with_callback_may_run_ruby?
-  assert_false call_in_scope_without_callbacks_may_run_ruby?
+assert('a String is frozen while C++ reads it, and thawed after the call') do
+  c = Callback.new
+  text = 'a' * 40
+  assert_raise(FrozenError) { c.count_a_after(text, ->(n) { text.replace('b' * 100); n }) }
+  assert_false text.frozen?
+  assert_equal 40, c.count_a_after(text, ->(n) { n })
+  frozen = ('a' * 3).freeze
+  assert_equal 3, c.count_a_after(frozen, ->(n) { n })
+  assert_true frozen.frozen?
 end
 
-assert('a String that C++ reads stays as it was while Ruby runs inside the call') do
-  text = 'a' * 40
-  counted = Callback.new.count_a_after(text, ->(n) { text.replace('b' * 100); GC.start; n })
-  assert_equal 40, counted
-  assert_equal 'b' * 100, text
+# A Ruby String, Array or Hash that C++ changes through a reference is
+# copied in, and the result is written back into the same Ruby object
+# after the call. A Std::String is changed in place.
+assert('a value that C++ changes through a reference is changed in place') do
+  c = Callback.new
+  text = 'abc'
+  assert_nil c.append_x(text)
+  assert_equal 'abcx', text
+  assert_false text.frozen?
+  numbers = [1, 2]
+  c.append_three(numbers)
+  assert_equal [1, 2, 3], numbers
+  counts = { 'a' => 1 }
+  c.count_b(counts)
+  assert_equal({ 'a' => 1, 'b' => 1 }, counts)
+  assert_raise(FrozenError) { c.append_x('abc'.freeze) }
+  made = c.make_text
+  c.append_x(made)
+  assert_equal 101, made.size
 end
 
 assert('a callback that C++ calls from another thread throws in that thread') do

@@ -212,6 +212,9 @@ struct Callback {
     mrb_int each_twice(mrb_int n, std::function<number(number)> f) const { return f(f(n)); }
     void keep(std::function<number(number)> f) { kept = std::move(f); }
     std::string make_text() const { return std::string(100, 'a'); }
+    void append_x(std::string &text) const { text += 'x'; }
+    void append_three(std::vector<mrb_int> &numbers) const { numbers.push_back(3); }
+    void count_b(std::map<std::string, mrb_int> &counts) const { ++counts["b"]; }
     mrb_int size_after_kept(const std::string &text) const
     {
         kept(0);
@@ -800,10 +803,6 @@ static mrb_value symbols_ok_q(mrb_state *mrb, mrb_value)
 }
 
 namespace texts {
-inline mrb_int length_of(const std::string_view text)
-{
-    return static_cast<mrb_int>(text.size());
-}
 inline mrb_int count_up_to(const char *const text, const std::size_t n)
 {
     return static_cast<mrb_int>(std::string_view(text, n).size());
@@ -825,18 +824,6 @@ static mrb_value unterminated_chars_bound_q(mrb_state *, mrb_value)
 {
     constexpr bool answered = !mruby::cpp_reflection::reflect_returns_unterminated_chars(^^std::string_view::data) ||
                               mruby::cpp_reflection::reflect_returns_unterminated_chars(^^std::string::c_str);
-    return mrb_bool_value(answered);
-}
-
-static mrb_value call_with_callback_may_run_ruby_q(mrb_state *, mrb_value)
-{
-    constexpr bool answered = mruby::cpp_reflection::reflect_may_run_ruby(^^Callback::with_text);
-    return mrb_bool_value(answered);
-}
-
-static mrb_value call_in_scope_without_callbacks_may_run_ruby_q(mrb_state *, mrb_value)
-{
-    constexpr bool answered = mruby::cpp_reflection::reflect_may_run_ruby(^^texts::length_of);
     return mrb_bool_value(answered);
 }
 
@@ -998,10 +985,8 @@ extern "C" void mrb_mruby_cpp_reflection_test_fixtures_gem_init(mrb_state *mrb)
     mrb_define_module_function(mrb, mrb->kernel_module, "second_state", second_state_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "constructed", constructed_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "reflect_symbols_ok?", symbols_ok_q, MRB_ARGS_NONE());
-    mrb_define_module_function(mrb, mrb->kernel_module, "call_with_callback_may_run_ruby?", call_with_callback_may_run_ruby_q, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "pointer_and_count_bound?", pointer_and_count_bound_q, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "unterminated_chars_bound?", unterminated_chars_bound_q, MRB_ARGS_NONE());
-    mrb_define_module_function(mrb, mrb->kernel_module, "call_in_scope_without_callbacks_may_run_ruby?", call_in_scope_without_callbacks_may_run_ruby_q, MRB_ARGS_NONE());
     mruby::cpp_reflection::reflect_define<classes>(mrb);
     mruby::cpp_reflection::reflect_define<under>(mrb, mrb_define_module(mrb, "Under"));
     mruby::cpp_reflection::reflect_define<nested, {.nested_types = true}>(mrb);

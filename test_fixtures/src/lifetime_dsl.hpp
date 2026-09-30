@@ -101,10 +101,29 @@ public:
     void set_layout(const Layout *const given) { layout = given; }
     void set_parent(Frame *const given)
     {
+        if (parent != nullptr) std::erase(parent->children, this);
         parent = given;
-        parent->children.push_back(this);
+        if (parent != nullptr) parent->children.push_back(this);
     }
     mrb_int first_child_layout_value() const { return children.empty() || children.front()->layout == nullptr ? 0 : children.front()->layout->n; }
+};
+/* A Nest takes the Nest it is given and deletes it, and set_owner does
+ * not take it away from an owner it had before. */
+class Nest {
+    std::vector<Nest *> kids;
+
+public:
+    Nest() = default;
+    Nest(const Nest &) = delete;
+    Nest &operator=(const Nest &) = delete;
+    ~Nest()
+    {
+        for (Nest *const kid : std::exchange(kids, {})) delete kid;
+    }
+    void set_owner(Nest *const owner)
+    {
+        if (owner != nullptr) owner->kids.push_back(this);
+    }
 };
 /* The error conventions of C: a negative answer and errno (open in
  * POSIX), one value for success, and a null pointer. start is called
@@ -162,8 +181,10 @@ inline constexpr auto mruby::cpp_reflection::object_lifetime<^^Window> = std::ar
 template <>
 inline constexpr auto mruby::cpp_reflection::object_lifetime<^^Frame> = std::array{
     retains(^^Frame::set_layout, 0),
-    takes_ownership(^^Frame::set_parent, {.by = 0}),
+    takes_ownership(^^Frame::set_parent, {.by = 0, .moves = true}),
 };
+template <>
+inline constexpr auto mruby::cpp_reflection::object_lifetime<^^Nest> = std::array{takes_ownership(^^Nest::set_owner, {.by = 0})};
 template <>
 inline constexpr auto mruby::cpp_reflection::object_lifetime<^^Device> = std::array{
     errors(^^Device::open, {.error = negative, .sets_errno = true}),

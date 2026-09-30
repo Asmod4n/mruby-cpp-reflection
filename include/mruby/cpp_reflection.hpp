@@ -1310,7 +1310,6 @@ void reflect_adopt(mrb_state *const mrb, const mrb_value self, reflect_lifetime_
     record.object = made;
     record.owned = true;
     record.adopted = true;
-    record.alive = true;
     if constexpr (reflect_trackable<T>) {
         reflect_tracked<T> *const tracked = static_cast<reflect_tracked<T> *>(made);
         tracked->record = &record;
@@ -1318,6 +1317,7 @@ void reflect_adopt(mrb_state *const mrb, const mrb_value self, reflect_lifetime_
     }
     mrb_iv_remove(mrb, self, MRB_SYM(__reflected_share__));
     reflect_identity_set(record);
+    record.alive = true;
 }
 
 template <class T>
@@ -1353,10 +1353,10 @@ mrb_value reflect_borrowed(mrb_state *const mrb, T *const ref, const mrb_value o
     const mrb_value object = mrb_obj_value(data);
     reflect_lifetime_base &record = reflect_new_lifetime<T>(mrb, object);
     record.object = ref;
-    record.alive = true;
     mrb_iv_set(mrb, object, MRB_SYM(owner), owner);
     if (frozen) mrb_obj_freeze(mrb, object);
     reflect_identity_set(record);
+    record.alive = true;
     return object;
 }
 
@@ -1383,6 +1383,25 @@ constexpr bool reflect_from_mrb = [] {
     else return true;
 }();
 
+template <class T>
+inline constexpr bool reflect_plain_value = std::is_arithmetic_v<T> || std::same_as<T, std::string>;
+
+template <class T>
+inline constexpr bool reflect_replaces = [] {
+    if constexpr (std::same_as<T, std::string>) return true;
+    else if constexpr (mrbcpp::value_converter::is_std_vector<T>::value) return reflect_plain_value<typename T::value_type>;
+    else if constexpr (mrbcpp::value_converter::is_map_like_v<T>) return reflect_plain_value<typename T::key_type> && reflect_plain_value<typename T::mapped_type>;
+    else return false;
+}();
+
+template <class T>
+bool reflect_replaceable_by(const mrb_value v)
+{
+    if constexpr (std::same_as<T, std::string>) return mrb_string_p(v);
+    else if constexpr (mrbcpp::value_converter::is_std_vector<T>::value) return mrb_array_p(v);
+    else return mrb_hash_p(v);
+}
+
 template <class T, bool Move = false, bool Pointer = false, bool Mutates = false>
 struct reflect_holder {
     static constexpr bool moves = Move;
@@ -1390,12 +1409,43 @@ struct reflect_holder {
     std::unique_ptr<T> temporary;
     T *ptr = nullptr;
     mrb_value lent = mrb_undef_value();
+    mrb_value replaced = mrb_undef_value();
+    mrb_state *state = nullptr;
+    bool thaws = false;
     void resolve(mrb_state *const mrb)
     {
         if (mrb_undef_p(lent)) return;
         if constexpr (Mutates) mrb_check_frozen(mrb, mrb_obj_ptr(lent));
         ptr = reflect_ptr<T>(mrb, lent);
         if (ptr == nullptr) [[unlikely]] mrb_raise(mrb, E_TYPE_ERROR, "wrong argument");
+    }
+    void acquire()
+    {
+        if (mrb_undef_p(replaced)) return;
+        RBasic *const given = mrb_basic_ptr(replaced);
+        thaws = !mrb_frozen_p(given);
+        given->frozen = 1;
+    }
+    void release()
+    {
+        if (thaws) mrb_basic_ptr(replaced)->frozen = 0;
+        thaws = false;
+    }
+    void write_back()
+    {
+        if constexpr (reflect_replaces<T>) {
+            if (mrb_undef_p(replaced)) return;
+            release();
+            if constexpr (std::same_as<T, std::string>) {
+                mrb_str_resize(state, replaced, static_cast<mrb_int>(temporary->size()));
+                std::ranges::copy(*temporary, RSTRING_PTR(replaced));
+            } else if constexpr (mrbcpp::value_converter::is_std_vector<T>::value) {
+                mrb_ary_replace(state, replaced, cpp_to_mrb_value(state, *temporary));
+            } else {
+                mrb_hash_clear(state, replaced);
+                mrb_hash_merge(state, replaced, cpp_to_mrb_value(state, *temporary));
+            }
+        }
     }
 };
 
@@ -1409,8 +1459,8 @@ struct reflect_gc_root {
         : mrb(state), object(v), thread(reflect_callbacks_of(state).thread), callbacks(&reflect_callbacks_of(state)), released(callbacks->released)
     {
         callbacks->unregister_released(mrb);
-        callbacks->roots.insert(this);
         mrb_gc_register(mrb, object);
+        callbacks->roots.insert(this);
     }
     reflect_gc_root(const reflect_gc_root &) = delete;
     reflect_gc_root &operator=(const reflect_gc_root &) = delete;
@@ -1637,6 +1687,14 @@ auto reflect_argument(mrb_state *const mrb, const mrb_value v)
         } else if constexpr (!reflect_mutates(type) && reflect_from_mrb<T> && std::is_move_constructible_v<T>) {
             held.temporary = std::make_unique<T>(mrb_value_to<T>(mrb, v));
             held.ptr = held.temporary.get();
+        } else if (reflect_mutates(type) && reflect_replaces<T> && reflect_replaceable_by<T>(v)) {
+            if constexpr (reflect_replaces<T>) {
+                mrb_check_frozen(mrb, mrb_obj_ptr(v));
+                held.temporary = std::make_unique<T>(mrb_value_to<T>(mrb, v));
+                held.ptr = held.temporary.get();
+                held.replaced = v;
+                held.state = mrb;
+            }
         } else {
             if constexpr (reflect_is_shared_ptr(type) && !reflect_mutates(type)) {
                 if (mrb_nil_p(v)) held.temporary = std::make_unique<T>();
@@ -1687,81 +1745,28 @@ consteval const char *reflect_kept_name()
     return std::define_static_string("__" + owner + "_" + parameter + "__");
 }
 
-consteval bool reflect_is_callback(const std::meta::info type)
-{
-    const std::meta::info bare = reflect_bare(type);
-    return reflect_is_function(bare) || (std::meta::is_pointer_type(bare) && std::meta::is_function_type(std::meta::remove_pointer(bare)));
-}
-
-consteval bool reflect_function_takes_callback(const std::meta::info function)
-{
-    return std::ranges::any_of(std::meta::parameters_of(function), [](const std::meta::info p) { return reflect_is_callback(std::meta::type_of(p)); });
-}
-
-consteval bool reflect_scope_takes_callbacks(const std::meta::info scope)
-{
-    for (const std::meta::info m : std::meta::members_of(scope, std::meta::access_context::unchecked())) {
-        if (std::meta::is_function(m) && reflect_function_takes_callback(m)) return true;
-        if ((std::meta::is_nonstatic_data_member(m) || std::meta::is_variable(m)) && reflect_is_callback(std::meta::type_of(m))) return true;
-        const bool nested_namespace = std::meta::is_namespace(m) && !std::meta::is_namespace_alias(m);
-        const bool nested_class = std::meta::is_type(m) && !std::meta::is_type_alias(m) && std::meta::is_class_type(m) && std::meta::is_complete_type(m);
-        if ((nested_namespace || nested_class) && reflect_scope_takes_callbacks(m)) return true;
-    }
-    return false;
-}
-
-consteval bool reflect_file_takes_callbacks(const std::string_view file)
-{
-    for (const std::meta::info m : std::meta::members_of(^^::, std::meta::access_context::current())) {
-        if (std::string_view(std::meta::source_location_of(m).file_name()) != file) continue;
-        if (std::meta::is_function(m) && reflect_function_takes_callback(m)) return true;
-        if (std::meta::is_variable(m) && reflect_is_callback(std::meta::type_of(m))) return true;
-        if (std::meta::is_type(m) && !std::meta::is_type_alias(m) && std::meta::is_class_type(m) && std::meta::is_complete_type(m) && reflect_scope_takes_callbacks(m)) return true;
-    }
-    return false;
-}
-
-template <std::meta::info Scope>
-inline constexpr bool reflect_takes_callbacks = reflect_scope_takes_callbacks(Scope);
-
-template <const char *File>
-inline constexpr bool reflect_takes_callbacks_in_file = reflect_file_takes_callbacks(File);
-
-consteval bool reflect_may_run_ruby(const std::meta::info function)
-{
-    for (const std::meta::info p : std::meta::parameters_of(function)) {
-        const std::meta::info type = std::meta::type_of(p);
-        if (reflect_is_callback(type)) return true;
-        const std::meta::info pointee = std::meta::dealias(std::meta::remove_cv(std::meta::is_pointer_type(reflect_bare(type)) ? std::meta::remove_pointer(reflect_bare(type)) : reflect_bare(type)));
-        if (std::meta::is_class_type(pointee) && std::meta::is_complete_type(pointee) && std::meta::is_polymorphic_type(pointee)) return true;
-    }
-    std::meta::info scope = std::meta::parent_of(function);
-    if (std::meta::is_type(scope) && std::meta::is_polymorphic_type(scope)) return true;
-    while (scope != ^^:: && std::meta::parent_of(scope) != ^^::) scope = std::meta::parent_of(scope);
-    if (scope != ^^::) return std::meta::extract<bool>(std::meta::substitute(^^reflect_takes_callbacks, {std::meta::reflect_constant(scope)}));
-    const char *const file = std::define_static_string(std::string_view(std::meta::source_location_of(function).file_name()));
-    return std::meta::extract<bool>(std::meta::substitute(^^reflect_takes_callbacks_in_file, {std::meta::reflect_constant(file)}));
-}
-
 template <class V>
 struct reflect_lent_string {
-    V value;
+    V value{};
     mrb_value copy;
     mrb_state *mrb = nullptr;
-    bool registered = false;
     mrb_value holder = mrb_nil_value();
     const char *name = nullptr;
-    void write_back() const
+    bool thaws = false;
+    void acquire()
     {
         if (name != nullptr) reflect_keep(mrb, holder, mrb_intern_static(mrb, name, std::char_traits<char>::length(name)), copy);
+        if constexpr (std::same_as<V, const char *>) value = mrb_string_cstr(mrb, copy);
+        else value = V(RSTRING_PTR(copy), static_cast<std::size_t>(RSTRING_LEN(copy)));
+        if (name != nullptr) return;
+        RBasic *const lent = mrb_basic_ptr(copy);
+        thaws = !mrb_frozen_p(lent);
+        lent->frozen = 1;
     }
-    void acquire() const
+    void release()
     {
-        if (registered) mrb_gc_register(mrb, copy);
-    }
-    void release() const
-    {
-        if (registered) mrb_gc_unregister(mrb, copy);
+        if (thaws) mrb_basic_ptr(copy)->frozen = 0;
+        thaws = false;
     }
 };
 
@@ -1769,20 +1774,15 @@ template <std::meta::info Parameter, std::size_t Skip, class V>
 reflect_lent_string<V> reflect_lend_string(mrb_state *const mrb, const std::span<const mrb_value> argv, const std::size_t at)
 {
     constexpr std::optional<parameter_destination> destination = reflect_parameter_destination(Parameter);
-    constexpr bool may_run_ruby = reflect_may_run_ruby(std::meta::parent_of(Parameter));
     if constexpr (destination.has_value() && destination->appends) {
         mrb_raisef(mrb, E_NOTIMP_ERROR, "%s keeps its argument %s in the container %s, and the gem keeps only one value per field",
                    std::define_static_string(std::meta::identifier_of(std::meta::parent_of(Parameter))), reflect_kept_name<Parameter>(), destination->field);
     }
     const mrb_value given = argv[at];
-    const mrb_value copy = may_run_ruby || destination.has_value() ? mrb_str_byte_subseq(mrb, given, 0, RSTRING_LEN(given)) : given;
-    V value;
-    if constexpr (std::same_as<V, const char *>) value = mrb_string_cstr(mrb, copy);
-    else value = V(RSTRING_PTR(copy), static_cast<std::size_t>(RSTRING_LEN(copy)));
     if constexpr (destination.has_value()) {
         const mrb_value holder = destination->holder < 0 ? mrb->c->ci->stack[0] : argv[static_cast<std::size_t>(destination->holder) - Skip];
-        return {value, copy, mrb, may_run_ruby, holder, reflect_kept_name<Parameter>()};
-    } else return {value, copy, mrb, may_run_ruby};
+        return {.copy = mrb_str_byte_subseq(mrb, given, 0, RSTRING_LEN(given)), .mrb = mrb, .holder = holder, .name = reflect_kept_name<Parameter>()};
+    } else return {.copy = given, .mrb = mrb};
 }
 
 template <class H>
@@ -2024,7 +2024,9 @@ mrb_value reflect_result(mrb_state *const mrb, const mrb_value self, R &&value)
     }
     if constexpr (reflect_is_function(^^T)) {
         using Signature = [:std::meta::template_arguments_of(std::meta::dealias(^^T))[0]:];
-        if (const reflect_callable<Signature> *const made = value.template target<reflect_callable<Signature>>(); made != nullptr) return made->root->object;
+        if (const reflect_callable<Signature> *const made = value.template target<reflect_callable<Signature>>();
+            made != nullptr && made->root->mrb == mrb && made->root->callbacks != nullptr)
+            return made->root->object;
     }
     if constexpr (std::same_as<T, mrb_value>) return value;
     else if constexpr (reflect_is_variant(^^T))
@@ -2217,10 +2219,10 @@ struct reflect_virtual_call {
         const mrb_value lent_object = mrb_obj_value(data);
         reflect_lifetime_base &record = reflect_new_lifetime<Q>(mrb, lent_object);
         record.object = const_cast<Q *>(object);
-        record.alive = true;
         lent.at(lent_count++) = &record;
         if (frozen) mrb_obj_freeze(mrb, lent_object);
         reflect_identity_set(record);
+        record.alive = true;
         return lent_object;
     }
     template <class A>
@@ -2353,16 +2355,16 @@ mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
                     if (!static_cast<reflect_lifetime_base *>(DATA_PTR(self))->owned) [[unlikely]]
                         mrb_raise(mrb, E_TYPE_ERROR, "a member coroutine needs a receiver that Ruby owns");
                 }
-                std::apply([&](auto &...held) { reflect_raise_on_hardened_precondition<Function>(mrb, *object, reflect_pass(held)...); }, args);
+                const auto checked = [&](auto &...held) { reflect_raise_on_hardened_precondition<Function>(mrb, *object, reflect_pass(held)...); };
                 if constexpr (std::meta::return_type_of(Function) == ^^void) {
-                    reflect_apply([&](auto &...held) { object->[:Function:](reflect_pass(held)...); }, args);
+                    reflect_apply([&](auto &...held) { checked(held...); object->[:Function:](reflect_pass(held)...); }, args);
                     return mrb_nil_value();
                 } else if constexpr (std::meta::is_reference_type(std::meta::return_type_of(Function)) &&
                                      reflect_bare(std::meta::return_type_of(Function)) == std::meta::dealias(^^T)) {
-                    auto &answer = reflect_apply([&](auto &...held) -> decltype(auto) { return object->[:Function:](reflect_pass(held)...); }, args);
+                    auto &answer = reflect_apply([&](auto &...held) -> decltype(auto) { checked(held...); return object->[:Function:](reflect_pass(held)...); }, args);
                     return &answer == object ? self : reflect_result(mrb, self, answer);
                 } else {
-                    const mrb_value answer = reflect_apply([&](auto &...held) -> mrb_value { return reflect_result(mrb, self, object->[:Function:](reflect_pass(held)...)); }, args);
+                    const mrb_value answer = reflect_apply([&](auto &...held) -> mrb_value { checked(held...); return reflect_result(mrb, self, object->[:Function:](reflect_pass(held)...)); }, args);
                     if constexpr (reflect_is_coroutine(std::meta::return_type_of(Function))) mrb_iv_set(mrb, answer, MRB_SYM(__reflected_receiver__), self);
                     return answer;
                 }
@@ -2683,10 +2685,10 @@ mrb_value reflect_child(mrb_state *const mrb, const mrb_value self)
     record.holder = now;
     record.field = &reflect_field_address<Field>;
     record.object = current;
-    record.alive = true;
     mrb_iv_set(mrb, made, MRB_SYM(owner), self);
     if (frozen) mrb_obj_freeze(mrb, made);
     reflect_identity_set(record);
+    record.alive = true;
     return made;
 }
 
@@ -2805,6 +2807,11 @@ template <class T>
 reflect_single_pass<T> &reflect_iteration(mrb_state *const mrb, const mrb_value self)
 {
     static constexpr mrb_data_type type{"iteration", [](mrb_state *, void *const p) { delete static_cast<reflect_single_pass<T> *>(p); }};
+    if (const mrb_value receiver = mrb_iv_get(mrb, self, MRB_SYM(__reflected_receiver__)); !mrb_nil_p(receiver)) {
+        reflect_lifetime_base *const record = reflect_record(mrb, receiver);
+        if (record == nullptr || !reflect_alive(*record)) [[unlikely]]
+            mrb_raise(mrb, mrb_class_get_id(mrb, MRB_SYM(RefError)), "the lifetime of the receiver of the coroutine has ended");
+    }
     const mrb_sym key = MRB_SYM(__reflected_iteration__);
     const mrb_value held = mrb_iv_get(mrb, self, key);
     if (void *const p = mrb_data_check_get_ptr(mrb, held, &type); p != nullptr) [[likely]] {

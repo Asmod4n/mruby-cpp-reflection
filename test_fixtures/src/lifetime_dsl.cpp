@@ -69,7 +69,7 @@ public:
     }
 };
 
-constexpr auto lifetime_classes = mruby::cpp_reflection::reflect<^^TreeObject, ^^Resource, ^^Layout, ^^Window, ^^Frame, ^^Device, ^^Deep, ^^AdoptedLeaf, ^^Adopter, ^^Worker, ^^Blank, ^^Empty,
+constexpr auto lifetime_classes = mruby::cpp_reflection::reflect<^^TreeObject, ^^Resource, ^^Layout, ^^Window, ^^Frame, ^^Nest, ^^Device, ^^Deep, ^^AdoptedLeaf, ^^Adopter, ^^Worker, ^^Blank, ^^Empty,
                                                              ^^Watcher>();
 constexpr auto undeclared_classes = mruby::cpp_reflection::reflect<^^UndeclaredTree>();
 

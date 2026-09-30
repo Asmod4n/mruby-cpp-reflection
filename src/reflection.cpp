@@ -83,7 +83,7 @@ void reflect_raise_unless_handed_over(mrb_state *const mrb, const reflect_lifeti
 {
     reflect_raise_on_member_object(mrb, record, function);
     if (!record.alive) [[unlikely]] mrb_raise(mrb, mrb_class_get_id(mrb, MRB_SYM(RefError)), "the lifetime of the C++ object has ended");
-    const bool moved = moves && record.taken_by != nullptr;
+    const bool moved = moves && record.taken_by != nullptr && (record.adopted || record.deallocator != nullptr);
     if (!moved && (!record.owned || record.taken_by != nullptr)) [[unlikely]]
         mrb_raisef(mrb, E_ARGUMENT_ERROR, "%s takes only an object that Ruby owns, and Ruby does not own this one", function);
 }
@@ -97,13 +97,19 @@ void reflect_hidden_iv_set(mrb_state *const mrb, RObject *const object, const mr
     else mrb_obj_iv_set(mrb, object, key, value);
 }
 
-mrb_value reflect_retained_of(mrb_state *const mrb, RObject *const keeper)
+mrb_value reflect_hash_on(mrb_state *const mrb, RObject *const object, const mrb_sym key)
 {
-    const mrb_value kept = mrb_obj_iv_get(mrb, keeper, MRB_SYM(__reflected_retained__));
+    const mrb_value kept = mrb_obj_iv_get(mrb, object, key);
     if (mrb_hash_p(kept)) return kept;
     const mrb_value made = mrb_hash_new(mrb);
-    reflect_hidden_iv_set(mrb, keeper, MRB_SYM(__reflected_retained__), made);
+    reflect_hidden_iv_set(mrb, object, key, made);
     return made;
+}
+
+void reflect_link_retained(mrb_state *const mrb, RObject *const keeper, const mrb_value retained)
+{
+    const mrb_value links = reflect_hash_on(mrb, keeper, MRB_SYM(__reflected_retained_links__));
+    mrb_hash_set(mrb, links, mrb_int_value(mrb, static_cast<mrb_int>(reinterpret_cast<std::intptr_t>(mrb_ptr(retained)))), retained);
 }
 
 RObject *reflect_keeper_of(mrb_state *const mrb, reflect_lifetime_base &record)
@@ -124,14 +130,23 @@ mrb_value reflect_retained_key(mrb_state *const mrb, const void *const receiver,
 
 void reflect_move_retained(mrb_state *const mrb, reflect_lifetime_base &of)
 {
-    const mrb_value kept = mrb_obj_iv_get(mrb, of.ruby, MRB_SYM(__reflected_retained__));
-    if (!mrb_hash_p(kept)) return;
     RObject *const keeper = reflect_keeper_of(mrb, of);
-    if (keeper == of.ruby) return;
-    const mrb_value target = reflect_retained_of(mrb, keeper);
-    const mrb_value keys = mrb_hash_keys(mrb, kept);
-    for (const mrb_value key : std::span<const mrb_value>(RARRAY_PTR(keys), static_cast<std::size_t>(RARRAY_LEN(keys))))
-        mrb_hash_set(mrb, target, key, mrb_hash_get(mrb, kept, key));
+    std::vector<reflect_lifetime_base *> open{&of};
+    while (!open.empty()) {
+        reflect_lifetime_base *const at = open.back();
+        open.pop_back();
+        if (at->ruby != keeper) {
+            if (const mrb_value own = mrb_obj_iv_get(mrb, at->ruby, MRB_SYM(__reflected_retained__)); mrb_hash_p(own)) reflect_link_retained(mrb, keeper, own);
+            if (const mrb_value links = mrb_obj_iv_get(mrb, at->ruby, MRB_SYM(__reflected_retained_links__)); mrb_hash_p(links)) {
+                const mrb_value linked = mrb_hash_values(mrb, links);
+                for (const mrb_value retained : std::span<const mrb_value>(RARRAY_PTR(linked), static_cast<std::size_t>(RARRAY_LEN(linked))))
+                    reflect_link_retained(mrb, keeper, retained);
+            }
+        }
+        open.insert(open.end(), at->taken.begin(), at->taken.end());
+        for (reflect_lifetime_base *const child : at->children)
+            if (child != nullptr) open.push_back(child);
+    }
 }
 
 void reflect_raise_on_short_stack(mrb_state *const mrb, const std::size_t reserve)
@@ -168,7 +183,11 @@ void reflect_before_declared_call(mrb_state *const mrb, const mrb_value self, co
         if (by == nullptr && !mrb_nil_p(given) && !mrb_undef_p(given)) [[unlikely]]
             mrb_raisef(mrb, E_TYPE_ERROR, "%s gives ownership only to an object that Ruby holds", declared.name);
         if (of != nullptr) {
-            if (by == nullptr) reflect_raise_on_member_object(mrb, *of, declared.name);
+            if (by == nullptr) {
+                reflect_raise_on_member_object(mrb, *of, declared.name);
+                if (of->taken_by != nullptr && !declared.moves) [[unlikely]]
+                    mrb_raisef(mrb, E_ARGUMENT_ERROR, "%s does not take an object away from its owner, so nil cannot release it", declared.name);
+            }
             else reflect_raise_unless_handed_over(mrb, *of, declared.name, declared.moves);
             if (by != nullptr && reflect_reaches(*by, *of)) [[unlikely]]
                 mrb_raisef(mrb, E_ARGUMENT_ERROR, "%s would make an object take ownership of itself", declared.name);
@@ -218,7 +237,7 @@ void reflect_release(mrb_state *const mrb, reflect_lifetime_base &of)
 {
     if (of.taken_by == nullptr) return;
     reflect_unlink_taken_by(of);
-    of.owned = of.adopted;
+    of.owned = of.adopted || of.deallocator != nullptr;
     reflect_hidden_iv_set(mrb, of.ruby, MRB_SYM(__reflected_taken_by__), mrb_undef_value());
 }
 
@@ -259,6 +278,11 @@ mrb_value reflect_after_declared_call(mrb_state *const mrb, const mrb_value self
         if (declared.of != reflect_nowhere) {
             if (reflect_lifetime_base *const of = reflect_record(mrb, reflect_argument_at(mrb, self, declared.of)); of != nullptr && of->alive) {
                 reflect_lifetime_base *const by = reflect_record(mrb, reflect_argument_at(mrb, self, declared.by));
+                if (by != nullptr && by->alive) {
+                    reflect_raise_unless_handed_over(mrb, *of, declared.name, declared.moves);
+                    if (reflect_reaches(*by, *of)) [[unlikely]]
+                        mrb_raisef(mrb, E_ARGUMENT_ERROR, "%s would make an object take ownership of itself", declared.name);
+                }
                 if (by == nullptr) reflect_release(mrb, *of);
                 else if (!by->alive) {
                     of->owned = false;
@@ -274,8 +298,11 @@ mrb_value reflect_after_declared_call(mrb_state *const mrb, const mrb_value self
         }
         if (!declared.retained.empty()) {
             reflect_lifetime_base *const receiver = reflect_record(mrb, self);
-            RObject *const keeper = receiver == nullptr ? reinterpret_cast<RObject *>(mrb->object_class) : reflect_keeper_of(mrb, *receiver);
-            const mrb_value kept = reflect_retained_of(mrb, keeper);
+            RObject *const holder = receiver == nullptr ? reinterpret_cast<RObject *>(mrb->object_class) : receiver->ruby;
+            const mrb_value kept = reflect_hash_on(mrb, holder, MRB_SYM(__reflected_retained__));
+            if (receiver != nullptr) {
+                if (RObject *const keeper = reflect_keeper_of(mrb, *receiver); keeper != holder) reflect_link_retained(mrb, keeper, kept);
+            }
             const void *const object = receiver == nullptr ? nullptr : receiver->object;
             for (const reflect_retained_parameter retained : declared.retained) {
                 const mrb_value given = reflect_argument_at(mrb, self, retained.position);
@@ -311,17 +338,14 @@ extern "C" void mrb_mruby_cpp_reflection_gem_final(mrb_state *const mrb)
 {
     mruby::cpp_reflection::reflect_callbacks &callbacks = mruby::cpp_reflection::reflect_callbacks_of(mrb);
     callbacks.closed = true;
+    for (mruby::cpp_reflection::reflect_gc_root *const root : callbacks.roots) root->callbacks = nullptr;
     std::vector<mruby::cpp_reflection::reflect_gc_root *> released;
     {
         const std::scoped_lock hold(callbacks.released->lock);
         callbacks.released->closed = true;
         released.swap(callbacks.released->roots);
     }
-    for (mruby::cpp_reflection::reflect_gc_root *const root : released) {
-        callbacks.roots.erase(root);
-        delete root;
-    }
-    for (mruby::cpp_reflection::reflect_gc_root *const root : callbacks.roots) root->callbacks = nullptr;
+    for (mruby::cpp_reflection::reflect_gc_root *const root : released) delete root;
     callbacks.roots.clear();
     mrb_objspace_each_objects(mrb, mruby::cpp_reflection::reflect_free_object, nullptr);
     for (const auto &[object, record] : mruby::cpp_reflection::reflect_identity_map(mrb)) {
