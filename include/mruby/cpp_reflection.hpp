@@ -1665,12 +1665,7 @@ auto reflect_argument(mrb_state *const mrb, const mrb_value v)
 template <class V>
 struct reflect_lent_string {
     V value;
-    mrb_state *mrb;
     mrb_value copy;
-    reflect_lent_string(mrb_state *const state, const mrb_value string, const V view) : value(view), mrb(state), copy(string) { mrb_gc_register(mrb, copy); }
-    reflect_lent_string(reflect_lent_string &&other) noexcept : value(other.value), mrb(other.mrb), copy(std::exchange(other.copy, mrb_nil_value())) {}
-    reflect_lent_string &operator=(reflect_lent_string &&) = delete;
-    ~reflect_lent_string() { mrb_gc_unregister(mrb, copy); }
 };
 
 template <class H>
@@ -1685,8 +1680,6 @@ struct reflect_array_argument {
     std::array<E, Extent> values{};
     mrb_state *mrb;
     mrb_value array;
-    int exceptions = std::uncaught_exceptions();
-    bool writes = !std::is_const_v<T>;
     reflect_array_argument(mrb_state *const state, const mrb_value given) : mrb(state), array(given)
     {
         if (RARRAY_LEN(array) != static_cast<mrb_int>(Extent)) [[unlikely]]
@@ -1706,20 +1699,40 @@ struct reflect_array_argument {
             }
         }
     }
-    reflect_array_argument(reflect_array_argument &&other) noexcept
-        : values(other.values), mrb(other.mrb), array(other.array), exceptions(other.exceptions), writes(std::exchange(other.writes, false)) {}
-    reflect_array_argument &operator=(reflect_array_argument &&) = delete;
-    ~reflect_array_argument()
+    void write_back() const
     {
-        if (!writes || std::uncaught_exceptions() != exceptions) return;
-        for (std::size_t i = 0; i < Extent; i++) mrb_ary_set(mrb, array, static_cast<mrb_int>(i), cpp_to_mrb_value(mrb, values.at(i)));
+        if constexpr (!std::is_const_v<T>)
+            for (std::size_t i = 0; i < Extent; i++) mrb_ary_set(mrb, array, static_cast<mrb_int>(i), cpp_to_mrb_value(mrb, values.at(i)));
     }
 };
+
+template <class Args>
+void reflect_write_back(Args &args)
+{
+    std::apply([](auto &...held) {
+        ([&] {
+            if constexpr (requires { held.write_back(); }) held.write_back();
+        }(), ...);
+    }, args);
+}
+
+template <class Call, class Args>
+decltype(auto) reflect_apply(Call &&call, Args &args)
+{
+    if constexpr (std::is_void_v<decltype(std::apply(call, args))>) {
+        std::apply(call, args);
+        reflect_write_back(args);
+    } else {
+        decltype(auto) answer = std::apply(call, args);
+        reflect_write_back(args);
+        return answer;
+    }
+}
 
 template <class H>
 decltype(auto) reflect_pass(H &held)
 {
-    if constexpr (requires { held.values; held.array; held.writes; }) return held.values.data();
+    if constexpr (requires { held.values; held.array; }) return held.values.data();
     else if constexpr (requires { held.value; held.made; }) return &held.value;
     else if constexpr (requires { held.value; held.copy; }) return held.value;
     else if constexpr (requires { held.ptr; held.temporary; }) {
@@ -1797,10 +1810,10 @@ auto reflect_get_args(mrb_state *const mrb)
             else if constexpr (std::same_as<std::remove_cvref_t<decltype(s)>, mrb_value> && !std::same_as<T, mrb_value>) return reflect_argument<std::meta::type_of(P)>(mrb, s);
             else if constexpr (std::same_as<T, std::string_view>) {
                 const mrb_value copy = mrb_str_byte_subseq(mrb, argv[J], 0, RSTRING_LEN(argv[J]));
-                return reflect_lent_string<std::string_view>(mrb, copy, std::string_view(RSTRING_PTR(copy), static_cast<std::size_t>(RSTRING_LEN(copy))));
+                return reflect_lent_string<std::string_view>{std::string_view(RSTRING_PTR(copy), static_cast<std::size_t>(RSTRING_LEN(copy))), copy};
             } else if constexpr (std::same_as<T, const char *>) {
                 const mrb_value copy = mrb_str_new(mrb, RSTRING_PTR(argv[J]), RSTRING_LEN(argv[J]));
-                return reflect_lent_string<const char *>(mrb, copy, RSTRING_PTR(copy));
+                return reflect_lent_string<const char *>{RSTRING_PTR(copy), copy};
             }
             else if constexpr (std::same_as<T, std::string>) return std::string(RSTRING_PTR(argv[J]), static_cast<std::size_t>(RSTRING_LEN(argv[J])));
             else if constexpr (std::same_as<T, std::span<const mrb_value>>) {
@@ -2126,14 +2139,14 @@ mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
             O *const object = reflect_ptr<O>(mrb, self);
             if (object == nullptr) [[unlikely]] mrb_raise(mrb, E_TYPE_ERROR, "wrong receiver");
             if constexpr (std::meta::return_type_of(Function) == ^^void) {
-                std::apply([&](auto &...held) { [:Function:](*object, reflect_pass(held)...); }, args);
+                reflect_apply([&](auto &...held) { [:Function:](*object, reflect_pass(held)...); }, args);
                 return mrb_nil_value();
             } else if constexpr (std::meta::is_reference_type(std::meta::return_type_of(Function)) &&
                                  reflect_bare(std::meta::return_type_of(Function)) == std::meta::dealias(^^O)) {
-                auto &answer = std::apply([&](auto &...held) -> decltype(auto) { return [:Function:](*object, reflect_pass(held)...); }, args);
+                auto &answer = reflect_apply([&](auto &...held) -> decltype(auto) { return [:Function:](*object, reflect_pass(held)...); }, args);
                 return &answer == object ? self : reflect_result(mrb, self, answer);
             } else {
-                return std::apply([&](auto &...held) -> mrb_value { return reflect_result(mrb, self, [:Function:](*object, reflect_pass(held)...)); }, args);
+                return reflect_apply([&](auto &...held) -> mrb_value { return reflect_result(mrb, self, [:Function:](*object, reflect_pass(held)...)); }, args);
             }
         });
     } else if constexpr (reflect_owner_function(Function) != ^^void) {
@@ -2147,7 +2160,7 @@ mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
                 mrb_raisef(mrb, E_TYPE_ERROR, "%s returned an object that no Ruby object owns", std::define_static_string(std::meta::identifier_of(owner)));
             const mrb_value kept = mrb_obj_value(known);
             mrb_gc_protect(mrb, kept);
-            auto &&part = std::apply([&](auto &...held) -> decltype(auto) { return [:Function:](reflect_pass(held)...); }, args);
+            auto &&part = reflect_apply([&](auto &...held) -> decltype(auto) { return [:Function:](reflect_pass(held)...); }, args);
             if constexpr (std::is_pointer_v<std::remove_reference_t<decltype(part)>>) return part == nullptr ? mrb_nil_value() : reflect_borrowed_part(mrb, part, kept);
             else return reflect_borrowed_part(mrb, std::addressof(part), kept);
         });
@@ -2155,10 +2168,10 @@ mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
         return reflect_translate_exceptions(mrb, [&] {
             auto args = reflect_get_args<Function, 0, Count>(mrb);
             if constexpr (std::meta::return_type_of(Function) == ^^void) {
-                std::apply([&](auto &...held) { [:Function:](reflect_pass(held)...); }, args);
+                reflect_apply([&](auto &...held) { [:Function:](reflect_pass(held)...); }, args);
                 return mrb_nil_value();
             } else {
-                return std::apply([&](auto &...held) -> mrb_value { return reflect_result(mrb, self, [:Function:](reflect_pass(held)...)); }, args);
+                return reflect_apply([&](auto &...held) -> mrb_value { return reflect_result(mrb, self, [:Function:](reflect_pass(held)...)); }, args);
             }
         });
     } else {
@@ -2168,24 +2181,24 @@ mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
             reflect_lifetime_base &record = reflect_new_lifetime<B>(mrb, self);
             return reflect_translate_exceptions(mrb, [&] {
                 auto args = reflect_get_args<Function, 0, Count>(mrb);
-                reflect_adopt<B>(mrb, self, record, static_cast<B *>(std::apply([&](auto &...held) { return new T(reflect_pass(held)...); }, args)));
+                reflect_adopt<B>(mrb, self, record, static_cast<B *>(reflect_apply([&](auto &...held) { return new T(reflect_pass(held)...); }, args)));
                 return self;
             });
         } else if constexpr (std::meta::is_constructor(Function)) {
             reflect_lifetime_base &record = reflect_new_lifetime<T>(mrb, self);
             return reflect_translate_exceptions(mrb, [&] {
                 auto args = reflect_get_args<Function, 0, Count>(mrb);
-                reflect_adopt<T>(mrb, self, record, std::apply([&](auto &...held) { return reflect_new<T>(reflect_pass(held)...); }, args));
+                reflect_adopt<T>(mrb, self, record, reflect_apply([&](auto &...held) { return reflect_new<T>(reflect_pass(held)...); }, args));
                 return self;
             });
         } else if constexpr (std::meta::is_static_member(Function)) {
             return reflect_translate_exceptions(mrb, [&] {
                 auto args = reflect_get_args<Function, 0, Count>(mrb);
                 if constexpr (std::meta::return_type_of(Function) == ^^void) {
-                    std::apply([&](auto &...held) { [:Function:](reflect_pass(held)...); }, args);
+                    reflect_apply([&](auto &...held) { [:Function:](reflect_pass(held)...); }, args);
                     return mrb_nil_value();
                 } else {
-                    return std::apply([&](auto &...held) -> mrb_value { return reflect_result(mrb, self, [:Function:](reflect_pass(held)...)); }, args);
+                    return reflect_apply([&](auto &...held) -> mrb_value { return reflect_result(mrb, self, [:Function:](reflect_pass(held)...)); }, args);
                 }
             });
         } else {
@@ -2202,14 +2215,14 @@ mrb_value reflect_call(mrb_state *const mrb, const mrb_value self)
                 }
                 std::apply([&](auto &...held) { reflect_raise_on_hardened_precondition<Function>(mrb, *object, reflect_pass(held)...); }, args);
                 if constexpr (std::meta::return_type_of(Function) == ^^void) {
-                    std::apply([&](auto &...held) { object->[:Function:](reflect_pass(held)...); }, args);
+                    reflect_apply([&](auto &...held) { object->[:Function:](reflect_pass(held)...); }, args);
                     return mrb_nil_value();
                 } else if constexpr (std::meta::is_reference_type(std::meta::return_type_of(Function)) &&
                                      reflect_bare(std::meta::return_type_of(Function)) == std::meta::dealias(^^T)) {
-                    auto &answer = std::apply([&](auto &...held) -> decltype(auto) { return object->[:Function:](reflect_pass(held)...); }, args);
+                    auto &answer = reflect_apply([&](auto &...held) -> decltype(auto) { return object->[:Function:](reflect_pass(held)...); }, args);
                     return &answer == object ? self : reflect_result(mrb, self, answer);
                 } else {
-                    const mrb_value answer = std::apply([&](auto &...held) -> mrb_value { return reflect_result(mrb, self, object->[:Function:](reflect_pass(held)...)); }, args);
+                    const mrb_value answer = reflect_apply([&](auto &...held) -> mrb_value { return reflect_result(mrb, self, object->[:Function:](reflect_pass(held)...)); }, args);
                     if constexpr (reflect_is_coroutine(std::meta::return_type_of(Function))) mrb_iv_set(mrb, answer, MRB_SYM(__reflected_receiver__), self);
                     return answer;
                 }
