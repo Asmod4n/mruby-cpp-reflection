@@ -394,6 +394,16 @@ assert('a container of elements without == has no ==') do
   assert_false items == HoldsUnequal.new.items
 end
 
+# A Proc that C++ keeps from one call can run inside another call. The
+# Std::String that the second call takes is held only by the argument
+# register of that call, and the Proc runs the collector. The argument
+# must stay alive until the call returns.
+assert('an argument stays alive while a kept Proc runs inside the call') do
+  c = Callback.new
+  c.keep(->(n) { GC.start; GC.start; n })
+  assert_equal 100, c.size_after_kept(c.make_text)
+end
+
 assert('the compiler decides which calls can run Ruby') do
   assert_true call_with_callback_may_run_ruby?
   assert_false call_in_scope_without_callbacks_may_run_ruby?

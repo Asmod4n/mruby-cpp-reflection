@@ -211,6 +211,12 @@ struct Callback {
     }
     mrb_int each_twice(mrb_int n, std::function<number(number)> f) const { return f(f(n)); }
     void keep(std::function<number(number)> f) { kept = std::move(f); }
+    std::string make_text() const { return std::string(100, 'a'); }
+    mrb_int size_after_kept(const std::string &text) const
+    {
+        kept(0);
+        return static_cast<mrb_int>(std::ranges::count(text, 'a'));
+    }
     mrb_int call_kept(mrb_int n) const { return kept(n); }
     static void keep_outside(std::function<number(number)> f) { kept_outside() = std::move(f); }
     std::string buffer = "abc";
