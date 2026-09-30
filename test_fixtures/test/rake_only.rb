@@ -95,3 +95,33 @@ assert('libclang gives where a callback parameter lands') do
   assert_true RakeOnly.called_callback_is_not_kept
   assert_true RakeOnly.member_keeps_callback_in_this
 end
+
+# C and C++ expect that memory passed to a function stays as it is while
+# the function runs, and a pointer that a function keeps expects the same
+# after it. Ruby can run inside the call and the collector with it. So a
+# String reaches C++ as a byte slice of itself: when Ruby changes the
+# String, the String gets a buffer of its own and the slice keeps the old
+# one. Where libclang shows that the function keeps the pointer, the gem
+# keeps the slice on the object that holds the pointer, after the call
+# returned, so the collector does not free it.
+assert('a String that C++ keeps stays what it was') do
+  assert_true RakeOnly.kept_string_lands_in_this
+  named = RakeOnly.make_named
+  name = 'n' * 64
+  label = 'l' * 64
+  named.set_name(name)
+  named.set_label(label)
+  name.replace('x' * 64)
+  label.replace('y' * 64)
+  name = label = nil
+  3.times do
+    GC.start
+    Array.new(1000) { |i| 'garbage' * (i % 16) }
+  end
+  assert_true named.name_is('n' * 64)
+  assert_true named.label_is('l' * 64)
+end
+
+assert('a String with a NUL byte is refused where C++ reads a C string') do
+  assert_raise(ArgumentError) { RakeOnly.make_named.set_name("a\0b") }
+end

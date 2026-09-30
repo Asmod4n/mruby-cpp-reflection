@@ -1668,11 +1668,49 @@ auto reflect_argument(mrb_state *const mrb, const mrb_value v)
     }
 }
 
+inline void reflect_keep(mrb_state *const mrb, const mrb_value holder, const mrb_sym name, const mrb_value kept)
+{
+    if (mrb_immediate_p(holder)) [[unlikely]] mrb_raisef(mrb, E_TYPE_ERROR, "%v cannot keep %n", holder, name);
+    RBasic *const object = mrb_basic_ptr(holder);
+    const bool frozen = mrb_frozen_p(object);
+    object->frozen = false;
+    mrb_iv_set(mrb, holder, name, kept);
+    object->frozen = frozen;
+}
+
+template <std::meta::info Parameter>
+consteval const char *reflect_kept_name()
+{
+    const std::meta::info function = std::meta::parent_of(Parameter);
+    const std::vector<std::meta::info> parameters = std::meta::parameters_of(function);
+    const std::string parameter = std::meta::has_identifier(Parameter) ? std::string(std::meta::identifier_of(Parameter))
+                                                                        : std::to_string(std::ranges::distance(parameters.begin(), std::ranges::find(parameters, Parameter)));
+    const std::string owner = std::meta::has_identifier(function) ? std::string(std::meta::identifier_of(function)) : std::string("initialize");
+    return std::define_static_string("__" + owner + "_" + parameter + "__");
+}
+
 template <class V>
 struct reflect_lent_string {
     V value;
     mrb_value copy;
+    mrb_state *mrb = nullptr;
+    mrb_value holder = mrb_nil_value();
+    const char *name = nullptr;
+    void write_back() const
+    {
+        if (name != nullptr) reflect_keep(mrb, holder, mrb_intern_static(mrb, name, std::char_traits<char>::length(name)), copy);
+    }
 };
+
+template <std::meta::info Parameter, std::size_t Skip, class V>
+reflect_lent_string<V> reflect_lend_string(mrb_state *const mrb, const std::span<const mrb_value> argv, const mrb_value copy, const V value)
+{
+    constexpr std::optional<parameter_destination> destination = reflect_parameter_destination(Parameter);
+    if constexpr (destination.has_value()) {
+        const mrb_value holder = destination->holder < 0 ? mrb->c->ci->stack[0] : argv[static_cast<std::size_t>(destination->holder) - Skip];
+        return {value, copy, mrb, holder, reflect_kept_name<Parameter>()};
+    } else return {value, copy};
+}
 
 template <class H>
 void reflect_resolve(mrb_state *const mrb, H &held)
@@ -1816,10 +1854,10 @@ auto reflect_get_args(mrb_state *const mrb)
             else if constexpr (std::same_as<std::remove_cvref_t<decltype(s)>, mrb_value> && !std::same_as<T, mrb_value>) return reflect_argument<std::meta::type_of(P)>(mrb, s);
             else if constexpr (std::same_as<T, std::string_view>) {
                 const mrb_value copy = mrb_str_byte_subseq(mrb, argv[J], 0, RSTRING_LEN(argv[J]));
-                return reflect_lent_string<std::string_view>{std::string_view(RSTRING_PTR(copy), static_cast<std::size_t>(RSTRING_LEN(copy))), copy};
+                return reflect_lend_string<P, Skip>(mrb, argv, copy, std::string_view(RSTRING_PTR(copy), static_cast<std::size_t>(RSTRING_LEN(copy))));
             } else if constexpr (std::same_as<T, const char *>) {
-                const mrb_value copy = mrb_str_new(mrb, RSTRING_PTR(argv[J]), RSTRING_LEN(argv[J]));
-                return reflect_lent_string<const char *>{RSTRING_PTR(copy), copy};
+                const mrb_value copy = mrb_str_byte_subseq(mrb, argv[J], 0, RSTRING_LEN(argv[J]));
+                return reflect_lend_string<P, Skip>(mrb, argv, copy, mrb_string_cstr(mrb, copy));
             }
             else if constexpr (std::same_as<T, std::string>) return std::string(RSTRING_PTR(argv[J]), static_cast<std::size_t>(RSTRING_LEN(argv[J])));
             else if constexpr (std::same_as<T, std::span<const mrb_value>>) {

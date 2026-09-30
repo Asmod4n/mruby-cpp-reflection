@@ -34,13 +34,15 @@ MRuby::Gem::Specification.new('mruby-cpp-reflection-rake_only') do |spec|
     constexpr bool macro_number_is_read = std::meta::extract<const int &>(rake_only_facts::macro_named("RAKE_ONLY_ANSWER")) == 42;
     constexpr bool macro_string_is_read = std::string_view(std::meta::extract<const char *const &>(rake_only_facts::macro_named("RAKE_ONLY_NAME"))) == "rake_only";
     constexpr bool macro_call_is_left_out = rake_only_facts::macro_named("RAKE_ONLY_NOT_A_CONSTANT") == std::meta::info{};
-    constexpr auto watcher = mruby::cpp_reflection::reflect_callback_destination(std::meta::parameters_of(^^rake_only_callbacks::watch)[1]);
+    constexpr auto watcher = mruby::cpp_reflection::reflect_parameter_destination(std::meta::parameters_of(^^rake_only_callbacks::watch)[1]);
     constexpr bool assigned_callback_has_one_place = watcher && !watcher->appends && watcher->holder == 0 && std::string_view(watcher->field) == "watcher";
-    constexpr auto listener = mruby::cpp_reflection::reflect_callback_destination(std::meta::parameters_of(^^rake_only_callbacks::listen)[1]);
+    constexpr auto listener = mruby::cpp_reflection::reflect_parameter_destination(std::meta::parameters_of(^^rake_only_callbacks::listen)[1]);
     constexpr bool pushed_callback_has_many_places = listener && listener->appends && listener->holder == 0 && std::string_view(listener->field) == "listeners";
-    constexpr bool called_callback_is_not_kept = !mruby::cpp_reflection::reflect_callback_destination(std::meta::parameters_of(^^rake_only_callbacks::call_now)[0]);
-    constexpr auto kept = mruby::cpp_reflection::reflect_callback_destination(std::meta::parameters_of(^^rake_only_callbacks::keeper::keep)[0]);
+    constexpr bool called_callback_is_not_kept = !mruby::cpp_reflection::reflect_parameter_destination(std::meta::parameters_of(^^rake_only_callbacks::call_now)[0]);
+    constexpr auto kept = mruby::cpp_reflection::reflect_parameter_destination(std::meta::parameters_of(^^rake_only_callbacks::keeper::keep)[0]);
     constexpr bool member_keeps_callback_in_this = kept && !kept->appends && kept->holder == -1 && std::string_view(kept->field) == "kept";
+    constexpr auto kept_name = mruby::cpp_reflection::reflect_parameter_destination(std::meta::parameters_of(^^rake_only::Named::set_name)[0]);
+    constexpr bool kept_string_lands_in_this = kept_name && !kept_name->appends && kept_name->holder == -1 && std::string_view(kept_name->field) == "name";
     }
     #endif
   CXX

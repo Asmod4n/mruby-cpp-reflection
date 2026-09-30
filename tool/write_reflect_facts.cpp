@@ -46,18 +46,18 @@ struct FormatAttribute {
     auto operator<=>(const FormatAttribute &) const = default;
 };
 
-struct CallbackDestination {
+struct ParameterDestination {
     unsigned line;
     unsigned column;
     unsigned position;
     bool appends;
     int holder;
     std::string field;
-    auto operator<=>(const CallbackDestination &) const = default;
+    auto operator<=>(const ParameterDestination &) const = default;
 };
 
 struct Facts {
-    std::map<std::string, std::set<CallbackDestination>> callback_destinations;
+    std::map<std::string, std::set<ParameterDestination>> parameter_destinations;
     std::map<std::string, std::set<ParameterExtent>> parameter_extents;
     std::map<std::string, std::set<FormatAttribute>> format_attributes;
     std::vector<std::string> macro_candidates;
@@ -73,6 +73,15 @@ std::string string_literal(const std::string_view text)
         out += c;
     }
     return out + "\"";
+}
+
+bool is_string_type(const clang::QualType type)
+{
+    const clang::QualType bare = type.getNonReferenceType().getCanonicalType();
+    if (bare->isPointerType())
+        return bare->getPointeeType().getUnqualifiedType()->isCharType() && bare->getPointeeType().isConstQualified();
+    const auto *specialization = llvm::dyn_cast_or_null<clang::ClassTemplateSpecializationDecl>(bare->getAsRecordDecl());
+    return specialization && specialization->isInStdNamespace() && specialization->getName() == "basic_string_view";
 }
 
 bool is_callback_type(const clang::QualType type)
@@ -183,12 +192,12 @@ struct FunctionVisitor : clang::RecursiveASTVisitor<FunctionVisitor> {
                     {where.getLine(), where.getColumn(), parameter->getFunctionScopeIndex(), array->getSize().getZExtValue()});
         if (const clang::FunctionDecl *definition = function->getDefinition(); definition && definition->getBody())
             for (const clang::ParmVarDecl *parameter : definition->parameters()) {
-                if (!is_callback_type(parameter->getType()))
+                if (!is_callback_type(parameter->getType()) && !is_string_type(parameter->getType()))
                     continue;
                 DestinationVisitor destinations{.function = definition, .parameter = parameter, .found = std::nullopt};
                 destinations.TraverseStmt(definition->getBody());
                 if (destinations.found)
-                    facts.callback_destinations[where.getFilename()].insert({where.getLine(), where.getColumn(), parameter->getFunctionScopeIndex(),
+                    facts.parameter_destinations[where.getFilename()].insert({where.getLine(), where.getColumn(), parameter->getFunctionScopeIndex(),
                                                                              std::get<0>(*destinations.found), std::get<1>(*destinations.found),
                                                                              std::get<2>(*destinations.found)});
             }
@@ -322,12 +331,12 @@ std::string header_text(const Facts &facts)
                                row.string_index, row.first_to_check);
         out += "});\n";
     }
-    for (const auto &[file, rows] : facts.callback_destinations) {
-        out += std::format("template <>\ninline constexpr std::span<const mruby::cpp_reflection::callback_destination> "
-                           "mruby::cpp_reflection::callback_destinations<std::define_static_string({})> = std::define_static_array(std::array{{\n",
+    for (const auto &[file, rows] : facts.parameter_destinations) {
+        out += std::format("template <>\ninline constexpr std::span<const mruby::cpp_reflection::parameter_destination> "
+                           "mruby::cpp_reflection::parameter_destinations<std::define_static_string({})> = std::define_static_array(std::array{{\n",
                            string_literal(file));
-        for (const CallbackDestination &row : rows)
-            out += std::format("    mruby::cpp_reflection::callback_destination{{{}, {}, {}, {}, {}, std::define_static_string({})}},\n", row.line, row.column,
+        for (const ParameterDestination &row : rows)
+            out += std::format("    mruby::cpp_reflection::parameter_destination{{{}, {}, {}, {}, {}, std::define_static_string({})}},\n", row.line, row.column,
                                row.position, row.appends, row.holder, string_literal(row.field));
         out += "});\n";
     }

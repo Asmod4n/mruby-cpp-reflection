@@ -11,6 +11,8 @@ extern "C" int rake_only_c_answer(void);
  * macros, of which the last is no constant expression. */
 #include <cstdarg>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 extern "C" double rake_only_sum_of_three(const double values[3]);
 extern "C" int rake_only_format(const char *format, ...) __attribute__((format(printf, 1, 2)));
 extern "C" int rake_only_vformat(const char *format, va_list arguments);
@@ -60,6 +62,17 @@ inline void count_two(unsigned char counts[2])
     counts[0]++;
     counts[1]++;
 }
+class Named {
+    const char *name = "";
+    std::string_view label;
+
+public:
+    void set_name(const char *const given) { name = given; }
+    void set_label(const std::string_view given) { label = given; }
+    bool name_is(const std::string_view expected) const { return std::string_view(name) == expected; }
+    bool label_is(const std::string_view expected) const { return label == expected; }
+};
+inline Named make_named() { return {}; }
 inline void flip_two(bool flags[2])
 {
     flags[0] = !flags[0];
