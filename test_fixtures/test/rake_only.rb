@@ -37,3 +37,12 @@ assert('libclang gives the object like macros that are constants') do
   assert_true RakeOnly.macro_string_is_read
   assert_true RakeOnly.macro_call_is_left_out
 end
+
+# A macro of the headers of spec.reflect is a constant of the module that
+# reflect_define defines the scopes under. The generated source names no
+# module, so the constant is global.
+assert('a macro that is a constant is a global Ruby constant') do
+  assert_equal 42, RAKE_ONLY_ANSWER
+  assert_equal 'rake_only', RAKE_ONLY_NAME
+  assert_false Object.const_defined?(:RAKE_ONLY_NOT_A_CONSTANT)
+end

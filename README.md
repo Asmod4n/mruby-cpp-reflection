@@ -209,7 +209,9 @@ is not a parameter of known extent. A macro is in
 header that is not a system header, and clang reads its expansion as a
 C++ constant expression. The variable has the name of the macro, so a
 source that names it in text gets the macro; reflection finds it by
-`identifier_of`.
+`identifier_of`. `reflect_define` makes each one whose name starts with
+a capital letter a constant of `outer`, and without `outer` a global
+constant: `IMGUI_VERSION`.
 
 `tool/write_reflect_facts.cpp` is the program that reads the headers.
 The build compiles it once with the C++ compiler of the build and links

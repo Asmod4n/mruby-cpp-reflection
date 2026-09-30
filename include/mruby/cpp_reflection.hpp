@@ -3400,6 +3400,16 @@ RClass *reflect_define_namespace(reflect_definition<Names> &definition, RClass *
     return module;
 }
 
+consteval std::vector<std::meta::info> reflect_macros()
+{
+    std::vector<std::meta::info> macros;
+    for (const std::meta::info m : std::meta::members_of(^^mruby::cpp_reflection::macros, std::meta::access_context::current()))
+        if (std::meta::is_variable(m) && std::meta::has_identifier(m) && std::meta::identifier_of(m).front() >= 'A' && std::meta::identifier_of(m).front() <= 'Z' &&
+            reflect_variable_supported(m))
+            macros.push_back(m);
+    return macros;
+}
+
 template <auto Classes, reflect_options Options = reflect_options{}>
 void reflect_define(mrb_state *const mrb, RClass *const under = nullptr)
 {
@@ -3417,6 +3427,11 @@ void reflect_define(mrb_state *const mrb, RClass *const under = nullptr)
             if constexpr (std::meta::is_enum_type(std::meta::dealias(type))) reflect_define_enum<type>(definition, under != nullptr ? under : mrb->object_class);
             else reflect_define_class<type, Options, instances>(definition, under != nullptr ? under : mrb->object_class);
         }
+    }
+    template for (constexpr std::meta::info macro : std::define_static_array(reflect_macros())) {
+        constexpr const char *name = std::define_static_string(std::meta::identifier_of(macro));
+        RClass *const scope = under != nullptr ? under : mrb->object_class;
+        ::mrb_define_const(mrb, scope, name, reflect_result(mrb, mrb_obj_value(scope), [:macro:]));
     }
     definition.finish();
 }

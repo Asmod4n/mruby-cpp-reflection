@@ -107,6 +107,9 @@ inline constexpr std::array<mruby::cpp_reflection::reflect_object_lifetime_word,
 template <std::meta::info Function>
 inline constexpr std::array<std::meta::info, 0> varargs{};
 
+namespace macros {
+}
+
 struct parameter_extent {
     unsigned line;
     unsigned column;
