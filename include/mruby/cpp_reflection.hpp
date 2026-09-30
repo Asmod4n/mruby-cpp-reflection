@@ -1679,10 +1679,48 @@ void reflect_resolve(mrb_state *const mrb, H &held)
     if constexpr (requires { held.resolve(mrb); }) held.resolve(mrb);
 }
 
+template <class T, std::size_t Extent>
+struct reflect_array_argument {
+    using E = std::remove_const_t<T>;
+    std::array<E, Extent> values{};
+    mrb_state *mrb;
+    mrb_value array;
+    int exceptions = std::uncaught_exceptions();
+    bool writes = !std::is_const_v<T>;
+    reflect_array_argument(mrb_state *const state, const mrb_value given) : mrb(state), array(given)
+    {
+        if (RARRAY_LEN(array) != static_cast<mrb_int>(Extent)) [[unlikely]]
+            mrb_raisef(mrb, E_ARGUMENT_ERROR, "an Array of %i values wanted, not %i", static_cast<mrb_int>(Extent), RARRAY_LEN(array));
+        if constexpr (!std::is_const_v<T>) mrb_check_frozen(mrb, mrb_obj_ptr(array));
+        for (std::size_t i = 0; i < Extent; i++) {
+            const mrb_value element = mrb_ary_entry(array, static_cast<mrb_int>(i));
+            if constexpr (std::same_as<E, bool>) {
+                if (!mrb_true_p(element) && !mrb_false_p(element)) [[unlikely]] mrb_raisef(mrb, E_TYPE_ERROR, "true or false wanted, not %T", element);
+                values.at(i) = mrb_true_p(element);
+            } else if constexpr (std::floating_point<E>) {
+                values.at(i) = static_cast<E>(mrb_as_float(mrb, element));
+            } else {
+                const mrb_int n = mrb_as_int(mrb, element);
+                if ((std::is_unsigned_v<E> && n < 0) || static_cast<mrb_int>(static_cast<E>(n)) != n) [[unlikely]] mrb_raisef(mrb, E_RANGE_ERROR, "integer %i does not fit", n);
+                values.at(i) = static_cast<E>(n);
+            }
+        }
+    }
+    reflect_array_argument(reflect_array_argument &&other) noexcept
+        : values(other.values), mrb(other.mrb), array(other.array), exceptions(other.exceptions), writes(std::exchange(other.writes, false)) {}
+    reflect_array_argument &operator=(reflect_array_argument &&) = delete;
+    ~reflect_array_argument()
+    {
+        if (!writes || std::uncaught_exceptions() != exceptions) return;
+        for (std::size_t i = 0; i < Extent; i++) mrb_ary_set(mrb, array, static_cast<mrb_int>(i), cpp_to_mrb_value(mrb, values.at(i)));
+    }
+};
+
 template <class H>
 decltype(auto) reflect_pass(H &held)
 {
-    if constexpr (requires { held.value; held.made; }) return &held.value;
+    if constexpr (requires { held.values; held.array; held.writes; }) return held.values.data();
+    else if constexpr (requires { held.value; held.made; }) return &held.value;
     else if constexpr (requires { held.value; held.copy; }) return held.value;
     else if constexpr (requires { held.ptr; held.temporary; }) {
         if constexpr (H::pointer) return held.ptr;
@@ -1716,7 +1754,7 @@ consteval auto reflect_get_args_format()
     std::array<char, Count + 1> format{};
     std::size_t at = 0;
     for (std::size_t i = Skip; i < Skip + Count; i++) {
-        const char letter = reflect_get_args_letter(std::meta::type_of(parameters[i]));
+        const char letter = reflect_get_args_letter_of(parameters[i]);
         if (letter == '\0') throw "no mrb_get_args format for this parameter type";
         format[at++] = letter;
     }
@@ -1754,7 +1792,9 @@ auto reflect_get_args(mrb_state *const mrb)
             if constexpr (reflect_refuses_nil<Function>(J + Skip)) {
                 if (mrb_nil_p(argv[J])) [[unlikely]] mrb_raisef(mrb, E_TYPE_ERROR, "parameter %d of %n is nonnull", static_cast<int>(J + Skip + 1), mrb_get_mid(mrb));
             }
-            if constexpr (std::same_as<std::remove_cvref_t<decltype(s)>, mrb_value> && !std::same_as<T, mrb_value>) return reflect_argument<std::meta::type_of(P)>(mrb, s);
+            if constexpr (reflect_is_array_parameter(P))
+                return reflect_array_argument<typename [:std::meta::remove_pointer(std::meta::dealias(std::meta::type_of(P))):], reflect_parameter_extent(P)>(mrb, s);
+            else if constexpr (std::same_as<std::remove_cvref_t<decltype(s)>, mrb_value> && !std::same_as<T, mrb_value>) return reflect_argument<std::meta::type_of(P)>(mrb, s);
             else if constexpr (std::same_as<T, std::string_view>) {
                 const mrb_value copy = mrb_str_byte_subseq(mrb, argv[J], 0, RSTRING_LEN(argv[J]));
                 return reflect_lent_string<std::string_view>(mrb, copy, std::string_view(RSTRING_PTR(copy), static_cast<std::size_t>(RSTRING_LEN(copy))));
@@ -2191,8 +2231,9 @@ bool reflect_get_args_match(mrb_state *const mrb, const std::span<const mrb_valu
     template for (constexpr std::meta::info P : std::define_static_array(reflect_given_parameters(Function))) {
         if (fits && at < argv.size() && !(rest && at == letters - 1)) {
             const mrb_value v = argv[at];
-            constexpr char letter = reflect_get_args_letter(std::meta::type_of(P));
-            if constexpr (letter == 'i' || letter == 'f') fits = mrb_integer_p(v) || mrb_float_p(v);
+            constexpr char letter = reflect_get_args_letter_of(P);
+            if constexpr (letter == 'A') fits = mrb_array_p(v) && RARRAY_LEN(v) == static_cast<mrb_int>(reflect_parameter_extent(P));
+            else if constexpr (letter == 'i' || letter == 'f') fits = mrb_integer_p(v) || mrb_float_p(v);
             else if constexpr (letter == 's' || letter == 'z') fits = mrb_string_p(v);
             else if constexpr (letter == 'n') fits = mrb_symbol_p(v) || mrb_string_p(v);
             else if constexpr (letter == 'c') fits = mrb_class_p(v) || mrb_module_p(v);

@@ -8,6 +8,7 @@
 struct mrb_state;
 typedef struct mrb_state mrb_state;
 #include <mruby/value.h>
+#include <mruby/cpp_reflection_lifetime.hpp>
 
 #include <algorithm>
 #include <functional>
@@ -162,6 +163,18 @@ consteval char reflect_get_args_letter(const std::meta::info type)
     if (std::meta::is_floating_point_type(t)) return 'f';
     if (std::meta::is_class_type(t) || std::meta::is_enum_type(t)) return 'o';
     return '\0';
+}
+
+consteval bool reflect_is_array_parameter(const std::meta::info parameter)
+{
+    const std::meta::info type = std::meta::dealias(std::meta::type_of(parameter));
+    if (!std::meta::is_pointer_type(type)) return false;
+    return std::meta::is_arithmetic_type(std::meta::dealias(std::meta::remove_cv(std::meta::remove_pointer(type)))) && reflect_parameter_extent(parameter) > 0;
+}
+
+consteval char reflect_get_args_letter_of(const std::meta::info parameter)
+{
+    return reflect_is_array_parameter(parameter) ? 'A' : reflect_get_args_letter(std::meta::type_of(parameter));
 }
 
 consteval bool reflect_is_void_pointer(const std::meta::info type)
@@ -347,7 +360,7 @@ consteval bool reflect_call_supported(const std::meta::info function)
     if (std::meta::is_vararg_function(function)) return false;
     if (std::meta::is_rvalue_reference_qualified(function) || std::meta::is_volatile(function)) return false;
     for (const std::meta::info p : std::meta::parameters_of(function))
-        if (!reflect_parameter_supported(std::meta::type_of(p))) return false;
+        if (!reflect_is_array_parameter(p) && !reflect_parameter_supported(std::meta::type_of(p))) return false;
     if (std::ranges::count_if(std::meta::parameters_of(function), [](const std::meta::info p) { return reflect_is_output_parameter(std::meta::type_of(p)); }) > 1)
         return false;
     if (std::meta::is_constructor(function)) return true;

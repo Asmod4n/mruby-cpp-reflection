@@ -46,3 +46,39 @@ assert('a macro that is a constant is a global Ruby constant') do
   assert_equal 'rake_only', RAKE_ONLY_NAME
   assert_false Object.const_defined?(:RAKE_ONLY_NOT_A_CONSTANT)
 end
+
+# g++ adjusts double values[3] to double *values, and libclang gives the
+# 3 back. An Array of exactly 3 numbers is the argument. C++ writes into
+# a copy, and after a call that ends without an exception the gem writes
+# the copy back into the same Array. After an exception there is no
+# answer, so the Array stays as it was.
+assert('an array parameter of known extent takes an Array of that length') do
+  assert_equal 6.5, RakeOnly.sum_of_three([1, 2, 3.5])
+  assert_equal 6.0, RakeOnly.sum_of_three([1, 2, 3].freeze)
+  assert_raise(ArgumentError) { RakeOnly.sum_of_three([1, 2]) }
+  assert_raise(TypeError) { RakeOnly.sum_of_three([1, 2, 'three']) }
+end
+
+assert('an array parameter writes its values back into the Array') do
+  values = [1.0, 2.0, 3.0]
+  assert_nil RakeOnly.scale_three(values, 2)
+  assert_equal [2.0, 4.0, 6.0], values
+  counts = [1, 254]
+  RakeOnly.count_two(counts)
+  assert_equal [2, 255], counts
+  flags = [true, false]
+  RakeOnly.flip_two(flags)
+  assert_equal [false, true], flags
+end
+
+assert('an array parameter refuses a frozen Array and a value that does not fit') do
+  assert_raise(FrozenError) { RakeOnly.scale_three([1.0, 2.0, 3.0].freeze, 2) }
+  assert_raise(RangeError) { RakeOnly.count_two([1, 256]) }
+  assert_raise(TypeError) { RakeOnly.flip_two([true, 1]) }
+end
+
+assert('an array parameter stays as it was after an exception') do
+  values = [1.0, 2.0, 3.0]
+  assert_raise(RuntimeError) { RakeOnly.scale_three_then_throw(values) }
+  assert_equal [1.0, 2.0, 3.0], values
+end

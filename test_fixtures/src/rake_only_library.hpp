@@ -10,6 +10,7 @@ extern "C" int rake_only_c_answer(void);
  * is an array of one on x86-64 and is no array parameter, and three
  * macros, of which the last is no constant expression. */
 #include <cstdarg>
+#include <stdexcept>
 extern "C" double rake_only_sum_of_three(const double values[3]);
 extern "C" int rake_only_format(const char *format, ...) __attribute__((format(printf, 1, 2)));
 extern "C" int rake_only_vformat(const char *format, va_list arguments);
@@ -28,5 +29,25 @@ struct Pair {
     T second{};
 };
 inline Pair<Vec2> corners() { return {{0, 0}, {1, 2}}; }
+inline double sum_of_three(const double values[3]) { return values[0] + values[1] + values[2]; }
+inline void scale_three(double values[3], const double factor)
+{
+    for (int i = 0; i < 3; i++) values[i] *= factor;
+}
+inline void scale_three_then_throw(double values[3])
+{
+    values[0] = 99;
+    throw std::runtime_error("scale_three_then_throw");
+}
+inline void count_two(unsigned char counts[2])
+{
+    counts[0]++;
+    counts[1]++;
+}
+inline void flip_two(bool flags[2])
+{
+    flags[0] = !flags[0];
+    flags[1] = !flags[1];
+}
 inline int c_answer() { return rake_only_c_answer(); }
 }

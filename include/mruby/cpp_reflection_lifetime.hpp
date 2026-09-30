@@ -8,6 +8,7 @@ struct mrb_state;
 typedef struct mrb_state mrb_state;
 #include <mruby/value.h>
 
+#include <algorithm>
 #include <array>
 #include <concepts>
 #include <cstddef>
@@ -16,6 +17,7 @@ typedef struct mrb_state mrb_state;
 #include <source_location>
 #include <span>
 #include <string_view>
+#include <vector>
 
 namespace mruby::cpp_reflection {
 
@@ -144,6 +146,13 @@ consteval std::size_t reflect_parameter_extent(const std::meta::info function, c
     for (const mruby::cpp_reflection::parameter_extent &row : mruby::cpp_reflection::reflect_facts_of_file<mruby::cpp_reflection::parameter_extent>(^^mruby::cpp_reflection::parameter_extents, where))
         if (row.line == where.line() && row.column == where.column() && row.position == position) return row.extent;
     return 0;
+}
+
+consteval std::size_t reflect_parameter_extent(const std::meta::info parameter)
+{
+    const std::meta::info function = std::meta::parent_of(parameter);
+    const std::vector<std::meta::info> parameters = std::meta::parameters_of(function);
+    return mruby::cpp_reflection::reflect_parameter_extent(function, static_cast<unsigned>(std::ranges::distance(parameters.begin(), std::ranges::find(parameters, parameter))));
 }
 
 consteval std::optional<mruby::cpp_reflection::format_attribute> reflect_format_attribute(const std::meta::info function)
