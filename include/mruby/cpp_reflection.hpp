@@ -1267,12 +1267,12 @@ T *reflect_ptr(mrb_state *const mrb, const mrb_value v)
     const reflect_data_type *const type = static_cast<const reflect_data_type *>(DATA_TYPE(v));
     reflect_lifetime_base &record = *static_cast<reflect_lifetime_base *>(DATA_PTR(v));
     if (type == &reflect_data_type_of<T>()) {
-        if (!reflect_alive(record)) [[unlikely]] mrb_raise(mrb, E_TYPE_ERROR, "the lifetime of the C++ object has ended");
+        if (!reflect_alive(record)) [[unlikely]] mrb_raise(mrb, mrb_class_get_id(mrb, MRB_SYM(RefError)), "the lifetime of the C++ object has ended");
         return static_cast<T *>(type->object_of(&record));
     }
     for (const reflect_upcast &upcast : type->upcasts)
         if (upcast.base == &reflect_data_type_of<T>()) {
-            if (!reflect_alive(record)) [[unlikely]] mrb_raise(mrb, E_TYPE_ERROR, "the lifetime of the C++ object has ended");
+            if (!reflect_alive(record)) [[unlikely]] mrb_raise(mrb, mrb_class_get_id(mrb, MRB_SYM(RefError)), "the lifetime of the C++ object has ended");
             return static_cast<T *>(upcast.to_base(type->object_of(&record)));
         }
     return nullptr;

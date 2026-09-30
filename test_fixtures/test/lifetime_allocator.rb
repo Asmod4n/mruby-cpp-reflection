@@ -80,8 +80,8 @@ if Object.const_defined?(:CLibrary)
     h = CLibrary.handle_make(2)
     assert_equal 0, CLibrary.handle_close(h)
     assert_equal before, CLibrary.handles_alive
-    assert_raise(TypeError) { CLibrary.handle_value(h) }
-    assert_raise(TypeError) { CLibrary.handle_close(h) }
+    assert_raise(RefError) { CLibrary.handle_value(h) }
+    assert_raise(RefError) { CLibrary.handle_close(h) }
     h = nil
     full_gc
     assert_equal before, CLibrary.handles_alive
@@ -145,7 +145,7 @@ if Object.const_defined?(:CLibrary)
   assert('a decrement that Ruby calls gives back the share of that object') do
     c = CLibrary.counted_find(1)
     CLibrary.counted_unref(c)
-    assert_raise(TypeError) { CLibrary.counted_count(c) }
+    assert_raise(RefError) { CLibrary.counted_count(c) }
     c = nil
     full_gc
     full_gc
@@ -200,7 +200,7 @@ if Object.const_defined?(:CLibrary)
     assert_equal 800, CLibrary.current_width
     assert_same s, CLibrary.current_settings
     CLibrary.destroy_context(c)
-    assert_raise(TypeError) { s.width }
+    assert_raise(RefError) { s.width }
   end
 
   assert('a borrowed reference keeps the Ruby object of its owner') do
@@ -268,7 +268,7 @@ if Object.const_defined?(:CLibrary)
     assert_not_same first, second
     second.width = 7
     assert_equal 7, CLibrary.atlas_width(2)
-    assert_raise(TypeError) { first.width }
+    assert_raise(RefError) { first.width }
     CLibrary.io_use_atlas(io, 0)
     assert_nil io.fonts
   end
