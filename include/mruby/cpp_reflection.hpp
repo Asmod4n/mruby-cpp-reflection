@@ -1705,27 +1705,102 @@ consteval const char *reflect_kept_name()
     return std::define_static_string("__" + owner + "_" + parameter + "__");
 }
 
+consteval bool reflect_is_callback(const std::meta::info type)
+{
+    const std::meta::info bare = reflect_bare(type);
+    return reflect_is_function(bare) || (std::meta::is_pointer_type(bare) && std::meta::is_function_type(std::meta::remove_pointer(bare)));
+}
+
+consteval bool reflect_function_takes_callback(const std::meta::info function)
+{
+    return std::ranges::any_of(std::meta::parameters_of(function), [](const std::meta::info p) { return reflect_is_callback(std::meta::type_of(p)); });
+}
+
+consteval bool reflect_scope_takes_callbacks(const std::meta::info scope)
+{
+    for (const std::meta::info m : std::meta::members_of(scope, std::meta::access_context::unchecked())) {
+        if (std::meta::is_function(m) && reflect_function_takes_callback(m)) return true;
+        if ((std::meta::is_nonstatic_data_member(m) || std::meta::is_variable(m)) && reflect_is_callback(std::meta::type_of(m))) return true;
+        const bool nested_namespace = std::meta::is_namespace(m) && !std::meta::is_namespace_alias(m);
+        const bool nested_class = std::meta::is_type(m) && !std::meta::is_type_alias(m) && std::meta::is_class_type(m) && std::meta::is_complete_type(m);
+        if ((nested_namespace || nested_class) && reflect_scope_takes_callbacks(m)) return true;
+    }
+    return false;
+}
+
+consteval bool reflect_file_takes_callbacks(const std::string_view file)
+{
+    for (const std::meta::info m : std::meta::members_of(^^::, std::meta::access_context::current())) {
+        if (std::string_view(std::meta::source_location_of(m).file_name()) != file) continue;
+        if (std::meta::is_function(m) && reflect_function_takes_callback(m)) return true;
+        if (std::meta::is_variable(m) && reflect_is_callback(std::meta::type_of(m))) return true;
+        if (std::meta::is_type(m) && !std::meta::is_type_alias(m) && std::meta::is_class_type(m) && std::meta::is_complete_type(m) && reflect_scope_takes_callbacks(m)) return true;
+    }
+    return false;
+}
+
+template <std::meta::info Scope>
+inline constexpr bool reflect_takes_callbacks = reflect_scope_takes_callbacks(Scope);
+
+template <const char *File>
+inline constexpr bool reflect_takes_callbacks_in_file = reflect_file_takes_callbacks(File);
+
+consteval bool reflect_may_run_ruby(const std::meta::info function)
+{
+    for (const std::meta::info p : std::meta::parameters_of(function)) {
+        const std::meta::info type = std::meta::type_of(p);
+        if (reflect_is_callback(type)) return true;
+        const std::meta::info pointee = std::meta::dealias(std::meta::remove_cv(std::meta::is_pointer_type(reflect_bare(type)) ? std::meta::remove_pointer(reflect_bare(type)) : reflect_bare(type)));
+        if (std::meta::is_class_type(pointee) && std::meta::is_complete_type(pointee) && std::meta::is_polymorphic_type(pointee)) return true;
+    }
+    std::meta::info scope = std::meta::parent_of(function);
+    if (std::meta::is_type(scope) && std::meta::is_polymorphic_type(scope)) return true;
+    while (scope != ^^:: && std::meta::parent_of(scope) != ^^::) scope = std::meta::parent_of(scope);
+    if (scope != ^^::) return std::meta::extract<bool>(std::meta::substitute(^^reflect_takes_callbacks, {std::meta::reflect_constant(scope)}));
+    const char *const file = std::define_static_string(std::string_view(std::meta::source_location_of(function).file_name()));
+    return std::meta::extract<bool>(std::meta::substitute(^^reflect_takes_callbacks_in_file, {std::meta::reflect_constant(file)}));
+}
+
 template <class V>
 struct reflect_lent_string {
     V value;
     mrb_value copy;
     mrb_state *mrb = nullptr;
+    bool registered = false;
     mrb_value holder = mrb_nil_value();
     const char *name = nullptr;
     void write_back() const
     {
         if (name != nullptr) reflect_keep(mrb, holder, mrb_intern_static(mrb, name, std::char_traits<char>::length(name)), copy);
     }
+    void acquire() const
+    {
+        if (registered) mrb_gc_register(mrb, copy);
+    }
+    void release() const
+    {
+        if (registered) mrb_gc_unregister(mrb, copy);
+    }
 };
 
 template <std::meta::info Parameter, std::size_t Skip, class V>
-reflect_lent_string<V> reflect_lend_string(mrb_state *const mrb, const std::span<const mrb_value> argv, const mrb_value copy, const V value)
+reflect_lent_string<V> reflect_lend_string(mrb_state *const mrb, const std::span<const mrb_value> argv, const std::size_t at)
 {
     constexpr std::optional<parameter_destination> destination = reflect_parameter_destination(Parameter);
+    constexpr bool may_run_ruby = reflect_may_run_ruby(std::meta::parent_of(Parameter));
+    if constexpr (destination.has_value() && destination->appends) {
+        mrb_raisef(mrb, E_NOTIMP_ERROR, "%s keeps its argument %s in the container %s, and the gem keeps only one value per field",
+                   std::define_static_string(std::meta::identifier_of(std::meta::parent_of(Parameter))), reflect_kept_name<Parameter>(), destination->field);
+    }
+    const mrb_value given = argv[at];
+    const mrb_value copy = may_run_ruby || destination.has_value() ? mrb_str_byte_subseq(mrb, given, 0, RSTRING_LEN(given)) : given;
+    V value;
+    if constexpr (std::same_as<V, const char *>) value = mrb_string_cstr(mrb, copy);
+    else value = V(RSTRING_PTR(copy), static_cast<std::size_t>(RSTRING_LEN(copy)));
     if constexpr (destination.has_value()) {
         const mrb_value holder = destination->holder < 0 ? mrb->c->ci->stack[0] : argv[static_cast<std::size_t>(destination->holder) - Skip];
-        return {value, copy, mrb, holder, reflect_kept_name<Parameter>()};
-    } else return {value, copy};
+        return {value, copy, mrb, may_run_ruby, holder, reflect_kept_name<Parameter>()};
+    } else return {value, copy, mrb, may_run_ruby};
 }
 
 template <class H>
@@ -1776,16 +1851,44 @@ void reflect_write_back(Args &args)
     }, args);
 }
 
+template <class Args>
+void reflect_release(Args &args)
+{
+    std::apply([](auto &...held) {
+        ([&] {
+            if constexpr (requires { held.release(); }) held.release();
+        }(), ...);
+    }, args);
+}
+
+template <class Args>
+void reflect_acquire(Args &args)
+{
+    std::apply([](auto &...held) {
+        ([&] {
+            if constexpr (requires { held.acquire(); }) held.acquire();
+        }(), ...);
+    }, args);
+}
+
 template <class Call, class Args>
 decltype(auto) reflect_apply(Call &&call, Args &args)
 {
-    if constexpr (std::is_void_v<decltype(std::apply(call, args))>) {
-        std::apply(call, args);
-        reflect_write_back(args);
-    } else {
-        decltype(auto) answer = std::apply(call, args);
-        reflect_write_back(args);
-        return answer;
+    reflect_acquire(args);
+    try {
+        if constexpr (std::is_void_v<decltype(std::apply(call, args))>) {
+            std::apply(call, args);
+            reflect_write_back(args);
+            reflect_release(args);
+        } else {
+            decltype(auto) answer = std::apply(call, args);
+            reflect_write_back(args);
+            reflect_release(args);
+            return answer;
+        }
+    } catch (...) {
+        reflect_release(args);
+        throw;
     }
 }
 
@@ -1868,13 +1971,8 @@ auto reflect_get_args(mrb_state *const mrb)
             if constexpr (reflect_is_array_parameter(P))
                 return reflect_array_argument<typename [:std::meta::remove_pointer(std::meta::dealias(std::meta::type_of(P))):], reflect_parameter_extent(P)>(mrb, s);
             else if constexpr (std::same_as<std::remove_cvref_t<decltype(s)>, mrb_value> && !std::same_as<T, mrb_value>) return reflect_argument<std::meta::type_of(P)>(mrb, s);
-            else if constexpr (std::same_as<T, std::string_view>) {
-                const mrb_value copy = mrb_str_byte_subseq(mrb, argv[J], 0, RSTRING_LEN(argv[J]));
-                return reflect_lend_string<P, Skip>(mrb, argv, copy, std::string_view(RSTRING_PTR(copy), static_cast<std::size_t>(RSTRING_LEN(copy))));
-            } else if constexpr (std::same_as<T, const char *>) {
-                const mrb_value copy = mrb_str_byte_subseq(mrb, argv[J], 0, RSTRING_LEN(argv[J]));
-                return reflect_lend_string<P, Skip>(mrb, argv, copy, mrb_string_cstr(mrb, copy));
-            }
+            else if constexpr (std::same_as<T, std::string_view>) return reflect_lend_string<P, Skip, std::string_view>(mrb, argv, J);
+            else if constexpr (std::same_as<T, const char *>) return reflect_lend_string<P, Skip, const char *>(mrb, argv, J);
             else if constexpr (std::same_as<T, std::string>) return std::string(RSTRING_PTR(argv[J]), static_cast<std::size_t>(RSTRING_LEN(argv[J])));
             else if constexpr (std::same_as<T, std::span<const mrb_value>>) {
                 reflect_holder<std::vector<mrb_value>> held;

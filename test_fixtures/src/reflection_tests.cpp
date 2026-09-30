@@ -203,6 +203,7 @@ static std::function<number(number)> &kept_outside()
 struct Callback {
     std::function<number(number)> kept;
     mrb_int apply(const std::function<number(number)> &f, mrb_int n) const { return f(n); }
+    mrb_int with_text(const std::string_view text, const std::function<number(number)> &f) const { return f(static_cast<number>(text.size())); }
     mrb_int each_twice(mrb_int n, std::function<number(number)> f) const { return f(f(n)); }
     void keep(std::function<number(number)> f) { kept = std::move(f); }
     mrb_int call_kept(mrb_int n) const { return kept(n); }
@@ -780,6 +781,13 @@ static mrb_value symbols_ok_q(mrb_state *mrb, mrb_value)
     return mrb_bool_value(listed && std::ranges::equal(bridge, names | std::views::transform(interned)));
 }
 
+/* The number of byte slices, lent to C++ calls that still run, that the
+ * gem holds for the collector while Ruby runs inside such a call. */
+static mrb_value lent_registered_m(mrb_state *mrb, mrb_value)
+{
+    return mrb_int_value(mrb, static_cast<mrb_int>(mruby::cpp_reflection::reflect_callbacks_of(mrb).registered));
+}
+
 static mrb_value constructed_m(mrb_state *mrb, mrb_value)
 {
     const mrb_value names = mrb_ary_new(mrb);
@@ -938,6 +946,7 @@ extern "C" void mrb_mruby_cpp_reflection_test_fixtures_gem_init(mrb_state *mrb)
     mrb_define_module_function(mrb, mrb->kernel_module, "second_state", second_state_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "constructed", constructed_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "reflect_symbols_ok?", symbols_ok_q, MRB_ARGS_NONE());
+    mrb_define_module_function(mrb, mrb->kernel_module, "lent_registered", lent_registered_m, MRB_ARGS_NONE());
     mruby::cpp_reflection::reflect_define<classes>(mrb);
     mruby::cpp_reflection::reflect_define<under>(mrb, mrb_define_module(mrb, "Under"));
     mruby::cpp_reflection::reflect_define<nested, {.nested_types = true}>(mrb);

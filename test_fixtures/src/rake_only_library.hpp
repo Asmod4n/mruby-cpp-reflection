@@ -65,10 +65,12 @@ inline void count_two(unsigned char counts[2])
 class Named {
     const char *name = "";
     std::string_view label;
+    std::vector<std::string_view> aliases;
 
 public:
     void set_name(const char *const given) { name = given; }
     void set_label(const std::string_view given) { label = given; }
+    void add_alias(const std::string_view given) { aliases.push_back(given); }
     bool name_is(const std::string_view expected) const { return std::string_view(name) == expected; }
     bool label_is(const std::string_view expected) const { return label == expected; }
 };
