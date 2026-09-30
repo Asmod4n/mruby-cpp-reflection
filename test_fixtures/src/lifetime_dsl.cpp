@@ -14,6 +14,7 @@
 #include <mruby/cpp_reflection.hpp>
 #include <mruby/array.h>
 #include <mruby/compile.h>
+#include <mruby/gc.h>
 #include <mruby/hash.h>
 #include <mruby/variable.h>
 #include <array>
@@ -149,6 +150,34 @@ static mrb_value tree_freed_at_close_q(mrb_state *, mrb_value)
     return mrb_bool_value(!raised && grown && tree_objects_alive() == before);
 }
 
+/* A state closes while the collector is in the middle of a sweep and is
+ * disabled. The objects it has not swept yet are dead, mrb_close frees
+ * them after gem_final, and their dfree must not read what gem_final
+ * deleted. */
+static mrb_value dead_objects_after_gem_final_m(mrb_state *mrb, mrb_value)
+{
+    const mrb_int before = tree_objects_alive();
+    mrb_state *const other = mrb_open();
+    mruby::cpp_reflection::reflect_define<lifetime_classes>(other);
+    mrb_load_string(other, "GC.generational_mode = false\n");
+    for (int step = 0; step < 1000000 && other->gc.state != MRB_GC_STATE_ROOT; step++) mrb_incremental_gc(other);
+    mrb_load_string(other, "GC.disable\n"
+                           "100000.times { TreeObject.new }\n"
+                           "GC.enable\n");
+    const bool raised = other->exc != nullptr;
+    for (int step = 0; step < 1000000 && other->gc.state != MRB_GC_STATE_SWEEP; step++) mrb_incremental_gc(other);
+    const bool sweeping = other->gc.state == MRB_GC_STATE_SWEEP;
+    other->gc.disabled = TRUE;
+    mrb_int dead = 0;
+    mrb_objspace_each_objects(other, [](mrb_state *const state, RBasic *const object, void *const counted) {
+        if (object->tt == MRB_TT_CDATA && mrb_object_dead_p(state, object)) ++*static_cast<mrb_int *>(counted);
+        return MRB_EACH_OBJ_OK;
+    }, &dead);
+    mrb_close(other);
+    const std::array<mrb_value, 4> answers{mrb_bool_value(raised), mrb_bool_value(sweeping), mrb_int_value(mrb, dead), mrb_int_value(mrb, tree_objects_alive() - before)};
+    return mrb_ary_new_from_values(mrb, static_cast<mrb_int>(answers.size()), answers.data());
+}
+
 /* The number of objects that an object keeps for retains, read from the
  * hidden list that the gem keeps on it. */
 static mrb_value retained_count_m(mrb_state *mrb, mrb_value)
@@ -208,6 +237,7 @@ void lifetime_dsl_gem_init(mrb_state *const mrb)
     mrb_define_module_function(mrb, mrb->kernel_module, "callback_roots", callback_roots_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "undeclared_tree_fails?", undeclared_tree_fails_q, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "tree_freed_at_close_with_takes_ownership?", tree_freed_at_close_q, MRB_ARGS_NONE());
+    mrb_define_module_function(mrb, mrb->kernel_module, "dead_objects_after_gem_final", dead_objects_after_gem_final_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "object_lifetime_declaration_errors", object_lifetime_declaration_errors_m, MRB_ARGS_NONE());
     mruby::cpp_reflection::reflect_define<lifetime_classes>(mrb);
 }

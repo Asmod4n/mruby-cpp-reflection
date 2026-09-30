@@ -139,6 +139,17 @@ if Object.const_defined?(:TreeObject)
     assert_equal before, TreeObject.alive
   end
 
+  # Security audit 2026-09-30, finding 8: gem_final deleted the identity
+  # map, and an object that the sweep had not reached went to dfree after
+  # it, in mrb_close, and read the deleted map. ASan reports the read.
+  assert('an object freed after gem_final reads no freed memory') do
+    raised, sweeping, dead, left = dead_objects_after_gem_final
+    assert_false raised
+    assert_true sweeping
+    assert_true dead > 0
+    assert_equal 0, left
+  end
+
   assert('takes_ownership takes an object that Ruby made') do
     # Ruby makes an AdoptedLeaf with new, so ~Adopter may delete it. A second
     # delete from the GC shows as a double free under ASan.
