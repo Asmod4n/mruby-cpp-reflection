@@ -1,5 +1,6 @@
 #include <clang/AST/ASTConsumer.h>
 #include <clang/AST/Attr.h>
+#include <clang/AST/ExprCXX.h>
 #include <clang/AST/RecursiveASTVisitor.h>
 #include <clang/Basic/Diagnostic.h>
 #include <clang/Frontend/CompilerInstance.h>
@@ -18,6 +19,7 @@
 #include <iostream>
 #include <iterator>
 #include <map>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <string>
@@ -44,7 +46,18 @@ struct FormatAttribute {
     auto operator<=>(const FormatAttribute &) const = default;
 };
 
+struct CallbackDestination {
+    unsigned line;
+    unsigned column;
+    unsigned position;
+    bool appends;
+    int holder;
+    std::string field;
+    auto operator<=>(const CallbackDestination &) const = default;
+};
+
 struct Facts {
+    std::map<std::string, std::set<CallbackDestination>> callback_destinations;
     std::map<std::string, std::set<ParameterExtent>> parameter_extents;
     std::map<std::string, std::set<FormatAttribute>> format_attributes;
     std::vector<std::string> macro_candidates;
@@ -61,6 +74,93 @@ std::string string_literal(const std::string_view text)
     }
     return out + "\"";
 }
+
+bool is_callback_type(const clang::QualType type)
+{
+    const clang::QualType bare = type.getNonReferenceType().getCanonicalType();
+    if (bare->isFunctionPointerType())
+        return true;
+    const auto *specialization = llvm::dyn_cast_or_null<clang::ClassTemplateSpecializationDecl>(bare->getAsRecordDecl());
+    if (!specialization || !specialization->isInStdNamespace())
+        return false;
+    const llvm::StringRef name = specialization->getName();
+    return name == "function" || name == "move_only_function" || name == "copyable_function";
+}
+
+bool names_parameter(const clang::Expr *expression, const clang::ParmVarDecl *parameter)
+{
+    for (;;) {
+        expression = expression->IgnoreParenImpCasts()->IgnoreImplicit();
+        if (const auto *construct = llvm::dyn_cast<clang::CXXConstructExpr>(expression); construct && construct->getNumArgs() == 1) {
+            expression = construct->getArg(0);
+            continue;
+        }
+        if (const auto *call = llvm::dyn_cast<clang::CallExpr>(expression); call && call->getNumArgs() == 1) {
+            const clang::FunctionDecl *callee = call->getDirectCallee();
+            if (callee && callee->isInStdNamespace() && (callee->getName() == "move" || callee->getName() == "forward")) {
+                expression = call->getArg(0);
+                continue;
+            }
+        }
+        break;
+    }
+    const auto *reference = llvm::dyn_cast<clang::DeclRefExpr>(expression);
+    return reference && reference->getDecl() == parameter;
+}
+
+std::optional<std::pair<int, std::string>> holder_of(const clang::Expr *target, const clang::FunctionDecl *function)
+{
+    const auto *member = llvm::dyn_cast<clang::MemberExpr>(target->IgnoreParenImpCasts());
+    if (!member)
+        return std::nullopt;
+    const clang::Expr *base = member->getBase()->IgnoreParenImpCasts();
+    if (llvm::isa<clang::CXXThisExpr>(base))
+        return std::pair{-1, member->getMemberDecl()->getNameAsString()};
+    if (const auto *reference = llvm::dyn_cast<clang::DeclRefExpr>(base))
+        if (const auto *parameter = llvm::dyn_cast<clang::ParmVarDecl>(reference->getDecl()); parameter && parameter->getDeclContext() == function)
+            return std::pair{static_cast<int>(parameter->getFunctionScopeIndex()), member->getMemberDecl()->getNameAsString()};
+    return std::nullopt;
+}
+
+struct DestinationVisitor : clang::RecursiveASTVisitor<DestinationVisitor> {
+    const clang::FunctionDecl *function;
+    const clang::ParmVarDecl *parameter;
+    std::optional<std::tuple<bool, int, std::string>> found;
+
+    void take(const bool appends, const clang::Expr *target)
+    {
+        if (const std::optional<std::pair<int, std::string>> holder = holder_of(target, function))
+            found = std::tuple{appends, holder->first, holder->second};
+    }
+
+    bool VisitCXXOperatorCallExpr(clang::CXXOperatorCallExpr *call)
+    {
+        if (call->getOperator() == clang::OO_Equal && call->getNumArgs() == 2 && names_parameter(call->getArg(1), parameter))
+            take(false, call->getArg(0));
+        return true;
+    }
+
+    bool VisitBinaryOperator(clang::BinaryOperator *assignment)
+    {
+        if (assignment->getOpcode() == clang::BO_Assign && names_parameter(assignment->getRHS(), parameter))
+            take(false, assignment->getLHS());
+        return true;
+    }
+
+    bool VisitCXXMemberCallExpr(clang::CXXMemberCallExpr *call)
+    {
+        const clang::CXXMethodDecl *method = call->getMethodDecl();
+        if (!method)
+            return true;
+        const llvm::StringRef name = method->getName();
+        if (name != "push_back" && name != "emplace_back" && name != "push_front" && name != "emplace_front" && name != "insert" &&
+            name != "emplace")
+            return true;
+        if (std::ranges::any_of(call->arguments(), [this](const clang::Expr *argument) { return names_parameter(argument, parameter); }))
+            take(true, call->getImplicitObjectArgument());
+        return true;
+    }
+};
 
 struct FunctionVisitor : clang::RecursiveASTVisitor<FunctionVisitor> {
     clang::ASTContext &context;
@@ -81,6 +181,17 @@ struct FunctionVisitor : clang::RecursiveASTVisitor<FunctionVisitor> {
                 array && context.getCanonicalType(parameter->getOriginalType()) != va_list)
                 facts.parameter_extents[where.getFilename()].insert(
                     {where.getLine(), where.getColumn(), parameter->getFunctionScopeIndex(), array->getSize().getZExtValue()});
+        if (const clang::FunctionDecl *definition = function->getDefinition(); definition && definition->getBody())
+            for (const clang::ParmVarDecl *parameter : definition->parameters()) {
+                if (!is_callback_type(parameter->getType()))
+                    continue;
+                DestinationVisitor destinations{.function = definition, .parameter = parameter, .found = std::nullopt};
+                destinations.TraverseStmt(definition->getBody());
+                if (destinations.found)
+                    facts.callback_destinations[where.getFilename()].insert({where.getLine(), where.getColumn(), parameter->getFunctionScopeIndex(),
+                                                                             std::get<0>(*destinations.found), std::get<1>(*destinations.found),
+                                                                             std::get<2>(*destinations.found)});
+            }
         for (const clang::FormatAttr *format : function->specific_attrs<clang::FormatAttr>())
             facts.format_attributes[where.getFilename()].insert({where.getLine(), where.getColumn(), format->getType()->getName().str(),
                                                                  static_cast<unsigned>(format->getFormatIdx()),
@@ -209,6 +320,15 @@ std::string header_text(const Facts &facts)
         for (const FormatAttribute &row : rows)
             out += std::format("    mruby::cpp_reflection::format_attribute{{{}, {}, std::define_static_string({}), {}, {}}},\n", row.line, row.column, string_literal(row.archetype),
                                row.string_index, row.first_to_check);
+        out += "});\n";
+    }
+    for (const auto &[file, rows] : facts.callback_destinations) {
+        out += std::format("template <>\ninline constexpr std::span<const mruby::cpp_reflection::callback_destination> "
+                           "mruby::cpp_reflection::callback_destinations<std::define_static_string({})> = std::define_static_array(std::array{{\n",
+                           string_literal(file));
+        for (const CallbackDestination &row : rows)
+            out += std::format("    mruby::cpp_reflection::callback_destination{{{}, {}, {}, {}, {}, std::define_static_string({})}},\n", row.line, row.column,
+                               row.position, row.appends, row.holder, string_literal(row.field));
         out += "});\n";
     }
     out += "namespace mruby::cpp_reflection::macros {\n";

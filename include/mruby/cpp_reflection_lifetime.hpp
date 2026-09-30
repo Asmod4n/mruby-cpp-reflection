@@ -127,6 +127,18 @@ struct format_attribute {
     unsigned first_to_check;
 };
 
+struct callback_destination {
+    unsigned line;
+    unsigned column;
+    unsigned position;
+    bool appends;
+    int holder;
+    const char *field;
+};
+
+template <const char *File>
+inline constexpr std::span<const mruby::cpp_reflection::callback_destination> callback_destinations{};
+
 template <const char *File>
 inline constexpr std::span<const mruby::cpp_reflection::parameter_extent> parameter_extents{};
 
@@ -153,6 +165,17 @@ consteval std::size_t reflect_parameter_extent(const std::meta::info parameter)
     const std::meta::info function = std::meta::parent_of(parameter);
     const std::vector<std::meta::info> parameters = std::meta::parameters_of(function);
     return mruby::cpp_reflection::reflect_parameter_extent(function, static_cast<unsigned>(std::ranges::distance(parameters.begin(), std::ranges::find(parameters, parameter))));
+}
+
+consteval std::optional<mruby::cpp_reflection::callback_destination> reflect_callback_destination(const std::meta::info parameter)
+{
+    const std::meta::info function = std::meta::parent_of(parameter);
+    const std::vector<std::meta::info> parameters = std::meta::parameters_of(function);
+    const auto position = static_cast<unsigned>(std::ranges::distance(parameters.begin(), std::ranges::find(parameters, parameter)));
+    const std::source_location where = std::meta::source_location_of(function);
+    for (const mruby::cpp_reflection::callback_destination &row : mruby::cpp_reflection::reflect_facts_of_file<mruby::cpp_reflection::callback_destination>(^^mruby::cpp_reflection::callback_destinations, where))
+        if (row.line == where.line() && row.column == where.column() && row.position == position) return row;
+    return std::nullopt;
 }
 
 consteval std::optional<mruby::cpp_reflection::format_attribute> reflect_format_attribute(const std::meta::info function)

@@ -14,6 +14,22 @@ extern "C" int rake_only_c_answer(void);
 extern "C" double rake_only_sum_of_three(const double values[3]);
 extern "C" int rake_only_format(const char *format, ...) __attribute__((format(printf, 1, 2)));
 extern "C" int rake_only_vformat(const char *format, va_list arguments);
+#include <functional>
+#include <utility>
+#include <vector>
+namespace rake_only_callbacks {
+struct watched {
+    std::function<void()> watcher;
+    std::vector<std::function<void()>> listeners;
+};
+inline void watch(watched &w, std::function<void()> watcher) { w.watcher = std::move(watcher); }
+inline void listen(watched &w, std::function<void()> listener) { w.listeners.push_back(listener); }
+inline void call_now(const std::function<void()> &now) { now(); }
+struct keeper {
+    void (*kept)() = nullptr;
+    void keep(void (*const given)()) { kept = given; }
+};
+}
 #define RAKE_ONLY_ANSWER 42
 #define RAKE_ONLY_NAME "rake_only"
 #define RAKE_ONLY_NOT_A_CONSTANT rake_only_c_answer()

@@ -82,3 +82,16 @@ assert('an array parameter stays as it was after an exception') do
   assert_raise(RuntimeError) { RakeOnly.scale_three_then_throw(values) }
   assert_equal [1.0, 2.0, 3.0], values
 end
+
+# A Ruby block that C++ keeps after the call must be kept from the
+# collector, as close as possible to the object that holds it. Reflection
+# sees no function body, so libclang reads the body where the header has
+# it and says where the callback lands: assigned to one field, or pushed
+# into a container, and which object holds that field. A callback that
+# is only called lands nowhere.
+assert('libclang gives where a callback parameter lands') do
+  assert_true RakeOnly.assigned_callback_has_one_place
+  assert_true RakeOnly.pushed_callback_has_many_places
+  assert_true RakeOnly.called_callback_is_not_kept
+  assert_true RakeOnly.member_keeps_callback_in_this
+end
