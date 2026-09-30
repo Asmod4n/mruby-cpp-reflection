@@ -341,11 +341,11 @@ assert('an argument conversion that deletes the receiver or an argument raises')
   root = Node.new
   cutter = CutterForTest.new(root)
   root.grow
-  assert_raise(TypeError) { root.first.which(cutter) }
+  assert_raise(RefError) { root.first.which(cutter) }
   root.grow
-  assert_raise(TypeError) { Node.weigh(root.first, cutter) }
+  assert_raise(RefError) { Node.weigh(root.first, cutter) }
   root.grow
-  assert_raise(TypeError) { root.first.mark = cutter }
+  assert_raise(RefError) { root.first.mark = cutter }
   root.grow
   assert_equal(1, root.first.which('x'))
   root.first.mark = 'y'
@@ -478,26 +478,26 @@ assert('a child that C++ replaced raises when used') do
   child = root.first
   tag = child.tag
   root.cut_first
-  assert_raise(TypeError) { child.child_count }
-  assert_raise(TypeError) { tag.n }
+  assert_raise(RefError) { child.child_count }
+  assert_raise(RefError) { tag.n }
   leaf = Leaf.new
   leaf.grow
   kid = leaf.child
   kid_tag = kid.tag
   leaf.cut
-  assert_raise(TypeError) { kid.grow }
-  assert_raise(TypeError) { kid_tag.n }
+  assert_raise(RefError) { kid.grow }
+  assert_raise(RefError) { kid_tag.n }
   leaf.grow
   kid = leaf.child
   Leaf.cut_child_of(leaf)
-  assert_raise(TypeError) { kid.tag }
+  assert_raise(RefError) { kid.tag }
   root.grow
   root.grow
   a = root.first
   b = root.second
   root.swap_children
-  assert_raise(TypeError) { a.child_count }
-  assert_raise(TypeError) { b.child_count }
+  assert_raise(RefError) { a.child_count }
+  assert_raise(RefError) { b.child_count }
   assert_equal(2, root.child_count)
 end
 
@@ -511,8 +511,8 @@ assert('the children of a deleted child raise when used') do
   lowest = low.first
   tag = lowest.tag
   root.cut_first
-  [middle, low, lowest].each { |n| assert_raise(TypeError) { n.child_count } }
-  assert_raise(TypeError) { tag.n }
+  [middle, low, lowest].each { |n| assert_raise(RefError) { n.child_count } }
+  assert_raise(RefError) { tag.n }
 end
 
 # The collector frees the Ruby objects of a tree in the order of their
@@ -664,7 +664,7 @@ assert('an object that C++ deleted through a unique_ptr raises') do
   assert_equal(3, watched.v)
   assert_same(watched, holder.get)
   holder.reset
-  assert_raise(TypeError) { watched.v }
+  assert_raise(RefError) { watched.v }
   assert_nil(holder.get)
   assert_nil(holder.held)
 end
@@ -1201,7 +1201,7 @@ assert('an abstract class is made through a Ruby subclass, and lent arguments en
   r = RubyShape.new(1)
   assert_equal(3, r.counted)
   assert_equal(10, r.probe)
-  assert_raise(TypeError) { r.kept.x }
+  assert_raise(RefError) { r.kept.x }
   assert_raise(NotImplementedError) { ShapeWithoutSides.new(1).counted }
 end
 
@@ -1378,7 +1378,7 @@ assert('a lent argument ends with the call, and calls do not grow memory') do
   end
   after = live_objects
   assert_true(after - before < 100, "#{after - before} objects more")
-  assert_raise(TypeError) { r.kept.x }
+  assert_raise(RefError) { r.kept.x }
 end
 
 # A C++ object at the address of an ended one is a new object. The Ruby
@@ -1396,13 +1396,13 @@ assert('an object at the address of an ended one is a new Ruby object') do
   pk = Peeker.new(1)
   assert_equal(10, pk.probe_node)
   first = pk.instance_variable_get(:@kept)
-  assert_raise(TypeError) { first.child_count }
+  assert_raise(RefError) { first.child_count }
   pk.instance_variable_set(:@kept, nil)
   first = nil
   full_gc
   10.times { Object.new }
   assert_equal(10, pk.probe_node)
-  assert_raise(TypeError) { pk.instance_variable_get(:@kept).child_count }
+  assert_raise(RefError) { pk.instance_variable_get(:@kept).child_count }
 end
 
 # initialize again would put a second C++ object under a Ruby object that

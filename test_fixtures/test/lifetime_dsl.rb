@@ -129,9 +129,9 @@ if Object.const_defined?(:TreeObject)
     child.set_parent(parent)
     grandchild.set_parent(child)
     TreeObject.destroy(parent)
-    assert_raise(TypeError) { parent.value }
-    assert_raise(TypeError) { child.value }
-    assert_raise(TypeError) { grandchild.value }
+    assert_raise(RefError) { parent.value }
+    assert_raise(RefError) { child.value }
+    assert_raise(RefError) { grandchild.value }
     parent = child = grandchild = nil
     full_gc
     assert_equal before, TreeObject.alive
@@ -147,8 +147,8 @@ if Object.const_defined?(:TreeObject)
     r = Resource.new
     Resource.destroy(r)
     assert_equal before, Resource.alive
-    assert_raise(TypeError) { r.value }
-    assert_raise(TypeError) { Resource.destroy(r) }
+    assert_raise(RefError) { r.value }
+    assert_raise(RefError) { Resource.destroy(r) }
     r = nil
     full_gc
     assert_equal before, Resource.alive

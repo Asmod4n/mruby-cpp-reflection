@@ -254,6 +254,7 @@ extern "C" void mrb_mruby_cpp_reflection_gem_init(mrb_state *const mrb)
     mruby::cpp_reflection::reflect_define_void_pointer(mrb, MRB_SYM(VoidPointer));
     mruby::cpp_reflection::reflect_define_void_pointer(mrb, MRB_SYM(ConstVoidPointer));
     mrb_define_class_id(mrb, MRB_SYM(CppCoroutineError), E_STANDARD_ERROR);
+    mrb_define_class_id(mrb, MRB_SYM(RefError), E_RUNTIME_ERROR);
     mruby::cpp_reflection::reflect_define_void_pointer(mrb, MRB_SYM(FunctionPointer));
     mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), mruby::cpp_reflection::reflect_identities_key(mrb),
                mrb_cptr_value(mrb, new mruby::cpp_reflection::reflect_identities()));
