@@ -82,6 +82,30 @@ public:
     void set_layout(const Layout *const given) { layout = given; }
     mrb_int layout_value() const { return layout == nullptr ? 0 : layout->n; }
 };
+/* A Frame keeps its Layout as a Window does and is owned by a parent Frame
+ * as a TreeObject is. After the hand-over the Ruby object of the Frame can
+ * go, and the parent still reads the Layout through its child. */
+class Frame {
+    const Layout *layout = nullptr;
+    Frame *parent = nullptr;
+    std::vector<Frame *> children;
+
+public:
+    Frame() = default;
+    Frame(const Frame &) = delete;
+    Frame &operator=(const Frame &) = delete;
+    ~Frame()
+    {
+        for (Frame *const child : std::exchange(children, {})) delete child;
+    }
+    void set_layout(const Layout *const given) { layout = given; }
+    void set_parent(Frame *const given)
+    {
+        parent = given;
+        parent->children.push_back(this);
+    }
+    mrb_int first_child_layout_value() const { return children.empty() || children.front()->layout == nullptr ? 0 : children.front()->layout->n; }
+};
 /* The error conventions of C: a negative answer and errno (open in
  * POSIX), one value for success, and a null pointer. start is called
  * from another thread in a C library that takes a callback, so it takes
@@ -127,7 +151,7 @@ public:
 #if defined(__cpp_impl_reflection)
 template <>
 inline constexpr auto mruby::cpp_reflection::object_lifetime<^^TreeObject> = std::array{
-    takes_ownership(^^TreeObject::set_parent, {.by = 0}),
+    takes_ownership(^^TreeObject::set_parent, {.by = 0, .moves = true}),
     takes_ownership(^^TreeObject, {.by = "parent"}),
     ends_lifetime(^^TreeObject::destroy, 0),
 };
@@ -135,6 +159,11 @@ template <>
 inline constexpr auto mruby::cpp_reflection::object_lifetime<^^Resource> = std::array{ends_lifetime(^^Resource::destroy, 0)};
 template <>
 inline constexpr auto mruby::cpp_reflection::object_lifetime<^^Window> = std::array{retains(^^Window::set_layout, 0)};
+template <>
+inline constexpr auto mruby::cpp_reflection::object_lifetime<^^Frame> = std::array{
+    retains(^^Frame::set_layout, 0),
+    takes_ownership(^^Frame::set_parent, {.by = 0}),
+};
 template <>
 inline constexpr auto mruby::cpp_reflection::object_lifetime<^^Device> = std::array{
     errors(^^Device::open, {.error = negative, .sets_errno = true}),

@@ -365,16 +365,45 @@ end
 
 # C and C++ expect that memory passed to a function stays as it is while
 # the function runs. Ruby that runs inside the call, through a callback,
-# can run the collector, and a frame older than the call can give the GC
-# arena back past the byte slice that C++ reads. So while Ruby runs inside
-# a C++ call, the gem holds the slices of every call that still runs, and
-# lets them go when Ruby returns to C++.
-assert('a String that C++ reads is held for the collector while Ruby runs inside the call') do
-  assert_equal 0, lent_registered
-  held = nil
-  assert_equal 3, Callback.new.with_text('abc', ->(n) { held = lent_registered; GC.start; n })
-  assert_equal 1, held
-  assert_equal 0, lent_registered
+# can change the String and run the collector. So where the compiler sees
+# that a call can run Ruby, the gem lends C++ a byte slice of the String
+# and holds it for the collector until the call returns. Where the call
+# cannot run Ruby, C++ reads the String itself.
+# Security audit 2026-09-30, findings 3 and 5: a pointer argument is one
+# Ruby object, and nothing ties it to a count or an end pointer after it.
+# std::string::find(const char *, size_type, size_type) with a short String
+# and a large count reads past the copy. Such a function is not bound.
+assert('a function that takes a pointer and then a count is not bound') do
+  assert_false pointer_and_count_bound?
+end
+
+# Security audit 2026-09-30, finding 4: a char pointer that a container of
+# the standard library answers, as std::string_view::data does, has no NUL
+# at the end. std::basic_string guarantees one.
+assert('a char pointer without a NUL at the end is not bound') do
+  assert_false unterminated_chars_bound?
+end
+
+# std::equality_comparable<std::vector<Unequal>> is true, because the ==
+# of std::vector has no constraint, and its instantiation fails because
+# Unequal has no ==. So == is defined only where the elements compare.
+assert('a container of elements without == has no ==') do
+  items = HoldsUnequal.new.items
+  assert_equal 0, items.size
+  assert_true items == items
+  assert_false items == HoldsUnequal.new.items
+end
+
+assert('the compiler decides which calls can run Ruby') do
+  assert_true call_with_callback_may_run_ruby?
+  assert_false call_in_scope_without_callbacks_may_run_ruby?
+end
+
+assert('a String that C++ reads stays as it was while Ruby runs inside the call') do
+  text = 'a' * 40
+  counted = Callback.new.count_a_after(text, ->(n) { text.replace('b' * 100); GC.start; n })
+  assert_equal 40, counted
+  assert_equal 'b' * 100, text
 end
 
 assert('a callback that C++ calls from another thread throws in that thread') do

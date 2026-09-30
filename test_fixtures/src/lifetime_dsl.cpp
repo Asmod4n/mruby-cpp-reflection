@@ -68,7 +68,7 @@ public:
     }
 };
 
-constexpr auto lifetime_classes = mruby::cpp_reflection::reflect<^^TreeObject, ^^Resource, ^^Layout, ^^Window, ^^Device, ^^Deep, ^^AdoptedLeaf, ^^Adopter, ^^Worker, ^^Blank, ^^Empty,
+constexpr auto lifetime_classes = mruby::cpp_reflection::reflect<^^TreeObject, ^^Resource, ^^Layout, ^^Window, ^^Frame, ^^Device, ^^Deep, ^^AdoptedLeaf, ^^Adopter, ^^Worker, ^^Blank, ^^Empty,
                                                              ^^Watcher>();
 constexpr auto undeclared_classes = mruby::cpp_reflection::reflect<^^UndeclaredTree>();
 
@@ -156,7 +156,7 @@ static mrb_value retained_count_m(mrb_state *mrb, mrb_value)
     mrb_value object;
     mrb_get_args(mrb, "o", &object);
     const mrb_value kept = mrb_iv_get(mrb, object, mrb_intern_lit(mrb, "__reflected_retained__"));
-    return mrb_int_value(mrb, mrb_array_p(kept) ? RARRAY_LEN(kept) : 0);
+    return mrb_int_value(mrb, mrb_hash_p(kept) ? mrb_hash_size(mrb, kept) : 0);
 }
 
 /* The number of callbacks that C++ memory holds as GC roots, released or

@@ -53,6 +53,8 @@ assert('ReflectObjectLifetimeTest: the header specializes the words of the class
     declare('ns::Tree') { takes_ownership :set_parent, by: 0 }
     assert_true(header.include?("template <>\ninline constexpr auto mruby::cpp_reflection::object_lifetime<^^::ns::Tree> = std::array{\n"))
     assert_true(header.include?("    mruby::cpp_reflection::takes_ownership(^^::ns::Tree::set_parent, {.by = 0}),\n};\n"))
+    declare('ns::Moved') { takes_ownership :set_parent, by: 0, moves: true }
+    assert_true(header.include?("    mruby::cpp_reflection::takes_ownership(^^::ns::Moved::set_parent, {.by = 0, .moves = true}),\n};\n"))
     assert_true(header.include?('#include <mruby/cpp_reflection_lifetime.hpp>'))
     assert_equal(["#{@dir}/include"], @spec.cxx.include_paths)
   ensure

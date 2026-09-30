@@ -8,11 +8,12 @@
 # definition that calls mruby::cpp_reflection::reflect_undefined, which raises
 # NotImplementedError when Ruby calls it.
 require 'open3'
+require 'shellwords'
 require 'tmpdir'
 
-driver = ARGV.first
+driver = Shellwords.split(ARGV.first)
 arguments = ARGV.drop(1)
-link = ->(*extra) { system("#{driver} #{(arguments + extra).map { |a| %("#{a}") }.join(' ')}") ? exit(0) : exit($?.exitstatus || 1) }
+link = ->(*extra) { system(*driver, *arguments, *extra) ? exit(0) : exit($?.exitstatus || 1) }
 nm = [ENV['NM'], 'llvm-nm', 'nm'].compact.find { |tool| system(tool, '--version', out: File::NULL, err: File::NULL) }
 link.() if nm.nil?
 
@@ -36,7 +37,7 @@ def symbols(nm, file, kind)
 end
 
 def found_by(driver, file)
-  path = IO.popen("#{driver} -print-file-name=#{file}", &:read).strip
+  path = IO.popen([*driver, "-print-file-name=#{file}"], &:read).strip
   File.file?(path) ? path : nil
 end
 
@@ -63,6 +64,6 @@ Dir.mktmpdir do |dir|
   File.write(source, "namespace mruby::cpp_reflection {\n[[noreturn]] void reflect_undefined();\nextern \"C\" {\n" +
                      missing.each_with_index.map { |name, i| "[[noreturn]] void reflect_missing_#{i}() __asm__(\"#{name}\");\nvoid reflect_missing_#{i}() { reflect_undefined(); }\n" }.join +
                      "}\n}\n")
-  system(%(#{driver} -c "#{source}" -o "#{object}")) or abort "relink: #{source} did not compile"
+  system(*driver, '-c', source, '-o', object) or abort "relink: #{source} did not compile"
   link.(object)
 end

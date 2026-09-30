@@ -13,6 +13,7 @@
 #include <llvm/Support/FileSystem.h>
 
 #include <algorithm>
+#include <charconv>
 #include <cstdint>
 #include <format>
 #include <fstream>
@@ -21,7 +22,6 @@
 #include <map>
 #include <optional>
 #include <set>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -68,9 +68,14 @@ std::string string_literal(const std::string_view text)
 {
     std::string out = "\"";
     for (const char c : text) {
-        if (c == '"' || c == '\\')
+        const auto byte = static_cast<unsigned char>(c);
+        if (c == '"' || c == '\\') {
             out += '\\';
-        out += c;
+            out += c;
+        } else if (byte < 0x20 || byte >= 0x7f)
+            out += std::format("\\{:03o}", byte);
+        else
+            out += c;
     }
     return out + "\"";
 }
@@ -256,8 +261,14 @@ struct MacroVisitor : clang::RecursiveASTVisitor<MacroVisitor> {
         if (!variable->getInit()->isCXX11ConstantExpr(variable->getASTContext()))
             return true;
         const std::string_view name = variable->getName();
+        constexpr std::string_view prefix = "value_";
+        if (!name.starts_with(prefix))
+            return true;
+        const std::string_view digits = name.substr(prefix.size());
         std::size_t index = 0;
-        std::istringstream(std::string(name.substr(std::string_view("value_").size()))) >> index;
+        const auto [end, error] = std::from_chars(digits.data(), digits.data() + digits.size(), index);
+        if (error != std::errc{} || end != digits.data() + digits.size() || index >= facts.macro_candidates.size())
+            return true;
         facts.macros.insert(facts.macro_candidates.at(index));
         return true;
     }

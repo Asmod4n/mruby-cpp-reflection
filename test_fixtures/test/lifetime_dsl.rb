@@ -108,6 +108,37 @@ if Object.const_defined?(:TreeObject)
     assert_equal 0, child.child_count
   end
 
+  # Security audit 2026-09-30, finding 1: a C++ owner deletes what it took.
+  # A second hand-over of the same object, to the same owner or to another,
+  # makes C++ delete it twice.
+  assert('an object that a C++ owner holds is not handed over again') do
+    adopter = Adopter.new
+    other = Adopter.new
+    leaf = AdoptedLeaf.new
+    adopter.adopt(leaf)
+    assert_raise(ArgumentError) { adopter.adopt(leaf) }
+    assert_raise(ArgumentError) { other.adopt(leaf) }
+    adopter = other = leaf = nil
+    full_gc
+    full_gc
+  end
+
+  # Security audit 2026-09-30, finding 2: ~TreeObject deletes its children,
+  # so a child that the parent holds and that ends_lifetime also deletes is
+  # deleted twice.
+  assert('ends_lifetime refuses an object that a C++ owner holds') do
+    full_gc
+    before = TreeObject.alive
+    parent = TreeObject.new
+    child = TreeObject.new
+    child.set_parent(parent)
+    assert_raise(ArgumentError) { TreeObject.destroy(child) }
+    parent = child = nil
+    full_gc
+    full_gc
+    assert_equal before, TreeObject.alive
+  end
+
   assert('takes_ownership takes an object that Ruby made') do
     # Ruby makes an AdoptedLeaf with new, so ~Adopter may delete it. A second
     # delete from the GC shows as a double free under ASan.
@@ -152,6 +183,20 @@ if Object.const_defined?(:TreeObject)
     r = nil
     full_gc
     assert_equal before, Resource.alive
+  end
+
+  # Security audit 2026-09-30, finding 6: the retained Layout stayed on the
+  # Ruby object of the Frame, and after the hand-over that Ruby object could
+  # go while the parent still read the Layout.
+  assert('a retained argument moves with its receiver to the new owner') do
+    parent = Frame.new
+    frame = Frame.new
+    frame.set_layout(Layout.new)
+    frame.set_parent(parent)
+    frame = nil
+    full_gc
+    full_gc
+    assert_equal 3, parent.first_child_layout_value
   end
 
   assert('retains keeps an argument while the receiver lives') do

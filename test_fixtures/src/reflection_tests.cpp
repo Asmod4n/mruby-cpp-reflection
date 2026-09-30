@@ -204,6 +204,11 @@ struct Callback {
     std::function<number(number)> kept;
     mrb_int apply(const std::function<number(number)> &f, mrb_int n) const { return f(n); }
     mrb_int with_text(const std::string_view text, const std::function<number(number)> &f) const { return f(static_cast<number>(text.size())); }
+    mrb_int count_a_after(const std::string_view text, const std::function<number(number)> &f) const
+    {
+        f(0);
+        return static_cast<mrb_int>(std::ranges::count(text, 'a'));
+    }
     mrb_int each_twice(mrb_int n, std::function<number(number)> f) const { return f(f(n)); }
     void keep(std::function<number(number)> f) { kept = std::move(f); }
     mrb_int call_kept(mrb_int n) const { return kept(n); }
@@ -761,7 +766,14 @@ struct TakesFragile {
 struct FragileHolder {
     Fragile item;
 };
-constexpr auto classes = mruby::cpp_reflection::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Leaf, ^^Forest, ^^Hand, ^^Sharer, ^^SelfSharer, ^^WatchedHolder, ^^Lender, ^^Shelf, ^^PlainSharer, ^^Fragile, ^^TakesFragile, ^^FragileHolder, ^^Scored, ^^Measure, ^^Link, ^^Groups, ^^free_functions, ^^Odd, ^^Converts, ^^Outer, ^^Diamond, ^^TakesRvalues, ^^Flags, ^^Declared, ^^Unbuilt, ^^Held<long>, ^^Color, ^^Flag, ^^Palette, ^^Mark, ^^Choices, ^^Grid, ^^Counting, ^^Keeper, ^^ConvertsExplicitly, ^^std::pair<const std::string, int>, ^^std::pair<std::string, int>>();
+struct Unequal {
+    mrb_int n = 0;
+};
+struct HoldsUnequal {
+    std::vector<Unequal> items;
+};
+
+constexpr auto classes = mruby::cpp_reflection::reflect<^^Reflected, ^^D, ^^S, ^^Z, ^^X, ^^Y, ^^F, ^^Operand, ^^Static, ^^Thrower, ^^Callback, ^^Node, ^^Leaf, ^^Forest, ^^Hand, ^^Sharer, ^^SelfSharer, ^^WatchedHolder, ^^Lender, ^^Shelf, ^^PlainSharer, ^^Fragile, ^^TakesFragile, ^^FragileHolder, ^^Scored, ^^Measure, ^^Link, ^^Groups, ^^free_functions, ^^Odd, ^^Converts, ^^Outer, ^^Diamond, ^^TakesRvalues, ^^Flags, ^^Declared, ^^Unbuilt, ^^Held<long>, ^^Color, ^^Flag, ^^Palette, ^^Mark, ^^Choices, ^^Grid, ^^Counting, ^^Keeper, ^^ConvertsExplicitly, ^^std::pair<const std::string, int>, ^^std::pair<std::string, int>, ^^HoldsUnequal>();
 constexpr auto under = mruby::cpp_reflection::reflect<^^Plain>();
 constexpr auto nested = mruby::cpp_reflection::reflect<^^Holder>();
 constexpr auto named = mruby::cpp_reflection::reflect<^^fruit::Basket::count<fruit::Apple>>();
@@ -781,11 +793,45 @@ static mrb_value symbols_ok_q(mrb_state *mrb, mrb_value)
     return mrb_bool_value(listed && std::ranges::equal(bridge, names | std::views::transform(interned)));
 }
 
-/* The number of byte slices, lent to C++ calls that still run, that the
- * gem holds for the collector while Ruby runs inside such a call. */
-static mrb_value lent_registered_m(mrb_state *mrb, mrb_value)
+namespace texts {
+inline mrb_int length_of(const std::string_view text)
 {
-    return mrb_int_value(mrb, static_cast<mrb_int>(mruby::cpp_reflection::reflect_callbacks_of(mrb).registered));
+    return static_cast<mrb_int>(text.size());
+}
+inline mrb_int count_up_to(const char *const text, const std::size_t n)
+{
+    return static_cast<mrb_int>(std::string_view(text, n).size());
+}
+inline mrb_int count_between(const char *const first, const char *const last)
+{
+    return static_cast<mrb_int>(std::distance(first, last));
+}
+}
+
+static mrb_value pointer_and_count_bound_q(mrb_state *, mrb_value)
+{
+    constexpr bool answered = mruby::cpp_reflection::reflect_call_supported(^^texts::count_up_to) ||
+                              mruby::cpp_reflection::reflect_call_supported(^^texts::count_between);
+    return mrb_bool_value(answered);
+}
+
+static mrb_value unterminated_chars_bound_q(mrb_state *, mrb_value)
+{
+    constexpr bool answered = !mruby::cpp_reflection::reflect_returns_unterminated_chars(^^std::string_view::data) ||
+                              mruby::cpp_reflection::reflect_returns_unterminated_chars(^^std::string::c_str);
+    return mrb_bool_value(answered);
+}
+
+static mrb_value call_with_callback_may_run_ruby_q(mrb_state *, mrb_value)
+{
+    constexpr bool answered = mruby::cpp_reflection::reflect_may_run_ruby(^^Callback::with_text);
+    return mrb_bool_value(answered);
+}
+
+static mrb_value call_in_scope_without_callbacks_may_run_ruby_q(mrb_state *, mrb_value)
+{
+    constexpr bool answered = mruby::cpp_reflection::reflect_may_run_ruby(^^texts::length_of);
+    return mrb_bool_value(answered);
 }
 
 static mrb_value constructed_m(mrb_state *mrb, mrb_value)
@@ -946,7 +992,10 @@ extern "C" void mrb_mruby_cpp_reflection_test_fixtures_gem_init(mrb_state *mrb)
     mrb_define_module_function(mrb, mrb->kernel_module, "second_state", second_state_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "constructed", constructed_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "reflect_symbols_ok?", symbols_ok_q, MRB_ARGS_NONE());
-    mrb_define_module_function(mrb, mrb->kernel_module, "lent_registered", lent_registered_m, MRB_ARGS_NONE());
+    mrb_define_module_function(mrb, mrb->kernel_module, "call_with_callback_may_run_ruby?", call_with_callback_may_run_ruby_q, MRB_ARGS_NONE());
+    mrb_define_module_function(mrb, mrb->kernel_module, "pointer_and_count_bound?", pointer_and_count_bound_q, MRB_ARGS_NONE());
+    mrb_define_module_function(mrb, mrb->kernel_module, "unterminated_chars_bound?", unterminated_chars_bound_q, MRB_ARGS_NONE());
+    mrb_define_module_function(mrb, mrb->kernel_module, "call_in_scope_without_callbacks_may_run_ruby?", call_in_scope_without_callbacks_may_run_ruby_q, MRB_ARGS_NONE());
     mruby::cpp_reflection::reflect_define<classes>(mrb);
     mruby::cpp_reflection::reflect_define<under>(mrb, mrb_define_module(mrb, "Under"));
     mruby::cpp_reflection::reflect_define<nested, {.nested_types = true}>(mrb);

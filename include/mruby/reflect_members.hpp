@@ -353,11 +353,40 @@ consteval bool reflect_coroutine_parameters_supported(const std::meta::info func
     return true;
 }
 
+consteval bool reflect_in_namespace_std(std::meta::info type);
+
+consteval bool reflect_takes_pointer_and_count(const std::meta::info function)
+{
+    const std::vector<std::meta::info> parameters = std::meta::parameters_of(function);
+    for (auto p = parameters.begin(); p != parameters.end(); p = std::next(p)) {
+        const std::meta::info type = std::meta::dealias(std::meta::remove_cv(std::meta::type_of(*p)));
+        if (!std::meta::is_pointer_type(type) || reflect_is_function_pointer(type) || reflect_is_opaque_pointer(type) || reflect_is_output_parameter(type)) continue;
+        const bool elements = std::meta::is_arithmetic_type(std::meta::dealias(std::meta::remove_cv(std::meta::remove_pointer(type))));
+        if (std::ranges::any_of(std::next(p), parameters.end(), [&](const std::meta::info later) {
+                const std::meta::info t = std::meta::dealias(std::meta::remove_cv(std::meta::type_of(later)));
+                return t == std::meta::dealias(^^std::size_t) || (elements && t == type);
+            }))
+            return true;
+    }
+    return false;
+}
+
+consteval bool reflect_returns_unterminated_chars(const std::meta::info function)
+{
+    if (std::meta::is_constructor(function) || std::meta::is_destructor(function)) return false;
+    const std::meta::info result = std::meta::dealias(std::meta::remove_cv(std::meta::return_type_of(function)));
+    if (!std::meta::is_pointer_type(result) || std::meta::dealias(std::meta::remove_cv(std::meta::remove_pointer(result))) != ^^char) return false;
+    const std::meta::info owner = std::meta::parent_of(function);
+    if (!std::meta::is_type(owner) || !reflect_in_namespace_std(owner)) return false;
+    return !std::meta::has_template_arguments(owner) || std::meta::template_of(owner) != ^^std::basic_string;
+}
+
 consteval bool reflect_call_supported(const std::meta::info function)
 {
     if (std::meta::is_deleted(function) || !reflect_element_compared(function)) return false;
     if (std::meta::is_template(function) || std::meta::is_function_template(function)) return false;
     if (std::meta::is_vararg_function(function)) return false;
+    if (reflect_takes_pointer_and_count(function) || reflect_returns_unterminated_chars(function)) return false;
     if (std::meta::is_rvalue_reference_qualified(function) || std::meta::is_volatile(function)) return false;
     for (const std::meta::info p : std::meta::parameters_of(function))
         if (!reflect_is_array_parameter(p) && !reflect_parameter_supported(std::meta::type_of(p))) return false;
@@ -479,6 +508,7 @@ consteval bool reflect_conversion_supported(const std::meta::info function)
 {
     const std::meta::info target = reflect_bare(std::meta::return_type_of(function));
     const bool text = target == std::meta::dealias(^^std::string) || target == std::meta::dealias(^^std::string_view) || target == ^^const char *;
+    if (reflect_returns_unterminated_chars(function)) return false;
     return (std::meta::is_integral_type(target) && target != ^^bool) || std::meta::is_floating_point_type(target) || text;
 }
 

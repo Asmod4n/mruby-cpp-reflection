@@ -87,7 +87,7 @@ not say, after the declaration of the class:
 ```cpp
 template <>
 inline constexpr auto mruby::cpp_reflection::object_lifetime<^^TreeObject> = std::array{
-    takes_ownership(^^TreeObject::set_parent, {.by = 0}),
+    takes_ownership(^^TreeObject::set_parent, {.by = 0, .moves = true}),
     takes_ownership(^^TreeObject, {.by = "parent"}),
     ends_lifetime(^^TreeObject::destroy, 0),
 };
@@ -106,7 +106,11 @@ lifetime at runtime. The words:
 
 - `takes_ownership(^^C::set_parent, {.by = 0})` - after the call,
   argument 0 owns the receiver and deletes it; `{.of = 0}` says the
-  receiver takes ownership of argument 0.
+  receiver takes ownership of argument 0. The call raises `ArgumentError`
+  for an object that Ruby does not own, because a second C++ owner would
+  delete it a second time. `{.moves = true}` says that the call takes the
+  object away from its old owner, as `QObject::setParent` does, so an
+  object that another C++ object owns can be handed over.
 - `ends_lifetime(^^C::destroy, 0)` - the call ends the lifetime of
   argument 0 (of the receiver without a position).
 - `retains(^^C::set_layout, 0)` - the receiver keeps argument 0.
@@ -142,7 +146,7 @@ in the `conf.gem` block of the build config writes the same C++ into
 headers of every class that it names. The words take the same arguments:
 a function of the class is a Symbol, the constructors are `:initialize`,
 a function beside the class is its C++ name as a String, and a position
-is a number or a Symbol (`takes_ownership :set_parent, by: 0`,
+is a number or a Symbol (`takes_ownership :set_parent, by: 0, moves: true`,
 `borrowed :fonts, owner: 'lib::Io'`,
 `errors :open, error: :negative, sets_errno: true`,
 `threadsafe :start, :no`, `deallocator 'lib::close', results_of: 'lib::open'`).

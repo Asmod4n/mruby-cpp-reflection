@@ -145,11 +145,11 @@ module MRuby
       # of: names the object whose ownership the function takes, by: the
       # object that takes it, as a parameter number from 0 or a parameter
       # identifier; the one left out is the receiver.
-      def takes_ownership(function, of: nil, by: nil)
+      def takes_ownership(function, of: nil, by: nil, moves: false)
         if of.nil? && by.nil?
           ::Kernel.raise ::ArgumentError, "reflect_object_lifetime #{@class_name}: takes_ownership #{function.inspect} names the of: or the by: parameter"
         end
-        add(word: :takes_ownership, function: function_name(function), of: parameter(of), by: parameter(by))
+        add(word: :takes_ownership, function: function_name(function), of: parameter(of), by: parameter(by), moves: moves == true)
       end
 
       def ends_lifetime(function, position = nil)
@@ -290,6 +290,7 @@ module MRuby
         case word[:word]
         when :takes_ownership
           given = { of: word[:of], by: word[:by] }.compact.map { |k, v| ".#{k} = #{reflect_object_lifetime_parameter_text(v)}" }
+          given << '.moves = true' if word[:moves]
           ["#{call}(#{function}, {#{given.join(', ')}})"]
         when :ends_lifetime, :retains
           [word[:position].nil? ? "#{call}(#{function})" : "#{call}(#{function}, #{reflect_object_lifetime_parameter_text(word[:position])})"]

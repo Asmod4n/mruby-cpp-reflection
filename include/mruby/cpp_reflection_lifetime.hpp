@@ -46,6 +46,7 @@ struct reflect_answer {
 struct reflect_ownership {
     reflect_parameter of{};
     reflect_parameter by{};
+    bool moves = false;
 };
 
 struct reflect_error_answers {
@@ -78,6 +79,7 @@ struct reflect_object_lifetime_word {
     reflect_parameter of{};
     reflect_parameter by{};
     reflect_parameter position{};
+    bool moves = false;
     reflect_parameter output_parameter{};
     const char *results_of = std::define_static_string("");
     const char *increment = std::define_static_string("");
@@ -189,7 +191,7 @@ consteval std::optional<mruby::cpp_reflection::format_attribute> reflect_format_
 consteval mruby::cpp_reflection::reflect_object_lifetime_word takes_ownership(const std::meta::info function, const mruby::cpp_reflection::reflect_ownership given)
 {
     if (given.of.number < 0 && *given.of.identifier == '\0' && given.by.number < 0 && *given.by.identifier == '\0') throw "takes_ownership names the of: or the by: parameter";
-    return {.word = mruby::cpp_reflection::reflect_word::takes_ownership, .function = function, .of = given.of, .by = given.by};
+    return {.word = mruby::cpp_reflection::reflect_word::takes_ownership, .function = function, .of = given.of, .by = given.by, .moves = given.moves};
 }
 
 consteval mruby::cpp_reflection::reflect_object_lifetime_word ends_lifetime(const std::meta::info function, const mruby::cpp_reflection::reflect_parameter position = {})

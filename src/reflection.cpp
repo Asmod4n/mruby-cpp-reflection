@@ -5,6 +5,8 @@
 #include <mruby/variable.h>
 #include <mruby/class.h>
 #include <mruby/string.h>
+#include <mruby/hash.h>
+#include <mruby/array.h>
 #include <mruby/presym.h>
 #include <mruby/cpp_reflection.hpp>
 #if defined(__cpp_impl_reflection) && defined(__GLIBC__)
@@ -72,9 +74,18 @@ reflect_lifetime_base &reflect_topmost(reflect_lifetime_base &record)
     return *at;
 }
 
-void reflect_raise_unless_handed_over(mrb_state *const mrb, const reflect_lifetime_base &record, const char *const function)
+void reflect_raise_on_member_object(mrb_state *const mrb, const reflect_lifetime_base &record, const char *const function)
 {
     if (record.parent != nullptr) [[unlikely]] mrb_raisef(mrb, E_TYPE_ERROR, "%s cannot take a member object from the object that holds it", function);
+}
+
+void reflect_raise_unless_handed_over(mrb_state *const mrb, const reflect_lifetime_base &record, const char *const function, const bool moves)
+{
+    reflect_raise_on_member_object(mrb, record, function);
+    if (!record.alive) [[unlikely]] mrb_raise(mrb, mrb_class_get_id(mrb, MRB_SYM(RefError)), "the lifetime of the C++ object has ended");
+    const bool moved = moves && record.taken_by != nullptr;
+    if (!moved && (!record.owned || record.taken_by != nullptr)) [[unlikely]]
+        mrb_raisef(mrb, E_ARGUMENT_ERROR, "%s takes only an object that Ruby owns, and Ruby does not own this one", function);
 }
 
 void reflect_hidden_iv_set(mrb_state *const mrb, RObject *const object, const mrb_sym key, const mrb_value value)
@@ -86,16 +97,41 @@ void reflect_hidden_iv_set(mrb_state *const mrb, RObject *const object, const mr
     else mrb_obj_iv_set(mrb, object, key, value);
 }
 
-void reflect_hold(mrb_state *const mrb, RObject *const keeper, const mrb_value held)
+mrb_value reflect_retained_of(mrb_state *const mrb, RObject *const keeper)
 {
-    mrb_value kept = mrb_obj_iv_get(mrb, keeper, MRB_SYM(__reflected_retained__));
-    if (!mrb_array_p(kept)) {
-        kept = mrb_ary_new(mrb);
-        reflect_hidden_iv_set(mrb, keeper, MRB_SYM(__reflected_retained__), kept);
-    }
-    const std::span<const mrb_value> known(RARRAY_PTR(kept), static_cast<std::size_t>(RARRAY_LEN(kept)));
-    if (std::ranges::any_of(known, [&](const mrb_value k) { return mrb_obj_eq(mrb, k, held); })) return;
-    mrb_ary_push(mrb, kept, held);
+    const mrb_value kept = mrb_obj_iv_get(mrb, keeper, MRB_SYM(__reflected_retained__));
+    if (mrb_hash_p(kept)) return kept;
+    const mrb_value made = mrb_hash_new(mrb);
+    reflect_hidden_iv_set(mrb, keeper, MRB_SYM(__reflected_retained__), made);
+    return made;
+}
+
+RObject *reflect_keeper_of(mrb_state *const mrb, reflect_lifetime_base &record)
+{
+    const reflect_lifetime_base &top = reflect_topmost(record);
+    return top.adopted && top.owned ? top.ruby : reinterpret_cast<RObject *>(mrb->object_class);
+}
+
+mrb_value reflect_retained_key(mrb_state *const mrb, const void *const receiver, const reflect_function_lifetime &declared, const reflect_retained_parameter retained,
+                               const mrb_value held)
+{
+    if (!retained.replaces) return mrb_int_value(mrb, static_cast<mrb_int>(reinterpret_cast<std::intptr_t>(mrb_ptr(held))));
+    const std::array<std::uintptr_t, 3> slot{reinterpret_cast<std::uintptr_t>(receiver), reinterpret_cast<std::uintptr_t>(declared.name),
+                                             static_cast<std::uintptr_t>(retained.position)};
+    const std::span<const std::byte> bytes = std::as_bytes(std::span(slot));
+    return mrb_str_new(mrb, reinterpret_cast<const char *>(bytes.data()), static_cast<mrb_int>(bytes.size()));
+}
+
+void reflect_move_retained(mrb_state *const mrb, reflect_lifetime_base &of)
+{
+    const mrb_value kept = mrb_obj_iv_get(mrb, of.ruby, MRB_SYM(__reflected_retained__));
+    if (!mrb_hash_p(kept)) return;
+    RObject *const keeper = reflect_keeper_of(mrb, of);
+    if (keeper == of.ruby) return;
+    const mrb_value target = reflect_retained_of(mrb, keeper);
+    const mrb_value keys = mrb_hash_keys(mrb, kept);
+    for (const mrb_value key : std::span<const mrb_value>(RARRAY_PTR(keys), static_cast<std::size_t>(RARRAY_LEN(keys))))
+        mrb_hash_set(mrb, target, key, mrb_hash_get(mrb, kept, key));
 }
 
 void reflect_raise_on_short_stack(mrb_state *const mrb, const std::size_t reserve)
@@ -132,7 +168,8 @@ void reflect_before_declared_call(mrb_state *const mrb, const mrb_value self, co
         if (by == nullptr && !mrb_nil_p(given) && !mrb_undef_p(given)) [[unlikely]]
             mrb_raisef(mrb, E_TYPE_ERROR, "%s gives ownership only to an object that Ruby holds", declared.name);
         if (of != nullptr) {
-            reflect_raise_unless_handed_over(mrb, *of, declared.name);
+            if (by == nullptr) reflect_raise_on_member_object(mrb, *of, declared.name);
+            else reflect_raise_unless_handed_over(mrb, *of, declared.name, declared.moves);
             if (by != nullptr && reflect_reaches(*by, *of)) [[unlikely]]
                 mrb_raisef(mrb, E_ARGUMENT_ERROR, "%s would make an object take ownership of itself", declared.name);
         }
@@ -140,12 +177,12 @@ void reflect_before_declared_call(mrb_state *const mrb, const mrb_value self, co
     if (declared.ended != reflect_nowhere) {
         const reflect_lifetime_base *const ended = reflect_record(mrb, reflect_argument_at(mrb, self, declared.ended));
         if (ended == nullptr) [[unlikely]] mrb_raisef(mrb, E_TYPE_ERROR, "%s ends the lifetime only of an object that Ruby holds", declared.name);
-        reflect_raise_unless_handed_over(mrb, *ended, declared.name);
+        reflect_raise_unless_handed_over(mrb, *ended, declared.name, false);
     }
-    for (const int position : declared.retained) {
-        const mrb_value given = reflect_argument_at(mrb, self, position);
+    for (const reflect_retained_parameter retained : declared.retained) {
+        const mrb_value given = reflect_argument_at(mrb, self, retained.position);
         if (!mrb_nil_p(given) && !mrb_undef_p(given) && reflect_record(mrb, given) == nullptr) [[unlikely]]
-            mrb_raisef(mrb, E_TYPE_ERROR, "%s keeps parameter %d, so it takes only an object that Ruby holds", declared.name, position);
+            mrb_raisef(mrb, E_TYPE_ERROR, "%s keeps parameter %d, so it takes only an object that Ruby holds", declared.name, retained.position);
     }
 }
 
@@ -174,6 +211,7 @@ void reflect_take_ownership(mrb_state *const mrb, reflect_lifetime_base &of, ref
     of.taken_by = &by;
     of.owned = false;
     reflect_hidden_iv_set(mrb, of.ruby, MRB_SYM(__reflected_taken_by__), mrb_obj_value(by.ruby));
+    reflect_move_retained(mrb, of);
 }
 
 void reflect_release(mrb_state *const mrb, reflect_lifetime_base &of)
@@ -236,11 +274,14 @@ mrb_value reflect_after_declared_call(mrb_state *const mrb, const mrb_value self
         }
         if (!declared.retained.empty()) {
             reflect_lifetime_base *const receiver = reflect_record(mrb, self);
-            reflect_lifetime_base *const top = receiver == nullptr ? nullptr : &reflect_topmost(*receiver);
-            RObject *const keeper = top != nullptr && top->adopted && top->owned ? top->ruby : reinterpret_cast<RObject *>(mrb->object_class);
-            for (const int position : declared.retained) {
-                const mrb_value given = reflect_argument_at(mrb, self, position);
-                if (reflect_record(mrb, given) != nullptr) reflect_hold(mrb, keeper, given);
+            RObject *const keeper = receiver == nullptr ? reinterpret_cast<RObject *>(mrb->object_class) : reflect_keeper_of(mrb, *receiver);
+            const mrb_value kept = reflect_retained_of(mrb, keeper);
+            const void *const object = receiver == nullptr ? nullptr : receiver->object;
+            for (const reflect_retained_parameter retained : declared.retained) {
+                const mrb_value given = reflect_argument_at(mrb, self, retained.position);
+                const reflect_retained_parameter slot{.position = retained.position, .replaces = retained.replaces && object != nullptr};
+                if (reflect_record(mrb, given) != nullptr) mrb_hash_set(mrb, kept, reflect_retained_key(mrb, object, declared, slot, given), given);
+                else if (slot.replaces) mrb_hash_delete_key(mrb, kept, reflect_retained_key(mrb, object, declared, slot, given));
             }
         }
         return result;
@@ -256,13 +297,13 @@ extern "C" void mrb_mruby_cpp_reflection_gem_init(mrb_state *const mrb)
     mrb_define_class_id(mrb, MRB_SYM(CppCoroutineError), E_STANDARD_ERROR);
     mrb_define_class_id(mrb, MRB_SYM(RefError), E_RUNTIME_ERROR);
     mruby::cpp_reflection::reflect_define_void_pointer(mrb, MRB_SYM(FunctionPointer));
-    mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), mruby::cpp_reflection::reflect_identities_key(mrb),
+    mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), MRB_SYM(__reflected_identities__),
                mrb_cptr_value(mrb, new mruby::cpp_reflection::reflect_identities()));
-    mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), mruby::cpp_reflection::reflect_callbacks_key(mrb),
+    mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), MRB_SYM(__reflected_callbacks__),
                mrb_cptr_value(mrb, new mruby::cpp_reflection::reflect_callbacks{std::this_thread::get_id()}));
-    mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), mruby::cpp_reflection::reflect_lifetimes_key(mrb),
+    mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), MRB_SYM(__reflected_lifetimes__),
                mrb_cptr_value(mrb, new mruby::cpp_reflection::reflect_lifetimes()));
-    mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), mruby::cpp_reflection::reflect_symbols_key(mrb),
+    mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), MRB_SYM(__reflected_symbols__),
                mrb_cptr_value(mrb, new mruby::cpp_reflection::reflect_symbols{}));
 }
 
@@ -283,14 +324,18 @@ extern "C" void mrb_mruby_cpp_reflection_gem_final(mrb_state *const mrb)
     for (mruby::cpp_reflection::reflect_gc_root *const root : callbacks.roots) root->callbacks = nullptr;
     callbacks.roots.clear();
     mrb_objspace_each_objects(mrb, mruby::cpp_reflection::reflect_free_object, nullptr);
+    for (const auto &[object, record] : mruby::cpp_reflection::reflect_identity_map(mrb)) {
+        record->identities = nullptr;
+        record->callbacks = nullptr;
+    }
     delete &mruby::cpp_reflection::reflect_identity_map(mrb);
-    mrb_iv_remove(mrb, mrb_obj_value(mrb->object_class), mruby::cpp_reflection::reflect_identities_key(mrb));
+    mrb_iv_remove(mrb, mrb_obj_value(mrb->object_class), MRB_SYM(__reflected_identities__));
     delete &callbacks;
-    mrb_iv_remove(mrb, mrb_obj_value(mrb->object_class), mruby::cpp_reflection::reflect_callbacks_key(mrb));
+    mrb_iv_remove(mrb, mrb_obj_value(mrb->object_class), MRB_SYM(__reflected_callbacks__));
     delete &mruby::cpp_reflection::reflect_lifetimes_of(mrb);
-    mrb_iv_remove(mrb, mrb_obj_value(mrb->object_class), mruby::cpp_reflection::reflect_lifetimes_key(mrb));
+    mrb_iv_remove(mrb, mrb_obj_value(mrb->object_class), MRB_SYM(__reflected_lifetimes__));
     delete &mruby::cpp_reflection::reflect_symbols_of(mrb);
-    mrb_iv_remove(mrb, mrb_obj_value(mrb->object_class), mruby::cpp_reflection::reflect_symbols_key(mrb));
+    mrb_iv_remove(mrb, mrb_obj_value(mrb->object_class), MRB_SYM(__reflected_symbols__));
 }
 #else
 extern "C" void mrb_mruby_cpp_reflection_gem_init(mrb_state *const mrb)

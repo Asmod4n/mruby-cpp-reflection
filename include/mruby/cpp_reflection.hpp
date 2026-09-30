@@ -94,14 +94,9 @@ struct reflect_symbols {
     std::unordered_map<const void *, std::vector<mrb_sym>> virtuals;
 };
 
-inline mrb_sym reflect_symbols_key(mrb_state *const mrb)
-{
-    return MRB_SYM(__reflected_symbols__);
-}
-
 inline reflect_symbols &reflect_symbols_of(mrb_state *const mrb)
 {
-    return *static_cast<reflect_symbols *>(mrb_cptr(mrb_iv_get(mrb, mrb_obj_value(mrb->object_class), reflect_symbols_key(mrb))));
+    return *static_cast<reflect_symbols *>(mrb_cptr(mrb_iv_get(mrb, mrb_obj_value(mrb->object_class), MRB_SYM(__reflected_symbols__))));
 }
 
 
@@ -128,14 +123,9 @@ struct reflect_callbacks {
     void unregister_released(mrb_state *mrb);
 };
 
-inline mrb_sym reflect_callbacks_key(mrb_state *const mrb)
-{
-    return MRB_SYM(__reflected_callbacks__);
-}
-
 inline reflect_callbacks &reflect_callbacks_of(mrb_state *const mrb)
 {
-    return *static_cast<reflect_callbacks *>(mrb_cptr(mrb_iv_get(mrb, mrb_obj_value(mrb->object_class), reflect_callbacks_key(mrb))));
+    return *static_cast<reflect_callbacks *>(mrb_cptr(mrb_iv_get(mrb, mrb_obj_value(mrb->object_class), MRB_SYM(__reflected_callbacks__))));
 }
 
 inline constexpr int reflect_receiver = -1;
@@ -144,12 +134,18 @@ inline constexpr int reflect_nowhere = -2;
 template <std::meta::info Class>
 inline constexpr std::span<const reflect_object_lifetime_word> reflect_object_lifetime_words = std::define_static_array(mruby::cpp_reflection::object_lifetime<Class>);
 
+struct reflect_retained_parameter {
+    int position;
+    bool replaces;
+};
+
 struct reflect_function_lifetime {
     const char *name = "";
     int of = reflect_nowhere;
     int by = reflect_nowhere;
+    bool moves = false;
     int ended = reflect_nowhere;
-    std::span<const int> retained;
+    std::span<const reflect_retained_parameter> retained;
     reflect_answer_test test = reflect_answer_test::none;
     bool expects_nil = false;
     mrb_int expected = 0;
@@ -446,7 +442,7 @@ consteval const char *reflect_declared_twice(const std::meta::info function, con
 consteval reflect_function_lifetime reflect_object_lifetime_for(const std::meta::info type, const std::meta::info function)
 {
     reflect_function_lifetime lifetime{};
-    std::vector<int> retained;
+    std::vector<reflect_retained_parameter> retained;
     const std::string_view name = reflect_function_name(function);
     for (const std::meta::info klass : reflect_declaring_classes(type, function)) {
         const std::span<const reflect_object_lifetime_word> words = reflect_words_of(klass);
@@ -469,6 +465,7 @@ consteval reflect_function_lifetime reflect_object_lifetime_for(const std::meta:
                 if (lifetime.of != reflect_nowhere) throw reflect_declared_twice(function, "takes_ownership");
                 lifetime.of = of;
                 lifetime.by = by;
+                lifetime.moves = word.moves;
                 break;
             }
             case reflect_word::ends_lifetime: {
@@ -481,8 +478,10 @@ consteval reflect_function_lifetime reflect_object_lifetime_for(const std::meta:
             case reflect_word::retains: {
                 const int kept = reflect_position(function, word.position);
                 if (kept == reflect_nowhere) continue;
-                if (std::ranges::contains(retained, kept)) throw reflect_declared_twice(function, "retains");
-                retained.push_back(kept);
+                if (std::ranges::contains(retained, kept, &reflect_retained_parameter::position)) throw reflect_declared_twice(function, "retains");
+                const std::optional<parameter_destination> destination =
+                    kept == reflect_receiver ? std::nullopt : reflect_parameter_destination(reflect_given_parameters(function)[static_cast<std::size_t>(kept)]);
+                retained.push_back({.position = kept, .replaces = destination.has_value() && !destination->appends && destination->holder == -1});
                 break;
             }
             case reflect_word::errors:
@@ -635,16 +634,12 @@ inline constexpr reflect_function_lifetime reflect_object_lifetime_of = [] {
 struct reflect_lifetimes {
     std::uintptr_t stack_end = 0;
     mrb_value output = mrb_undef_value();
+    std::unordered_set<const RClass *> classes;
 };
-
-inline mrb_sym reflect_lifetimes_key(mrb_state *const mrb)
-{
-    return MRB_SYM(__reflected_lifetimes__);
-}
 
 inline reflect_lifetimes &reflect_lifetimes_of(mrb_state *const mrb)
 {
-    return *static_cast<reflect_lifetimes *>(mrb_cptr(mrb_iv_get(mrb, mrb_obj_value(mrb->object_class), reflect_lifetimes_key(mrb))));
+    return *static_cast<reflect_lifetimes *>(mrb_cptr(mrb_iv_get(mrb, mrb_obj_value(mrb->object_class), MRB_SYM(__reflected_lifetimes__))));
 }
 
 void reflect_before_declared_call(mrb_state *mrb, mrb_value self, const reflect_function_lifetime &declared);
@@ -704,14 +699,9 @@ struct reflect_data_type : mrb_data_type {
     void *(*object_of)(void *data) = [](void *const data) { return static_cast<reflect_lifetime_base *>(data)->object; };
 };
 
-inline mrb_sym reflect_identities_key(mrb_state *const mrb)
-{
-    return MRB_SYM(__reflected_identities__);
-}
-
 inline reflect_identities &reflect_identity_map(mrb_state *const mrb)
 {
-    return *static_cast<reflect_identities *>(mrb_cptr(mrb_iv_get(mrb, mrb_obj_value(mrb->object_class), reflect_identities_key(mrb))));
+    return *static_cast<reflect_identities *>(mrb_cptr(mrb_iv_get(mrb, mrb_obj_value(mrb->object_class), MRB_SYM(__reflected_identities__))));
 }
 
 inline void reflect_identity_set(reflect_lifetime_base &record)
@@ -721,6 +711,7 @@ inline void reflect_identity_set(reflect_lifetime_base &record)
 
 inline void reflect_identity_erase(reflect_lifetime_base &record)
 {
+    if (record.identities == nullptr) return;
     const auto [first, last] = record.identities->equal_range(record.object);
     const auto found = std::ranges::find(first, last, &record, &reflect_identities::value_type::second);
     if (found != last) record.identities->erase(found);
@@ -820,21 +811,17 @@ inline RObject *reflect_identity(mrb_state *const mrb, const void *const object,
     return nullptr;
 }
 
-inline mrb_sym reflect_reflected_key(mrb_state *const mrb)
-{
-    return MRB_SYM(__reflected__);
-}
-
 inline bool reflect_reflected(mrb_state *const mrb, const mrb_value v)
 {
-    for (RClass *c = mrb_obj_class(mrb, v); c != nullptr; c = c->super)
-        if (mrb_obj_iv_defined(mrb, reinterpret_cast<RObject *>(c), reflect_reflected_key(mrb))) return true;
+    const std::unordered_set<const RClass *> &classes = reflect_lifetimes_of(mrb).classes;
+    for (const RClass *c = mrb_obj_class(mrb, v); c != nullptr; c = c->super)
+        if (classes.contains(c)) return true;
     return false;
 }
 
 inline reflect_lifetime_base *reflect_record(mrb_state *const mrb, const mrb_value v)
 {
-    if (mrb_type(v) != MRB_TT_CDATA || DATA_PTR(v) == nullptr || DATA_TYPE(v) == nullptr || !reflect_reflected(mrb, v)) return nullptr;
+    if (!mrb_data_p(v) || DATA_PTR(v) == nullptr || DATA_TYPE(v) == nullptr || !reflect_reflected(mrb, v)) return nullptr;
     return static_cast<reflect_lifetime_base *>(DATA_PTR(v));
 }
 
@@ -1262,8 +1249,8 @@ RClass *reflect_class(mrb_state *const mrb)
 template <class T>
 T *reflect_ptr(mrb_state *const mrb, const mrb_value v)
 {
-    if (mrb_type(v) != MRB_TT_CDATA || DATA_PTR(v) == nullptr || DATA_TYPE(v) == nullptr) return nullptr;
-    if (DATA_TYPE(v) != &reflect_data_type_of<T>() && !reflect_reflected(mrb, v)) [[unlikely]] return nullptr;
+    if (!mrb_data_p(v) || DATA_PTR(v) == nullptr || DATA_TYPE(v) == nullptr) return nullptr;
+    if (mrb_data_check_get_ptr(mrb, v, &reflect_data_type_of<T>()) == nullptr && !reflect_reflected(mrb, v)) [[unlikely]] return nullptr;
     const reflect_data_type *const type = static_cast<const reflect_data_type *>(DATA_TYPE(v));
     reflect_lifetime_base &record = *static_cast<reflect_lifetime_base *>(DATA_PTR(v));
     if (type == &reflect_data_type_of<T>()) {
@@ -1292,16 +1279,11 @@ inline const mrb_data_type &reflect_data_type_share()
     return type;
 }
 
-inline mrb_sym reflect_share_key(mrb_state *const mrb)
-{
-    return MRB_SYM(__reflected_share__);
-}
-
 template <class E>
 std::shared_ptr<E> reflect_share_of(mrb_state *const mrb, const mrb_value v)
 {
     if (mrb_type(v) != MRB_TT_CDATA) return nullptr;
-    const mrb_value keeper = mrb_iv_get(mrb, v, reflect_share_key(mrb));
+    const mrb_value keeper = mrb_iv_get(mrb, v, MRB_SYM(__reflected_share__));
     if (mrb_nil_p(keeper)) return nullptr;
     E *const p = reflect_ptr<E>(mrb, v);
     if (p == nullptr) return nullptr;
@@ -1334,7 +1316,7 @@ void reflect_adopt(mrb_state *const mrb, const mrb_value self, reflect_lifetime_
         tracked->record = &record;
         record.tracked = tracked;
     }
-    mrb_iv_remove(mrb, self, reflect_share_key(mrb));
+    mrb_iv_remove(mrb, self, MRB_SYM(__reflected_share__));
     reflect_identity_set(record);
 }
 
@@ -2034,9 +2016,9 @@ mrb_value reflect_result(mrb_state *const mrb, const mrb_value self, R &&value)
         using E = typename T::element_type;
         if (value == nullptr) return mrb_nil_value();
         const mrb_value object = reflect_borrowed<std::remove_const_t<E>>(mrb, const_cast<std::remove_const_t<E> *>(value.get()), mrb_nil_value(), std::is_const_v<E>);
-        if (mrb_nil_p(mrb_iv_get(mrb, object, reflect_share_key(mrb)))) {
+        if (mrb_nil_p(mrb_iv_get(mrb, object, MRB_SYM(__reflected_share__)))) {
             RData *const keeper = mrb_data_object_alloc(mrb, mrb->object_class, new std::shared_ptr<void>(std::const_pointer_cast<std::remove_const_t<E>>(value)), &reflect_data_type_share());
-            mrb_iv_set(mrb, object, reflect_share_key(mrb), mrb_obj_value(keeper));
+            mrb_iv_set(mrb, object, MRB_SYM(__reflected_share__), mrb_obj_value(keeper));
         }
         return object;
     }
@@ -2257,7 +2239,7 @@ struct reflect_virtual_call {
 template <std::meta::info Function, class Self, class Base, class... A>
 auto reflect_call_virtual_overrider(Self &self, bool &running, const Base &base, A &...arguments) -> typename [:std::meta::return_type_of(Function):]
 {
-    if (running || self.record == nullptr || !self.record->alive) return base();
+    if (running || self.record == nullptr || !self.record->alive || self.record->callbacks == nullptr) return base();
     if (std::this_thread::get_id() != self.record->callbacks->thread) [[unlikely]] reflect_throw_call_from_other_thread();
     if (self.record->callbacks->closed) return base();
     mrb_state *const mrb = self.record->mrb;
@@ -3191,7 +3173,7 @@ RClass *reflect_define_enum(reflect_definition<Names> &definition, RClass *const
     RClass *const klass = ::mrb_define_class_under_id(mrb, outer, name, mrb->object_class);
     MRB_SET_INSTANCE_TT(klass, MRB_TT_CDATA);
     mrb_undef_class_method_id(mrb, klass, MRB_SYM(new));
-    mrb_iv_set(mrb, mrb_obj_value(klass), reflect_reflected_key(mrb), mrb_true_value());
+    reflect_lifetimes_of(mrb).classes.insert(klass);
     mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), reflect_class_key<std::meta::dealias(Type)>(mrb), mrb_obj_value(klass));
     RClass *const methods = ::mrb_define_module_under_id(mrb, klass, MRB_SYM(InstanceMethods));
     mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), reflect_module_key<std::meta::dealias(Type)>(mrb), mrb_obj_value(methods));
@@ -3273,11 +3255,35 @@ T *reflect_comparable_operand(mrb_state *const mrb, const mrb_value v, std::opti
     return nullptr;
 }
 
+template <class T>
+concept reflect_has_value_type = requires { typename T::value_type; };
+
+template <reflect_has_value_type T>
+using reflect_value_type_t = typename T::value_type;
+
+consteval bool reflect_elements_satisfy(const std::meta::info type, const std::meta::info concept_of, const std::size_t depth = 0)
+{
+    const std::meta::info t = std::meta::dealias(std::meta::remove_cv(type));
+    if (!std::meta::extract<bool>(std::meta::substitute(concept_of, {t}))) return false;
+    if (depth > 16 || !std::meta::is_class_type(t) || !std::meta::has_template_arguments(t) || !reflect_in_namespace_std(t)) return true;
+    const std::meta::info from = std::meta::template_of(t);
+    if (from == ^^std::pair || from == ^^std::tuple || from == ^^std::variant) {
+        for (const std::meta::info a : std::meta::template_arguments_of(t))
+            if (std::meta::is_type(a) && !reflect_elements_satisfy(a, concept_of, depth + 1)) return false;
+        return true;
+    }
+    if (!std::meta::extract<bool>(std::meta::substitute(^^reflect_has_value_type, {t}))) return true;
+    const std::meta::info element = std::meta::dealias(std::meta::remove_cv(std::meta::substitute(^^reflect_value_type_t, {t})));
+    return element == t || reflect_elements_satisfy(element, concept_of, depth + 1);
+}
+
 template <std::meta::info Type, bool DeclaresEquals, bool DeclaresSpaceship>
 void reflect_define_comparisons(mrb_state *const mrb, RClass *const methods)
 {
     using T = [:std::meta::dealias(Type):];
-    if constexpr (std::equality_comparable<T> && !DeclaresEquals) {
+    constexpr bool equality_comparable = reflect_elements_satisfy(^^T, ^^std::equality_comparable);
+    constexpr bool three_way_comparable = reflect_elements_satisfy(^^T, ^^std::three_way_comparable);
+    if constexpr (equality_comparable && !DeclaresEquals) {
         ::mrb_define_method_id(mrb, methods, MRB_OPSYM(eq), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
             mrb_value v;
             mrb_get_args(mrb, "o", &v);
@@ -3286,7 +3292,7 @@ void reflect_define_comparisons(mrb_state *const mrb, RClass *const methods)
             return mrb_bool_value(other != nullptr && reflect_receiver_or_raise<T>(mrb, self) == *other);
         }, MRB_ARGS_REQ(1));
     }
-    if constexpr (std::three_way_comparable<T> && !DeclaresSpaceship) {
+    if constexpr (three_way_comparable && !DeclaresSpaceship) {
         ::mrb_define_method_id(mrb, methods, MRB_OPSYM(cmp), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
             mrb_value v;
             mrb_get_args(mrb, "o", &v);
@@ -3297,7 +3303,7 @@ void reflect_define_comparisons(mrb_state *const mrb, RClass *const methods)
         }, MRB_ARGS_REQ(1));
         mrb_include_module(mrb, methods, mrb_module_get_id(mrb, MRB_SYM(Comparable)));
     }
-    if constexpr (std::equality_comparable<T> && std::is_default_constructible_v<std::hash<T>>) {
+    if constexpr (equality_comparable && std::is_default_constructible_v<std::hash<T>>) {
         ::mrb_define_method_id(mrb, methods, MRB_SYM_Q(eql), [](mrb_state *const mrb, const mrb_value self) -> mrb_value {
             mrb_value v;
             mrb_get_args(mrb, "o", &v);
@@ -3321,7 +3327,7 @@ RClass *reflect_define_opaque_class(reflect_definition<Names> &definition, RClas
     MRB_SET_INSTANCE_TT(klass, MRB_TT_CDATA);
     MRB_UNDEF_ALLOCATOR(klass);
     mrb_undef_class_method_id(mrb, klass, MRB_SYM(new));
-    mrb_iv_set(mrb, mrb_obj_value(klass), reflect_reflected_key(mrb), mrb_true_value());
+    reflect_lifetimes_of(mrb).classes.insert(klass);
     mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), reflect_class_key<std::meta::dealias(Type)>(mrb), mrb_obj_value(klass));
     RClass *const methods = ::mrb_define_module_under_id(mrb, klass, MRB_SYM(InstanceMethods));
     mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), reflect_module_key<std::meta::dealias(Type)>(mrb), mrb_obj_value(methods));
@@ -3361,7 +3367,7 @@ RClass *reflect_define_complete_class(reflect_definition<Names> &definition, RCl
         klass = mrb_class_new(mrb, superclass);
     }
     MRB_SET_INSTANCE_TT(klass, MRB_TT_CDATA);
-    mrb_iv_set(mrb, mrb_obj_value(klass), reflect_reflected_key(mrb), mrb_true_value());
+    reflect_lifetimes_of(mrb).classes.insert(klass);
     mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), reflect_class_key<std::meta::dealias(std::meta::remove_cvref(Type))>(mrb), mrb_obj_value(klass));
     RClass *const methods = ::mrb_define_module_under_id(mrb, klass, MRB_SYM(InstanceMethods));
     mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), reflect_module_key<std::meta::dealias(std::meta::remove_cvref(Type))>(mrb), mrb_obj_value(methods));
