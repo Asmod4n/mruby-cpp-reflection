@@ -53,7 +53,7 @@ extern const struct mrb_data_type mrb_const_void_pointer_type;
 #include <filesystem>
 #include <regex>
 #include <system_error>
-#include <atomic>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -129,9 +129,16 @@ struct reflect_lifetime_base;
 struct reflect_tracked_base;
 struct reflect_gc_root;
 
+struct reflect_released_roots {
+    std::mutex lock;
+    std::vector<reflect_gc_root *> roots;
+    bool closed = false;
+};
+
 struct reflect_callbacks {
     std::thread::id thread;
     std::unordered_set<reflect_gc_root *> roots;
+    std::shared_ptr<reflect_released_roots> released = std::make_shared<reflect_released_roots>();
     bool closed = false;
     void unregister_released(mrb_state *mrb);
 };
@@ -1394,15 +1401,14 @@ struct reflect_holder {
     }
 };
 
-enum class reflect_root_state : unsigned char { held, released, orphaned };
-
 struct reflect_gc_root {
     mrb_state *mrb;
     mrb_value object;
     std::thread::id thread;
     reflect_callbacks *callbacks;
-    std::atomic<reflect_root_state> state = reflect_root_state::held;
-    reflect_gc_root(mrb_state *const state, const mrb_value v) : mrb(state), object(v), thread(reflect_callbacks_of(state).thread), callbacks(&reflect_callbacks_of(state))
+    std::shared_ptr<reflect_released_roots> released;
+    reflect_gc_root(mrb_state *const state, const mrb_value v)
+        : mrb(state), object(v), thread(reflect_callbacks_of(state).thread), callbacks(&reflect_callbacks_of(state)), released(callbacks->released)
     {
         callbacks->unregister_released(mrb);
         callbacks->roots.insert(this);
@@ -1414,12 +1420,16 @@ struct reflect_gc_root {
 
 inline void reflect_callbacks::unregister_released(mrb_state *const mrb)
 {
-    std::erase_if(roots, [mrb](reflect_gc_root *const root) {
-        if (root->state.load() != reflect_root_state::released) return false;
+    std::vector<reflect_gc_root *> taken;
+    {
+        const std::scoped_lock hold(released->lock);
+        taken.swap(released->roots);
+    }
+    for (reflect_gc_root *const root : taken) {
+        roots.erase(root);
         mrb_gc_unregister(mrb, root->object);
         delete root;
-        return true;
-    });
+    }
 }
 
 template <class R>
@@ -1474,7 +1484,10 @@ std::unique_ptr<T> reflect_function_from(mrb_state *const mrb, const mrb_value v
     if (!mrb_respond_to(mrb, v, MRB_SYM(call))) return nullptr;
     using Signature = [:std::meta::template_arguments_of(std::meta::dealias(^^T))[0]:];
     return std::make_unique<T>(reflect_callable<Signature>{std::shared_ptr<reflect_gc_root>(new reflect_gc_root(mrb, v), [](reflect_gc_root *const root) {
-        if (root->state.exchange(reflect_root_state::released) == reflect_root_state::orphaned) delete root;
+        const std::shared_ptr<reflect_released_roots> released = root->released;
+        const std::scoped_lock hold(released->lock);
+        if (released->closed) delete root;
+        else released->roots.push_back(root);
     })});
 }
 

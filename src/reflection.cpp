@@ -269,10 +269,17 @@ extern "C" void mrb_mruby_cpp_reflection_gem_final(mrb_state *const mrb)
 {
     mruby::cpp_reflection::reflect_callbacks &callbacks = mruby::cpp_reflection::reflect_callbacks_of(mrb);
     callbacks.closed = true;
-    for (mruby::cpp_reflection::reflect_gc_root *const root : callbacks.roots) {
-        root->callbacks = nullptr;
-        if (root->state.exchange(mruby::cpp_reflection::reflect_root_state::orphaned) == mruby::cpp_reflection::reflect_root_state::released) delete root;
+    std::vector<mruby::cpp_reflection::reflect_gc_root *> released;
+    {
+        const std::scoped_lock hold(callbacks.released->lock);
+        callbacks.released->closed = true;
+        released.swap(callbacks.released->roots);
     }
+    for (mruby::cpp_reflection::reflect_gc_root *const root : released) {
+        callbacks.roots.erase(root);
+        delete root;
+    }
+    for (mruby::cpp_reflection::reflect_gc_root *const root : callbacks.roots) root->callbacks = nullptr;
     callbacks.roots.clear();
     mrb_objspace_each_objects(mrb, mruby::cpp_reflection::reflect_free_object, nullptr);
     delete &mruby::cpp_reflection::reflect_identity_map(mrb);
