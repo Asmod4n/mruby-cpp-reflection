@@ -122,9 +122,9 @@ mrb_value reflect_retained_key(mrb_state *const mrb, const void *const receiver,
                                const mrb_value held)
 {
     if (!retained.replaces) return mrb_int_value(mrb, static_cast<mrb_int>(reinterpret_cast<std::intptr_t>(mrb_ptr(held))));
-    const std::array<std::uintptr_t, 3> slot{reinterpret_cast<std::uintptr_t>(receiver), reinterpret_cast<std::uintptr_t>(declared.name),
+    const std::array<std::uintptr_t, 3> identity{reinterpret_cast<std::uintptr_t>(receiver), reinterpret_cast<std::uintptr_t>(declared.name),
                                              static_cast<std::uintptr_t>(retained.position)};
-    const std::span<const std::byte> bytes = std::as_bytes(std::span(slot));
+    const std::span<const std::byte> bytes = std::as_bytes(std::span(identity));
     return mrb_str_new(mrb, reinterpret_cast<const char *>(bytes.data()), static_cast<mrb_int>(bytes.size()));
 }
 
@@ -306,9 +306,9 @@ mrb_value reflect_after_declared_call(mrb_state *const mrb, const mrb_value self
             const void *const object = receiver == nullptr ? nullptr : receiver->object;
             for (const reflect_retained_parameter retained : declared.retained) {
                 const mrb_value given = reflect_argument_at(mrb, self, retained.position);
-                const reflect_retained_parameter slot{.position = retained.position, .replaces = retained.replaces && object != nullptr};
-                if (reflect_record(mrb, given) != nullptr) mrb_hash_set(mrb, kept, reflect_retained_key(mrb, object, declared, slot, given), given);
-                else if (slot.replaces) mrb_hash_delete_key(mrb, kept, reflect_retained_key(mrb, object, declared, slot, given));
+                const reflect_retained_parameter parameter{.position = retained.position, .replaces = retained.replaces && object != nullptr};
+                if (reflect_record(mrb, given) != nullptr) mrb_hash_set(mrb, kept, reflect_retained_key(mrb, object, declared, parameter, given), given);
+                else if (parameter.replaces) mrb_hash_delete_key(mrb, kept, reflect_retained_key(mrb, object, declared, parameter, given));
             }
         }
         return result;
