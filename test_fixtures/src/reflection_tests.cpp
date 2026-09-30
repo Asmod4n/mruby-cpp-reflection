@@ -213,6 +213,8 @@ struct Callback {
     void keep(std::function<number(number)> f) { kept = std::move(f); }
     std::string make_text() const { return std::string(100, 'a'); }
     void append_x(std::string &text) const { text += 'x'; }
+    mrb_int both_lengths(const std::string_view first, const char *const second) const { return static_cast<mrb_int>(first.size() + std::string_view(second).size()); }
+    void append_view(const std::string_view given, std::string &text) const { text.append(given); }
     void append_three(std::vector<mrb_int> &numbers) const { numbers.push_back(3); }
     void count_b(std::map<std::string, mrb_int> &counts) const { ++counts["b"]; }
     mrb_int size_after_kept(const std::string &text) const

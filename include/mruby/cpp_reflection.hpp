@@ -1460,7 +1460,12 @@ struct reflect_gc_root {
     {
         callbacks->unregister_released(mrb);
         mrb_gc_register(mrb, object);
-        callbacks->roots.insert(this);
+        try {
+            callbacks->roots.insert(this);
+        } catch (const std::bad_alloc &) {
+            mrb_gc_unregister(mrb, object);
+            throw;
+        }
     }
     reflect_gc_root(const reflect_gc_root &) = delete;
     reflect_gc_root &operator=(const reflect_gc_root &) = delete;
@@ -1730,8 +1735,8 @@ inline void reflect_keep(mrb_state *const mrb, const mrb_value holder, const mrb
     RBasic *const object = mrb_basic_ptr(holder);
     const bool frozen = mrb_frozen_p(object);
     object->frozen = false;
+    const std::unique_ptr<RBasic, decltype([](RBasic *const o) { o->frozen = 1; })> refrozen(frozen ? object : nullptr);
     mrb_iv_set(mrb, holder, name, kept);
-    object->frozen = frozen;
 }
 
 template <std::meta::info Parameter>
@@ -1753,12 +1758,19 @@ struct reflect_lent_string {
     mrb_value holder = mrb_nil_value();
     const char *name = nullptr;
     bool thaws = false;
+    bool kept = false;
+    mrb_value kept_before = mrb_nil_value();
     void acquire()
     {
-        if (name != nullptr) reflect_keep(mrb, holder, mrb_intern_static(mrb, name, std::char_traits<char>::length(name)), copy);
         if constexpr (std::same_as<V, const char *>) value = mrb_string_cstr(mrb, copy);
         else value = V(RSTRING_PTR(copy), static_cast<std::size_t>(RSTRING_LEN(copy)));
-        if (name != nullptr) return;
+        if (name != nullptr) {
+            const mrb_sym key = mrb_intern_static(mrb, name, std::char_traits<char>::length(name));
+            kept_before = mrb_iv_get(mrb, holder, key);
+            reflect_keep(mrb, holder, key, copy);
+            kept = true;
+            return;
+        }
         RBasic *const lent = mrb_basic_ptr(copy);
         thaws = !mrb_frozen_p(lent);
         lent->frozen = 1;
@@ -1767,6 +1779,12 @@ struct reflect_lent_string {
     {
         if (thaws) mrb_basic_ptr(copy)->frozen = 0;
         thaws = false;
+    }
+    void restore()
+    {
+        if (!kept) return;
+        kept = false;
+        reflect_keep(mrb, holder, mrb_intern_static(mrb, name, std::char_traits<char>::length(name)), kept_before);
     }
 };
 
@@ -1844,6 +1862,15 @@ void reflect_release(Args &args)
 }
 
 template <class Args>
+void reflect_restore(Args &args)
+{
+    std::apply([](auto &...held) {
+        ([&] {
+            if constexpr (requires { held.restore(); }) held.restore();
+        }(), ...);
+    }, args);
+}
+template <class Args>
 void reflect_acquire(Args &args)
 {
     std::apply([](auto &...held) {
@@ -1856,19 +1883,23 @@ void reflect_acquire(Args &args)
 template <class Call, class Args>
 decltype(auto) reflect_apply(Call &&call, Args &args)
 {
-    reflect_acquire(args);
+    bool called = false;
     try {
+        reflect_acquire(args);
         if constexpr (std::is_void_v<decltype(std::apply(call, args))>) {
             std::apply(call, args);
-            reflect_write_back(args);
+            called = true;
             reflect_release(args);
+            reflect_write_back(args);
         } else {
             decltype(auto) answer = std::apply(call, args);
-            reflect_write_back(args);
+            called = true;
             reflect_release(args);
+            reflect_write_back(args);
             return answer;
         }
     } catch (...) {
+        if (!called) reflect_restore(args);
         reflect_release(args);
         throw;
     }

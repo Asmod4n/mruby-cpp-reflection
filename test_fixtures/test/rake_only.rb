@@ -124,6 +124,13 @@ end
 
 assert('a String with a NUL byte is refused where C++ reads a C string') do
   assert_raise(ArgumentError) { RakeOnly.make_named.set_name("a\0b") }
+  # A kept name that raises keeps the name before it: the gem reads the
+  # String before it replaces the copy that the C++ field points into.
+  kept = RakeOnly.make_named
+  kept.set_name('ok')
+  assert_raise(ArgumentError) { kept.set_name("a\0b") }
+  GC.start
+  assert_true kept.name_is('ok')
 end
 
 # A String that C++ pushes into a container needs one kept value per

@@ -416,6 +416,22 @@ assert('a String is frozen while C++ reads it, and thawed after the call') do
   assert_true frozen.frozen?
 end
 
+# A later argument can raise while the gem lends the earlier ones, here
+# with a NUL byte in a const char *. The String lent before it must be
+# thawed again, and one String given as a view and as a std::string & is
+# thawed before its new content is written back.
+assert('a raise while lending thaws the Strings lent before it') do
+  c = Callback.new
+  s = 'abc'
+  assert_raise(ArgumentError) { c.both_lengths(s, "a\0b") }
+  assert_false s.frozen?
+  assert_equal 6, c.both_lengths(s, 'def')
+  t = 'abc'
+  c.append_view(t, t)
+  assert_equal 'abcabc', t
+  assert_false t.frozen?
+end
+
 # A Ruby String, Array or Hash that C++ changes through a reference is
 # copied in, and the result is written back into the same Ruby object
 # after the call. A Std::String is changed in place.
