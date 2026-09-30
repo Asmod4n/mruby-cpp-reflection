@@ -51,7 +51,7 @@ struct Facts {
     std::set<std::string> macros;
 };
 
-std::string quoted(const std::string_view text)
+std::string string_literal(const std::string_view text)
 {
     std::string out = "\"";
     for (const char c : text) {
@@ -197,7 +197,7 @@ std::string header_text(const Facts &facts)
     for (const auto &[file, rows] : facts.parameter_extents) {
         out += std::format("template <>\ninline constexpr std::span<const mruby::cpp_reflection::parameter_extent> "
                            "mruby::cpp_reflection::parameter_extents<std::define_static_string({})> = std::define_static_array(std::array{{\n",
-                           quoted(file));
+                           string_literal(file));
         for (const ParameterExtent &row : rows)
             out += std::format("    mruby::cpp_reflection::parameter_extent{{{}, {}, {}, {}}},\n", row.line, row.column, row.position, row.extent);
         out += "});\n";
@@ -205,15 +205,15 @@ std::string header_text(const Facts &facts)
     for (const auto &[file, rows] : facts.format_attributes) {
         out += std::format("template <>\ninline constexpr std::span<const mruby::cpp_reflection::format_attribute> "
                            "mruby::cpp_reflection::format_attributes<std::define_static_string({})> = std::define_static_array(std::array{{\n",
-                           quoted(file));
+                           string_literal(file));
         for (const FormatAttribute &row : rows)
-            out += std::format("    mruby::cpp_reflection::format_attribute{{{}, {}, std::define_static_string({}), {}, {}}},\n", row.line, row.column, quoted(row.archetype),
+            out += std::format("    mruby::cpp_reflection::format_attribute{{{}, {}, std::define_static_string({}), {}, {}}},\n", row.line, row.column, string_literal(row.archetype),
                                row.string_index, row.first_to_check);
         out += "});\n";
     }
     out += "namespace mruby::cpp_reflection::macros {\n";
     for (const std::string &name : facts.macros)
-        out += std::format("#pragma push_macro({0})\n#undef {1}\ninline constexpr auto {1} =\n#pragma pop_macro({0})\n    ({1});\n", quoted(name), name);
+        out += std::format("#pragma push_macro({0})\n#undef {1}\ninline constexpr auto {1} =\n#pragma pop_macro({0})\n    ({1});\n", string_literal(name), name);
     return out + "}\n#endif\n";
 }
 
