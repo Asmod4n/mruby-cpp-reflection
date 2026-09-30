@@ -125,3 +125,12 @@ end
 assert('a String with a NUL byte is refused where C++ reads a C string') do
   assert_raise(ArgumentError) { RakeOnly.make_named.set_name("a\0b") }
 end
+
+# A String that C++ pushes into a container needs one kept value per
+# element, and the gem keeps one value per field. So the call raises
+# before C++ runs, rather than free the String of an earlier call that
+# the container still points to.
+assert('a String that C++ keeps in a container raises NotImplementedError') do
+  named = RakeOnly.make_named
+  assert_raise(NotImplementedError) { named.add_alias('first') }
+end

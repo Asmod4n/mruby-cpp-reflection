@@ -363,6 +363,20 @@ assert('a callback that outlives its mrb_state returns without Ruby') do
   assert_true(callback_after_close?)
 end
 
+# C and C++ expect that memory passed to a function stays as it is while
+# the function runs. Ruby that runs inside the call, through a callback,
+# can run the collector, and a frame older than the call can give the GC
+# arena back past the byte slice that C++ reads. So while Ruby runs inside
+# a C++ call, the gem holds the slices of every call that still runs, and
+# lets them go when Ruby returns to C++.
+assert('a String that C++ reads is held for the collector while Ruby runs inside the call') do
+  assert_equal 0, lent_registered
+  held = nil
+  assert_equal 3, Callback.new.with_text('abc', ->(n) { held = lent_registered; GC.start; n })
+  assert_equal 1, held
+  assert_equal 0, lent_registered
+end
+
 assert('a callback that C++ calls from another thread throws in that thread') do
   Callback.keep_outside(->(n) { n })
   assert_true(callback_from_other_thread_throws?)
