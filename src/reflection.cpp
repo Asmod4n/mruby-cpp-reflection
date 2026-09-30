@@ -262,7 +262,7 @@ extern "C" void mrb_mruby_cpp_reflection_gem_init(mrb_state *const mrb)
     mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), mruby::cpp_reflection::reflect_lifetimes_key(mrb),
                mrb_cptr_value(mrb, new mruby::cpp_reflection::reflect_lifetimes()));
     mrb_iv_set(mrb, mrb_obj_value(mrb->object_class), mruby::cpp_reflection::reflect_symbols_key(mrb),
-               mrb_cptr_value(mrb, new mruby::cpp_reflection::reflect_symbols{mruby::cpp_reflection::reflect_intern_names(mrb, mruby::cpp_reflection::reflect_gem_names), {}, {}}));
+               mrb_cptr_value(mrb, new mruby::cpp_reflection::reflect_symbols{}));
 }
 
 extern "C" void mrb_mruby_cpp_reflection_gem_final(mrb_state *const mrb)

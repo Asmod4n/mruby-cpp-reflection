@@ -775,13 +775,9 @@ static mrb_value symbols_ok_q(mrb_state *mrb, mrb_value)
 {
     constexpr auto &names = mruby::cpp_reflection::reflect_call_names<classes>;
     const auto &bridge = mruby::cpp_reflection::reflect_intern_bridge<names>(mrb);
-    const auto &gem = mruby::cpp_reflection::reflect_symbols_of(mrb).gem;
     const auto interned = [mrb](const std::string_view name) { return mrb_intern(mrb, name.data(), name.size()); };
-    const bool listed = std::ranges::contains(names, std::string_view("same")) && std::ranges::contains(names, std::string_view("Reflected")) &&
-                        std::ranges::contains(mruby::cpp_reflection::reflect_gem_names, std::string_view("each"));
-    return mrb_bool_value(listed && std::ranges::equal(bridge, names | std::views::transform(interned)) &&
-                          std::ranges::equal(gem, mruby::cpp_reflection::reflect_gem_names | std::views::transform(interned)) &&
-                          mruby::cpp_reflection::reflect_symbol<mruby::cpp_reflection::kEach>(mrb) == MRB_SYM(each));
+    const bool listed = std::ranges::contains(names, std::string_view("same")) && std::ranges::contains(names, std::string_view("Reflected"));
+    return mrb_bool_value(listed && std::ranges::equal(bridge, names | std::views::transform(interned)));
 }
 
 static mrb_value constructed_m(mrb_state *mrb, mrb_value)

@@ -232,8 +232,9 @@ need, which the compiler builds, with each name once. When the call runs
 for a state, it interns each name of the list once and keeps the symbols
 in the `mrb_symbol_bridge` of that call, in the record of the gem for
 that state. A class that is defined later, when a value of its type
-reaches Ruby, has a list and a bridge of its own. The names that no class
-owns have one list, which the gem interns in its `gem_init`.
+reaches Ruby, has a list and a bridge of its own. The names that the gem
+itself defines, such as `to_s`, `each` and the operators, are presyms:
+`MRB_SYM` and `MRB_OPSYM` at the place that defines them.
 
 The build compiles each C++ source in `src/` and `test/` of every gem
 that depends on this gem, and the source that `spec.reflect` writes,
