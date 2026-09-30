@@ -363,9 +363,9 @@ assert('a callback that outlives its mrb_state returns without Ruby') do
   assert_true(callback_after_close?)
 end
 
-assert('a callback that C++ calls from another thread ends the process') do
+assert('a callback that C++ calls from another thread throws in that thread') do
   Callback.keep_outside(->(n) { n })
-  assert_true(callback_from_other_thread_aborts?)
+  assert_true(callback_from_other_thread_throws?)
 end
 
 # A char pointer that C or C++ returns points into memory that C or C++

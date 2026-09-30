@@ -152,8 +152,8 @@ if Object.const_defined?(:CLibrary)
     assert_true CLibrary.counted_count(CLibrary.counted_find(1)) >= 1
   end
 
-  assert('a callback that a deallocator calls in the collector ends the process') do
-    assert_true callback_in_deallocator_aborts?
+  assert('a callback that a deallocator calls in the collector returns without Ruby') do
+    assert_true callback_in_deallocator_returns?
   end
 
   assert('a callback that a deallocator calls at mrb_close reaches no Ruby') do

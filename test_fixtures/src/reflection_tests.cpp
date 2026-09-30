@@ -894,7 +894,6 @@ static mrb_value callback_after_close_q(mrb_state *mrb, mrb_value)
     return mrb_bool_value(!raised && called && dead);
 }
 
-bool aborts_in_child(void (*run)());
 void lifetime_dsl_gem_init(mrb_state *mrb);
 void lifetime_allocator_gem_init(mrb_state *mrb);
 void function_pointers_gem_init(mrb_state *mrb);
@@ -903,15 +902,21 @@ void attributes_gem_init(mrb_state *mrb);
 void signature_types_gem_init(mrb_state *mrb);
 
 /* One thread owns an mrb_state. A call into Ruby from another thread
- * would race with that thread, so the process ends instead. */
-static mrb_value callback_from_other_thread_aborts_q(mrb_state *mrb, mrb_value)
+ * would race with that thread, so the call throws std::logic_error in
+ * the thread that made it, and the C++ code that called gets it. */
+static mrb_value callback_from_other_thread_throws_q(mrb_state *, mrb_value)
 {
-    const bool aborted = aborts_in_child([] {
-        std::thread other([] { kept_outside()(1); });
-        other.join();
+    bool thrown = false;
+    std::thread other([&thrown] {
+        try {
+            kept_outside()(1);
+        } catch (const std::logic_error &) {
+            thrown = true;
+        }
     });
+    other.join();
     kept_outside() = nullptr;
-    return mrb_bool_value(aborted);
+    return mrb_bool_value(thrown);
 }
 
 /* Box<Plain> has no alias and no derived class, so a function that
@@ -928,7 +933,7 @@ extern "C" void mrb_mruby_cpp_reflection_test_fixtures_gem_init(mrb_state *mrb)
 {
     mrb_define_module_function(mrb, mrb->kernel_module, "unrequested_instance_refused?", unrequested_instance_refused_q, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "callback_after_close?", callback_after_close_q, MRB_ARGS_NONE());
-    mrb_define_module_function(mrb, mrb->kernel_module, "callback_from_other_thread_aborts?", callback_from_other_thread_aborts_q, MRB_ARGS_NONE());
+    mrb_define_module_function(mrb, mrb->kernel_module, "callback_from_other_thread_throws?", callback_from_other_thread_throws_q, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "undefined_after_other_state", undefined_after_other_state_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "full_gc", full_gc_m, MRB_ARGS_NONE());
     mrb_define_module_function(mrb, mrb->kernel_module, "tree_freed_at_close?", tree_freed_at_close_q, MRB_ARGS_NONE());
